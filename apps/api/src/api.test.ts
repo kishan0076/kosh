@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { safeFetch } from "./integrations/safe-fetch.js";
 import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
+import { encryptSecret, decryptSecret } from "./auth/crypto.js";
 
 describe("safeFetch SSRF guard", () => {
   it("blocks localhost", async () => {
@@ -15,6 +16,20 @@ describe("safeFetch SSRF guard", () => {
   });
   it("blocks non-http protocols", async () => {
     await expect(safeFetch("file:///etc/passwd")).rejects.toThrow(/http/i);
+  });
+});
+
+describe("secret encryption", () => {
+  it("round-trips and is not plaintext", () => {
+    const token = "gho_secretToken1234567890";
+    const enc = encryptSecret(token);
+    expect(enc).not.toContain(token);
+    expect(enc.startsWith("enc:v1:")).toBe(true);
+    expect(decryptSecret(enc)).toBe(token);
+  });
+  it("tolerates legacy plaintext and undefined", () => {
+    expect(decryptSecret("plain")).toBe("plain");
+    expect(decryptSecret(undefined)).toBeUndefined();
   });
 });
 

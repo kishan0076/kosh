@@ -33,6 +33,7 @@ import {
 import { cn } from "@/lib/cn";
 import { ago, shortDate } from "@/lib/time";
 import { GitHubMark, itemIcon, TOOL_COLOR_VAR } from "@/lib/icons";
+import { useSetStage } from "@/lib/useSetStage";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
@@ -138,12 +139,13 @@ function PanelBody({ item, onClose }: { item: Item; onClose: () => void }) {
 
 /* ── Shared metadata rail ───────────────────────────────────── */
 function MetaRail({ item }: { item: Item }) {
-  const setStage = useData((s) => s.setStage);
+  const setStage = useSetStage();
   const setRating = useData((s) => s.setRating);
   const patchItem = useData((s) => s.patchItem);
   const collections = useData((s) => s.collections);
   const toggleItemCollection = useData((s) => s.toggleItemCollection);
   const [tagInput, setTagInput] = useState("");
+  const [foundEdit, setFoundEdit] = useState(false);
 
   const addTag = () => {
     const t = tagInput.trim().replace(/^#/, "");
@@ -228,12 +230,31 @@ function MetaRail({ item }: { item: Item }) {
         </div>
       </div>
 
-      {item.foundVia && (
-        <div className="flex items-center justify-between">
-          <span className="text-[12px] font-medium text-muted">Found via</span>
-          <Badge tone="neutral">{item.foundVia.label}</Badge>
-        </div>
-      )}
+      {/* found via — provenance, editable */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[12px] font-medium text-muted">Found via</span>
+        {foundEdit ? (
+          <input
+            autoFocus
+            defaultValue={item.foundVia?.label ?? ""}
+            onBlur={(e) => {
+              const label = e.target.value.trim();
+              patchItem(item.id, { foundVia: label ? { kind: item.foundVia?.kind ?? "other", label } : undefined });
+              setFoundEdit(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+              if (e.key === "Escape") setFoundEdit(false);
+            }}
+            placeholder="e.g. a friend, newsletter…"
+            className="w-40 rounded-md bg-surface-2 px-2 py-0.5 text-right text-[11px] outline-none placeholder:text-faint focus:ring-focus"
+          />
+        ) : (
+          <button onClick={() => setFoundEdit(true)} className="rounded-md hover:opacity-80" aria-label="Edit found via">
+            {item.foundVia ? <Badge tone="neutral">{item.foundVia.label}</Badge> : <span className="text-[12px] text-faint">+ add source</span>}
+          </button>
+        )}
+      </div>
 
       {/* note */}
       <div>
@@ -266,9 +287,36 @@ function ItemBody({ item }: { item: Item }) {
   const toggleFavorite = useData((s) => s.toggleFavorite);
   const softDelete = useData((s) => s.softDelete);
   const restore = useData((s) => s.restore);
+  const extractLinks = useData((s) => s.extractLinks);
+  const snapshotSkills = useData((s) => s.snapshotSkills);
   const toast = useUi((s) => s.toast);
   const closePanel = useUi((s) => s.closePanel);
   const [fillOpen, setFillOpen] = useState(false);
+  const [busy, setBusy] = useState<null | "extract" | string>(null);
+
+  const onExtract = async () => {
+    setBusy("extract");
+    try {
+      const r = await extractLinks(item.id);
+      toast({ message: `Extracted ${r.saved} link${r.saved === 1 ? "" : "s"} to Inbox`, description: r.skipped ? `${r.skipped} already saved` : undefined, tone: "ok" });
+    } catch (err) {
+      toast({ message: "Couldn't extract links", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onSnapshot = async (path: string, name: string) => {
+    setBusy(path);
+    try {
+      const n = await snapshotSkills(item.id, [path]);
+      toast({ message: n ? `Copied ${name}` : "Nothing new to copy", description: n ? "Snapshotted into your vault" : undefined, tone: "ok" });
+    } catch (err) {
+      toast({ message: `Couldn't copy ${name}`, description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const g = item.github;
   const readme = readmes[item.id] ?? item.github?.readme;
@@ -401,18 +449,19 @@ function ItemBody({ item }: { item: Item }) {
                         <Badge tone="ok">copied</Badge>
                       ) : (
                         <button
-                          onClick={() => toast({ message: `Copying ${s.name}…`, description: "Snapshotting into your vault", tone: "ok" })}
-                          className="shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary-soft"
+                          onClick={() => onSnapshot(s.path, s.name)}
+                          disabled={busy === s.path}
+                          className="shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary-soft disabled:opacity-50"
                         >
-                          Keep a copy
+                          {busy === s.path ? "Copying…" : "Keep a copy"}
                         </button>
                       )}
                     </div>
                   ))}
                 </div>
                 {g.repoKind === "awesome-list" && (
-                  <Button variant="outline" size="sm" className="mt-3 w-full" onClick={() => toast({ message: "Extracting links…", description: "Every GitHub link → Inbox", tone: "ok" })}>
-                    Extract all links to Inbox
+                  <Button variant="outline" size="sm" className="mt-3 w-full" onClick={onExtract} disabled={busy === "extract"}>
+                    {busy === "extract" ? "Extracting…" : "Extract all links to Inbox"}
                   </Button>
                 )}
               </div>

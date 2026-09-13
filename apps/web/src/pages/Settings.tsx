@@ -2,8 +2,10 @@ import { useState } from "react";
 import {
   Blocks,
   Bookmark,
+  Check,
   Copy,
   Download,
+  GitMerge,
   KeyRound,
   MessageCircle,
   Plus,
@@ -14,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
+import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { allTags } from "@/data/selectors";
@@ -27,10 +30,30 @@ export function Settings() {
   const items = useData((s) => s.items);
   const renameTag = useData((s) => s.renameTag);
   const deleteTag = useData((s) => s.deleteTag);
+  const mergeTags = useData((s) => s.mergeTags);
   const resetVault = useData((s) => s.resetVault);
   const toast = useUi((s) => s.toast);
 
   const tags = allTags(items);
+  const [mergeMode, setMergeMode] = useState(false);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [mergeInto, setMergeInto] = useState("");
+
+  const togglePicked = (tag: string) =>
+    setPicked((p) => (p.includes(tag) ? p.filter((t) => t !== tag) : [...p, tag]));
+  const exitMerge = () => {
+    setMergeMode(false);
+    setPicked([]);
+    setMergeInto("");
+  };
+  const doMerge = () => {
+    const to = mergeInto.trim().replace(/^#/, "");
+    const from = picked.filter((t) => t !== to);
+    if (!to || from.length === 0) return;
+    mergeTags(from, to);
+    toast({ message: `Merged ${from.length} tag${from.length === 1 ? "" : "s"} into #${to}`, tone: "ok" });
+    exitMerge();
+  };
   const [apiKeys, setApiKeys] = useState([
     { id: "k1", name: "Laptop CLI", prefix: "ksh_a1b2", scopes: ["read", "write"], created: "3 weeks ago" },
     { id: "k2", name: "Bookmarklet", prefix: "ksh_9f8e", scopes: ["write"], created: "1 week ago" },
@@ -130,36 +153,87 @@ export function Settings() {
         </SectionCard>
 
         {/* tags */}
-        <SectionCard title="Tag maintenance" subtitle={`${tags.length} tags`}>
+        <SectionCard
+          title="Tag maintenance"
+          subtitle={mergeMode ? "Select tags to merge, then pick a target" : `${tags.length} tags`}
+          action={
+            tags.length > 1 ? (
+              <Button variant={mergeMode ? "ghost" : "outline"} size="sm" onClick={() => (mergeMode ? exitMerge() : setMergeMode(true))}>
+                {mergeMode ? "Cancel" : <><GitMerge size={15} /> Merge</>}
+              </Button>
+            ) : undefined
+          }
+        >
           <div className="flex max-h-64 flex-wrap gap-2 overflow-y-auto">
-            {tags.map((t) => (
-              <div key={t.tag} className="group inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 py-1 pl-3 pr-1.5 text-[13px]">
-                <TagIcon size={12} className="text-faint" />
-                <span>{t.tag}</span>
-                <span className="tabular text-[11px] text-faint">{t.value}</span>
-                <button
-                  onClick={() => {
-                    const to = window.prompt(`Rename #${t.tag} to:`, t.tag);
-                    if (to && to !== t.tag) {
-                      renameTag(t.tag, to);
-                      toast({ message: `Renamed to #${to}`, tone: "ok" });
-                    }
-                  }}
-                  className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground group-hover:opacity-100"
-                  aria-label="Rename tag"
-                >
-                  <RefreshCw size={12} />
-                </button>
-                <button
-                  onClick={() => { deleteTag(t.tag); toast({ message: `Removed #${t.tag}`, tone: "warn" }); }}
-                  className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-danger-soft hover:text-danger group-hover:opacity-100"
-                  aria-label="Delete tag"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            ))}
+            {tags.map((t) => {
+              const isPicked = picked.includes(t.tag);
+              if (mergeMode) {
+                return (
+                  <button
+                    key={t.tag}
+                    onClick={() => togglePicked(t.tag)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border py-1 pl-3 pr-2.5 text-[13px] transition-colors",
+                      isPicked ? "border-primary bg-primary-soft text-primary" : "border-border bg-surface-2 text-foreground hover:bg-surface-3",
+                    )}
+                    aria-pressed={isPicked}
+                  >
+                    {isPicked ? <Check size={12} /> : <TagIcon size={12} className="text-faint" />}
+                    <span>{t.tag}</span>
+                    <span className="tabular text-[11px] opacity-70">{t.value}</span>
+                  </button>
+                );
+              }
+              return (
+                <div key={t.tag} className="group inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 py-1 pl-3 pr-1.5 text-[13px]">
+                  <TagIcon size={12} className="text-faint" />
+                  <span>{t.tag}</span>
+                  <span className="tabular text-[11px] text-faint">{t.value}</span>
+                  <button
+                    onClick={() => {
+                      const to = window.prompt(`Rename #${t.tag} to:`, t.tag);
+                      if (to && to !== t.tag) {
+                        renameTag(t.tag, to);
+                        toast({ message: `Renamed to #${to}`, tone: "ok" });
+                      }
+                    }}
+                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground group-hover:opacity-100"
+                    aria-label="Rename tag"
+                  >
+                    <RefreshCw size={12} />
+                  </button>
+                  <button
+                    onClick={() => { deleteTag(t.tag); toast({ message: `Removed #${t.tag}`, tone: "warn" }); }}
+                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-danger-soft hover:text-danger group-hover:opacity-100"
+                    aria-label="Delete tag"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              );
+            })}
           </div>
+
+          {mergeMode && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+              <span className="text-[12px] text-muted">Merge {picked.length} into</span>
+              <input
+                list="kosh-merge-target"
+                value={mergeInto}
+                onChange={(e) => setMergeInto(e.target.value)}
+                placeholder="target tag"
+                className="w-36 rounded-[var(--radius-control)] border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-primary focus:ring-focus"
+              />
+              <datalist id="kosh-merge-target">
+                {picked.map((t) => (
+                  <option key={t} value={t} />
+                ))}
+              </datalist>
+              <Button variant="primary" size="sm" onClick={doMerge} disabled={!mergeInto.trim() || picked.filter((t) => t !== mergeInto.trim().replace(/^#/, "")).length === 0}>
+                <GitMerge size={15} /> Merge
+              </Button>
+            </div>
+          )}
         </SectionCard>
 
         {/* data */}

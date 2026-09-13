@@ -16,6 +16,7 @@ export function Inbox() {
   const softDelete = useData((s) => s.softDelete);
   const restore = useData((s) => s.restore);
   const openItem = useUi((s) => s.openItem);
+  const openVerdict = useUi((s) => s.openVerdict);
   const toast = useUi((s) => s.toast);
 
   const queue = inbox(items);
@@ -26,6 +27,11 @@ export function Inbox() {
   const advance = () => setIdx((i) => Math.min(i + 1, total));
   const decide = (stage: Stage) => {
     if (!current) return;
+    // Dropping asks for a one-line verdict; the dialog sets the stage.
+    if (stage === "dropped") {
+      openVerdict(current.id);
+      return;
+    }
     setStage(current.id, stage);
     toast({ message: `Moved to ${stage}`, description: current.title, tone: "ok" });
     // item leaves the queue automatically; keep idx pointing at the next

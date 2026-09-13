@@ -81,6 +81,8 @@ export interface WatchInfo {
   enabled: boolean;
   lastCheckedAt?: string;
   newSince?: number;
+  lastLinkHashes?: string[];
+  lastSkillPaths?: string[];
 }
 
 export interface GithubMeta {
@@ -94,6 +96,8 @@ export interface GithubMeta {
   pushedAt?: string;
   defaultBranch?: string;
   archived?: boolean;
+  etag?: string;
+  treeSha?: string;
   repoKind?: RepoKind;
   repoKindSignals?: string[];
   skillDirs?: string[];

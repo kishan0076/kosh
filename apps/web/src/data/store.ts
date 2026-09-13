@@ -40,10 +40,12 @@ const nowIso = () => new Date().toISOString();
 const isOptimistic = (id: string) => id.startsWith("item_") || id.startsWith("skill_") || id.startsWith("col_");
 
 // Fields the API PATCH /items accepts.
-const PATCH_KEYS = ["stage", "rating", "verdict", "note", "title", "description", "tags", "collections", "pinned", "favorite"] as const;
+const PATCH_KEYS = ["stage", "rating", "verdict", "note", "title", "description", "tags", "collections", "pinned", "favorite", "foundVia"] as const;
 function apiItemPatch(patch: Partial<Item>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of PATCH_KEYS) if (patch[k] !== undefined) out[k] = patch[k];
+  // foundVia can be explicitly cleared — send null so the server unsets it.
+  if ("foundVia" in patch && patch.foundVia === undefined) out.foundVia = null;
   if (patch.github?.watch) out.watch = { enabled: patch.github.watch.enabled };
   if (patch.github?.snapshotPolicy) out.snapshotPolicy = patch.github.snapshotPolicy;
   return out;
@@ -82,6 +84,8 @@ interface DataState {
   reviewSkill: (skillId: string) => void;
   toggleSkillPublic: (skillId: string) => void;
   keepCopy: (skillId: string) => void;
+  extractLinks: (itemId: string) => Promise<{ found: number; saved: number; skipped: number }>;
+  snapshotSkills: (itemId: string, dirs?: string[]) => Promise<number>;
   finalizeDrafts: (drafts: DropDraft[], source: ItemSource) => Item[];
 
   createCollection: (name: string) => Collection;
@@ -320,6 +324,50 @@ export const useData = create<DataState>()(
       keepCopy: (skillId) => {
         set((s) => ({ skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, indexOnly: false, updatedAt: nowIso() } : sk)) }));
         if (get().backend && !isOptimistic(skillId)) api.keepCopy(skillId).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+      },
+
+      extractLinks: async (itemId) => {
+        const item = get().items.find((i) => i.id === itemId);
+        if (get().backend && item && !isOptimistic(itemId)) {
+          // New items stream back over SSE (item.created); return the tally for the toast.
+          return api.extractLinks(itemId);
+        }
+        // Mock mode: parse GitHub links out of the README and ingest each locally.
+        const readme = (item && (get().readmes[itemId] ?? item.github?.readme)) ?? "";
+        const label = item?.title ?? "list";
+        const links = [...new Set((readme.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/gi) ?? []).map((l) => l.replace(/[).,]+$/, "")))];
+        let saved = 0;
+        let skipped = 0;
+        for (const url of links) {
+          const { duplicate } = get().ingestUrl(url, { source: "import", tags: [label] });
+          duplicate ? skipped++ : saved++;
+        }
+        return { found: links.length, saved, skipped };
+      },
+      snapshotSkills: async (itemId, dirs) => {
+        if (get().backend && !isOptimistic(itemId)) {
+          const { copied } = await api.snapshotSkills(itemId, dirs);
+          // Refresh skills + the item so newly-copied skills and snapshotted flags appear.
+          try {
+            const [skills, items] = await Promise.all([api.listSkills(), api.listItems()]);
+            set({ skills: skills.skills });
+            const fresh = items.items.find((i) => i.id === itemId);
+            if (fresh) get().upsertItem(fresh);
+          } catch {
+            /* the copy still succeeded; UI refreshes on next hydrate */
+          }
+          return copied.length;
+        }
+        // Mock mode: flip the matching skillIndex entries to snapshotted.
+        const item = get().items.find((i) => i.id === itemId);
+        const idx = item?.github?.skillIndex ?? [];
+        const targets = idx.filter((e) => (dirs ? dirs.includes(e.path) : !e.snapshotted));
+        if (item?.github && targets.length) {
+          const nextIndex = idx.map((e) => (targets.some((t) => t.path === e.path) ? { ...e, snapshotted: true } : e));
+          const copiedCount = nextIndex.filter((e) => e.snapshotted).length;
+          get().patchItem(itemId, { github: { ...item.github, skillIndex: nextIndex, copiedCount } });
+        }
+        return targets.length;
       },
 
       finalizeDrafts: (drafts, source) => {

@@ -2,6 +2,7 @@ import express, { type ErrorRequestHandler, type Express, type Router } from "ex
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import helmet from "helmet";
+import { rateLimit } from "express-rate-limit";
 import { pinoHttp } from "pino-http";
 import { ZodError } from "zod";
 import { config } from "./config.js";
@@ -34,6 +35,15 @@ export function createApp(): Express {
 
   const api: Router = express.Router();
   api.use(healthRouter);
+
+  // Rate limits (§8). Generous global net + stricter caps on sensitive/expensive routes.
+  const limiter = (limit: number) => rateLimit({ windowMs: 60_000, limit, standardHeaders: "draft-7", legacyHeaders: false });
+  api.use(limiter(600));
+  api.use("/auth", limiter(30));
+  api.use("/settings", limiter(30));
+  api.use("/mcp", limiter(120));
+  api.use("/email", limiter(30));
+
   api.use(attachUser);
   mountRoutes(api);
   app.use("/api", api);

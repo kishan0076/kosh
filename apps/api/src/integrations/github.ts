@@ -76,19 +76,42 @@ async function fullTree(gh: Octokit, owner: string, repo: string, branch: string
   return (res.data.tree ?? []).map((t) => ({ path: t.path ?? "", type: t.type === "tree" ? "tree" : "blob", size: t.size, sha: t.sha }));
 }
 
+export interface GithubBudget {
+  remaining: number;
+  total: number;
+  resetAt: string;
+}
 export interface GithubEnrichment {
   github: GithubMeta;
   readme: string;
   tree: TreeEntry[];
   title: string;
   description?: string;
+  budget?: GithubBudget;
 }
 
-/** Enrich a GitHub repo: metadata, tree, readme, manifests, kind, skill index, install. (§5.4/§5.5) */
-export async function enrichGithub(owner: string, repo: string, opts: { token?: string | null; prevSkillIndex?: SkillIndexEntry[] } = {}): Promise<{ ok: true; data: GithubEnrichment } | { ok: false; dead: boolean }> {
+function readBudget(headers: Record<string, unknown>): GithubBudget | undefined {
+  const remaining = Number(headers["x-ratelimit-remaining"]);
+  const total = Number(headers["x-ratelimit-limit"]);
+  const reset = Number(headers["x-ratelimit-reset"]);
+  if (Number.isNaN(remaining) || Number.isNaN(total)) return undefined;
+  return { remaining, total, resetAt: new Date((reset || 0) * 1000).toISOString() };
+}
+
+/** Enrich a GitHub repo: metadata, tree, readme, manifests, kind, skill index, install. (§5.4/§5.5)
+ *  ETag-aware: returns { unchanged: true } on a 304 so a refresh costs no budget. */
+export async function enrichGithub(
+  owner: string,
+  repo: string,
+  opts: { token?: string | null; prevSkillIndex?: SkillIndexEntry[]; etag?: string } = {},
+): Promise<{ ok: true; data: GithubEnrichment } | { ok: false; dead?: boolean; unchanged?: boolean }> {
   const gh = githubClient(opts.token);
+  let budget: GithubBudget | undefined;
   try {
-    const { data: r } = await gh.rest.repos.get({ owner, repo });
+    const res = await gh.rest.repos.get({ owner, repo, headers: opts.etag ? { "If-None-Match": opts.etag } : {} });
+    const r = res.data;
+    budget = readBudget(res.headers as Record<string, unknown>);
+    const etag = (res.headers as Record<string, string>).etag;
     const branch = r.default_branch;
     let tree: TreeEntry[] = [];
     try {
@@ -136,6 +159,8 @@ export async function enrichGithub(owner: string, repo: string, opts: { token?: 
       pushedAt: r.pushed_at ?? undefined,
       defaultBranch: branch,
       archived: r.archived,
+      etag,
+      treeSha: tree.find((t) => t.path === "")?.sha,
       repoKind: kind,
       repoKindSignals: signals,
       skillDirs,
@@ -143,12 +168,13 @@ export async function enrichGithub(owner: string, repo: string, opts: { token?: 
       skillIndex,
       install,
       snapshotPolicy: "auto",
-      copiedCount: 0,
+      copiedCount: (opts.prevSkillIndex ?? []).filter((s) => s.snapshotted).length,
     };
 
-    return { ok: true, data: { github, readme, tree, title: r.full_name, description: r.description ?? undefined } };
+    return { ok: true, data: { github, readme, tree, title: r.full_name, description: r.description ?? undefined, budget } };
   } catch (err: unknown) {
     const status = (err as { status?: number }).status;
+    if (status === 304) return { ok: false, unchanged: true };
     if (status === 404 || status === 403 || status === 451) return { ok: false, dead: true };
     logger.warn({ err, owner, repo }, "github enrichment error");
     return { ok: false, dead: true };

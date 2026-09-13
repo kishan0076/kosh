@@ -231,6 +231,7 @@ export function Home() {
 function TodaysPick({ picks, onOpen }: { picks: Item[]; onOpen: (id: string) => void }) {
   const setStage = useData((s) => s.setStage);
   const snooze = useData((s) => s.snooze);
+  const openVerdict = useUi((s) => s.openVerdict);
   const toast = useUi((s) => s.toast);
 
   return (
@@ -265,7 +266,7 @@ function TodaysPick({ picks, onOpen }: { picks: Item[]; onOpen: (id: string) => 
                   <Button variant="ghost" size="icon-sm" onClick={() => { snooze(p.id, 7); toast({ message: "Snoozed a week", description: p.title }); }} aria-label="Snooze">
                     <TimerReset size={16} />
                   </Button>
-                  <Button variant="ghost" size="icon-sm" onClick={() => { setStage(p.id, "dropped"); toast({ message: "Dropped", description: p.title }); }} aria-label="Drop">
+                  <Button variant="ghost" size="icon-sm" onClick={() => openVerdict(p.id)} aria-label="Drop">
                     <Clock size={16} className="rotate-45" />
                   </Button>
                 </div>

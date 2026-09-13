@@ -5,6 +5,7 @@ import { getStore } from "../db/index.js";
 import { ah, forbidden, unauthorized } from "../errors.js";
 import { getOrCreateUser, publicUser } from "./users.js";
 import { requireUser } from "./middleware.js";
+import { encryptSecret } from "./crypto.js";
 import { SESSION_COOKIE, signSession } from "./jwt.js";
 import { generateApiKey } from "./apikey.js";
 
@@ -69,7 +70,7 @@ authRouter.get(
     const gh = (await meRes.json()) as { id: number; login: string; name?: string; avatar_url?: string };
     if (!allowed(gh.login)) throw forbidden(`${gh.login} is not on the allowlist.`);
     const user = await getOrCreateUser({ githubId: String(gh.id), login: gh.login, name: gh.name, avatarUrl: gh.avatar_url });
-    await getStore().users.updateById(user.id, { githubToken: accessToken });
+    await getStore().users.updateById(user.id, { githubToken: encryptSecret(accessToken) });
     const token = await signSession(user.id);
     res.cookie(SESSION_COOKIE, token, cookieOpts());
     res.redirect(config.appUrl);

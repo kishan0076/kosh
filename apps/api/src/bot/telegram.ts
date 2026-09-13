@@ -33,6 +33,68 @@ function build(): Bot {
     return ctx.reply(`Linked ✓ Send links, a .md/.zip document, or text and I'll save them for @${login}.`);
   });
 
+  async function requireLinked(ctx: { chat?: { id: number }; reply: (t: string) => Promise<unknown> }) {
+    const user = ctx.chat ? await userForChat(ctx.chat.id) : null;
+    if (!user) await ctx.reply("This chat isn't linked. Send /start <your-login>.");
+    return user;
+  }
+
+  bot.command("last", async (ctx) => {
+    const user = await requireLinked(ctx);
+    if (!user) return;
+    const [item] = await getStore().items.find({ userId: user.id, deletedAt: null }, { sort: { createdAt: -1 }, limit: 1 });
+    return ctx.reply(item ? `Last saved: ${item.title ?? item.url}` : "Nothing saved yet.");
+  });
+
+  bot.command("find", async (ctx) => {
+    const user = await requireLinked(ctx);
+    if (!user) return;
+    const q = (ctx.match ?? "").toLowerCase().trim();
+    if (!q) return ctx.reply("Usage: /find <text>");
+    const hits = (await getStore().items.find({ userId: user.id, deletedAt: null }))
+      .filter((i) => i.title?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q) || i.tags.some((t) => t.toLowerCase().includes(q)))
+      .slice(0, 5);
+    return ctx.reply(hits.length ? hits.map((i) => `• ${i.title ?? i.url}`).join("\n") : `No matches for "${q}".`);
+  });
+
+  bot.command("skills", async (ctx) => {
+    const user = await requireLinked(ctx);
+    if (!user) return;
+    const skills = await getStore().skills.find({ userId: user.id, deletedAt: null });
+    return ctx.reply(skills.length ? skills.map((s) => `• ${s.name} v${s.latest} (${s.trust})`).join("\n") : "No skills yet.");
+  });
+
+  bot.command("get", async (ctx) => {
+    const user = await requireLinked(ctx);
+    if (!user) return;
+    const name = (ctx.match ?? "").trim();
+    const skill = await getStore().skills.findOne({ userId: user.id, name, deletedAt: null });
+    if (!skill) return ctx.reply(`No skill named ${name}.`);
+    return ctx.reply(`${skill.name} v${skill.latest} · ${skill.trust}\nInstall: npx kosh add ${skill.name}`);
+  });
+
+  bot.command("stage", async (ctx) => {
+    const user = await requireLinked(ctx);
+    if (!user) return;
+    const [name, stage] = (ctx.match ?? "").trim().split(/\s+/);
+    if (!name || !["to-try", "trying", "using", "dropped"].includes(stage ?? "")) return ctx.reply("Usage: /stage <name> <to-try|trying|using|dropped>");
+    const item = (await getStore().items.find({ userId: user.id, deletedAt: null })).find((i) => i.title?.toLowerCase().includes(name.toLowerCase()));
+    if (!item) return ctx.reply(`No item matching "${name}".`);
+    await getStore().items.updateById(item.id, { stage: stage as ServerItem["stage"], updatedAt: nowIso() });
+    return ctx.reply(`${item.title} → ${stage}`);
+  });
+
+  bot.command("watch", async (ctx) => {
+    const user = await requireLinked(ctx);
+    if (!user) return;
+    const q = (ctx.match ?? "").trim().toLowerCase();
+    const item = (await getStore().items.find({ userId: user.id, kind: "link", deletedAt: null })).find((i) => i.linkType === "repo" && (i.title?.toLowerCase().includes(q) || i.url?.toLowerCase().includes(q)));
+    if (!item?.github) return ctx.reply(`No repo matching "${q}".`);
+    const enabled = !item.github.watch?.enabled;
+    await getStore().items.updateById(item.id, { github: { ...item.github, watch: { ...item.github.watch, enabled } }, updatedAt: nowIso() });
+    return ctx.reply(`${enabled ? "Watching" : "Unwatched"} ${item.title}`);
+  });
+
   bot.on(["message:entities:url", "message:entities:text_link"], async (ctx) => {
     const user = await userForChat(ctx.chat.id);
     if (!user) return ctx.reply("This chat isn't linked. Send /start <your-login>.");

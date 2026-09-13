@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { extractVariables } from "@kosh/shared";
+import { extractVariables, renderPrompt } from "@kosh/shared";
 import { getStore, type ServerItem } from "../db/index.js";
 import { ah, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
@@ -39,6 +39,19 @@ promptsRouter.post(
       updatedAt: now,
     } as Omit<ServerItem, "id">);
     res.status(201).json({ item: toClientItem(item) });
+  }),
+);
+
+promptsRouter.post(
+  "/prompts/:id/render",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const item = await getStore().items.findById(String(req.params.id));
+    if (!item || item.userId !== uid || !item.prompt) throw notFound("Prompt not found.");
+    const { values } = z.object({ values: z.record(z.string(), z.string()).default({}) }).parse(req.body ?? {});
+    const rendered = renderPrompt(item.prompt.body, values);
+    await getStore().items.updateById(item.id, { prompt: { ...item.prompt, usedCount: item.prompt.usedCount + 1 }, updatedAt: nowIso() });
+    res.json({ rendered });
   }),
 );
 

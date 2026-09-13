@@ -85,6 +85,17 @@ skillsRouter.post(
   }),
 );
 
+skillsRouter.delete(
+  "/skills/:id",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const s = await ownedSkill(uid, String(req.params.id));
+    await getStore().skills.updateById(s.id, { deletedAt: nowIso(), updatedAt: nowIso() });
+    await getStore().items.updateById(s.itemId, { deletedAt: nowIso(), updatedAt: nowIso() });
+    res.json({ ok: true });
+  }),
+);
+
 skillsRouter.post(
   "/skills/:id/keep-copy",
   ah(async (req, res) => {

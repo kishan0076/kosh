@@ -1,13 +1,42 @@
-import { parseGithubRepo, siteNameFromUrl, type Item } from "@kosh/shared";
+import { createHash } from "node:crypto";
+import { parseGithubRepo, siteNameFromUrl, type GithubMeta, type Item, type WatchInfo } from "@kosh/shared";
 import { getStore, type ServerItem } from "../db/index.js";
 import { publish } from "../events.js";
 import { logger } from "../logger.js";
-import { enrichGithub } from "../integrations/github.js";
+import { enrichGithub, type GithubEnrichment } from "../integrations/github.js";
+import { decryptSecret } from "../auth/crypto.js";
 import { fetchOpenGraph } from "../integrations/opengraph.js";
 import { lookupPackage, parsePackageUrl } from "../integrations/registries.js";
-import { summarize } from "../integrations/claude.js";
+import { summarizeForUser } from "../integrations/claude.js";
 
 const nowIso = () => new Date().toISOString();
+const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
+
+/** Extract distinct GitHub links from README markdown. */
+function githubLinks(readme: string): string[] {
+  const set = new Set<string>();
+  const re = /https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(readme))) set.add(m[0].replace(/[).,]+$/, ""));
+  return [...set];
+}
+
+/** Diff a watched repo's current state against last-seen to compute "N new". (§5.7) */
+function computeWatch(prev: WatchInfo | undefined, data: GithubEnrichment): WatchInfo | undefined {
+  if (!prev?.enabled) return prev;
+  const skillPaths = (data.github.skillIndex ?? []).map((s) => s.path);
+  const linkHashes = data.github.repoKind === "awesome-list" ? githubLinks(data.readme).map(sha1) : [];
+  const firstRun = prev.lastSkillPaths === undefined && prev.lastLinkHashes === undefined;
+  const newSkills = prev.lastSkillPaths ? skillPaths.filter((p) => !prev.lastSkillPaths!.includes(p)).length : 0;
+  const newLinks = prev.lastLinkHashes ? linkHashes.filter((h) => !prev.lastLinkHashes!.includes(h)).length : 0;
+  return {
+    enabled: true,
+    lastCheckedAt: nowIso(),
+    newSince: firstRun ? 0 : (prev.newSince ?? 0) + newSkills + newLinks,
+    lastSkillPaths: skillPaths,
+    lastLinkHashes: linkHashes,
+  };
+}
 
 /** Compute an enrichment patch for a link item (routes by link type). */
 async function computePatch(item: ServerItem, token: string | null): Promise<Partial<Item>> {
@@ -16,18 +45,28 @@ async function computePatch(item: ServerItem, token: string | null): Promise<Par
   // GitHub repo / issue / release
   const repo = ["repo", "issue", "release"].includes(item.linkType ?? "") ? parseGithubRepo(url) : null;
   if (repo) {
-    const r = await enrichGithub(repo.owner, repo.repo, { token, prevSkillIndex: item.github?.skillIndex });
+    const r = await enrichGithub(repo.owner, repo.repo, { token, prevSkillIndex: item.github?.skillIndex, etag: item.github?.etag });
+    if ("unchanged" in r && r.unchanged) {
+      // 304 — nothing changed upstream; refresh cost no budget.
+      return { status: "ready", lastCheckedAt: nowIso(), github: item.github ? { ...item.github, watch: item.github.watch ? { ...item.github.watch, lastCheckedAt: nowIso() } : undefined } : undefined };
+    }
     if (!r.ok) {
       return { status: "dead", title: item.title ?? `${repo.owner}/${repo.repo}`, meta: { siteName: "GitHub" } };
     }
-    const ai = await summarize({ title: r.data.title, url, text: r.data.readme || r.data.description || "", existingTags: item.tags });
+    if (r.data.budget) await getStore().users.updateById(item.userId, { githubBudget: r.data.budget });
+    const watch = computeWatch(item.github?.watch, r.data);
+    const github: GithubMeta = { ...r.data.github, readme: r.data.readme || undefined, watch, snapshotPolicy: item.github?.snapshotPolicy ?? r.data.github.snapshotPolicy };
+    const ai = await summarizeForUser(item.userId, { title: r.data.title, url, text: r.data.readme || r.data.description || "", existingTags: item.tags });
+    // auto-snapshot small skills repos (§6.4) in the background
+    import("./snapshot.js").then(({ snapshotRepoSkills }) => snapshotRepoSkills(item, r.data)).catch(() => {});
     return {
       status: "ready",
       title: r.data.title,
       description: r.data.description,
-      github: { ...r.data.github, readme: r.data.readme || undefined },
+      github,
       meta: { siteName: "GitHub", image: undefined, favicon: "https://github.com/favicon.ico" },
       ai: ai ?? undefined,
+      lastCheckedAt: nowIso(),
     };
   }
 
@@ -51,7 +90,7 @@ async function computePatch(item: ServerItem, token: string | null): Promise<Par
   // Everything else → Open Graph
   try {
     const og = await fetchOpenGraph(url);
-    const ai = await summarize({ title: og.title, url, text: og.description || og.title || "", existingTags: item.tags });
+    const ai = await summarizeForUser(item.userId, { title: og.title, url, text: og.description || og.title || "", existingTags: item.tags });
     return {
       status: "ready",
       title: og.title ?? item.title ?? siteNameFromUrl(url),
@@ -71,7 +110,7 @@ export async function enrichItem(userId: string, itemId: string): Promise<void> 
   const item = await store.items.findById(itemId);
   if (!item || item.kind !== "link" || !item.url) return;
   const user = await store.users.findById(userId);
-  const patch = await computePatch(item, user?.githubToken ?? null);
+  const patch = await computePatch(item, decryptSecret(user?.githubToken) ?? null);
   const updated = await store.items.updateById(itemId, { ...patch, updatedAt: nowIso() } as Partial<ServerItem>);
   if (updated) publish(userId, { kind: "item.updated", item: updated });
 }

@@ -23,6 +23,10 @@ interface UiState {
   helpOpen: boolean;
   setHelp: (open: boolean) => void;
 
+  verdictItemId: string | null;
+  openVerdict: (id: string) => void;
+  closeVerdict: () => void;
+
   trayOpen: boolean;
   setTray: (open: boolean) => void;
 
@@ -41,6 +45,10 @@ export const useUi = create<UiState>((set, get) => ({
 
   helpOpen: false,
   setHelp: (helpOpen) => set({ helpOpen }),
+
+  verdictItemId: null,
+  openVerdict: (id) => set({ verdictItemId: id }),
+  closeVerdict: () => set({ verdictItemId: null }),
 
   trayOpen: false,
   setTray: (trayOpen) => set({ trayOpen }),

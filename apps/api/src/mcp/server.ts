@@ -4,6 +4,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { extractVariables, renderPrompt } from "@kosh/shared";
 import { getStore } from "../db/index.js";
 import { requireUser } from "../auth/middleware.js";
 import { ingest } from "../modules/ingest.js";
@@ -32,7 +33,7 @@ function buildServer(userId: string): McpServer {
       const q = query.toLowerCase();
       const items = (await store.items.find({ userId, deletedAt: null }))
         .filter((i) => (kind ? i.kind === kind : true) && (stage ? i.stage === stage : true))
-        .filter((i) => i.title?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q) || i.url?.toLowerCase().includes(q) || i.tags.some((t) => t.toLowerCase().includes(q)))
+        .filter((i) => i.title?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q) || i.url?.toLowerCase().includes(q) || i.prompt?.body?.toLowerCase().includes(q) || i.ai?.summary?.toLowerCase().includes(q) || i.tags.some((t) => t.toLowerCase().includes(q)))
         .slice(0, limit ?? 20)
         .map((i) => ({ id: i.id, kind: i.kind, title: i.title, url: i.url, stage: i.stage, tags: i.tags }));
       return json({ results: items });
@@ -91,6 +92,42 @@ function buildServer(userId: string): McpServer {
       const incoming: IncomingFile[] = files.map((f) => ({ path: f.path, mime: "text/markdown", content: f.content }));
       const { skill } = await createSkillVersion(userId, incoming, { origin: "authored", itemSource: "mcp", name, tools: tools as never, note, trust: "mine" });
       return json({ name: skill.name, version: skill.latest, message: "Saved to Kosh." });
+    },
+  );
+
+  server.registerTool(
+    "save_prompt",
+    { description: "Save a reusable prompt (supports {{variables}}).", inputSchema: { title: z.string(), body: z.string(), tags: z.array(z.string()).optional() } },
+    async ({ title, body, tags }) => {
+      const now = new Date().toISOString();
+      const item = await store.items.create({
+        userId,
+        kind: "prompt",
+        title,
+        description: body.slice(0, 140),
+        tags: tags ?? [],
+        collections: [],
+        stage: "to-try",
+        source: "mcp",
+        status: "ready",
+        prompt: { body, variables: extractVariables(body).map((name) => ({ name })), usedCount: 0 },
+        createdAt: now,
+        updatedAt: now,
+      } as never);
+      return json({ id: item.id, title, message: "Prompt saved." });
+    },
+  );
+
+  server.registerTool(
+    "get_prompt",
+    { description: "Get a prompt's body (optionally filled with values for its {{variables}}).", inputSchema: { title: z.string(), values: z.record(z.string(), z.string()).optional() } },
+    async ({ title, values }) => {
+      const q = title.toLowerCase();
+      const item = (await store.items.find({ userId, kind: "prompt", deletedAt: null })).find((i) => i.title?.toLowerCase() === q || i.title?.toLowerCase().includes(q));
+      if (!item?.prompt) return json({ error: `No prompt matching "${title}".` });
+      const rendered = renderPrompt(item.prompt.body, values ?? {});
+      await store.items.updateById(item.id, { prompt: { ...item.prompt, usedCount: item.prompt.usedCount + 1 } });
+      return json({ title: item.title, variables: item.prompt.variables, rendered });
     },
   );
 

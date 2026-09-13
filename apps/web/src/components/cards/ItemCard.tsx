@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { GitHubMark, itemIcon, TOOL_COLOR_VAR } from "@/lib/icons";
+import { useSetStage } from "@/lib/useSetStage";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { Badge, Spinner } from "../ui";
@@ -51,7 +52,7 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
   const collections = useData((s) => s.collections);
   const togglePin = useData((s) => s.togglePin);
   const toggleFavorite = useData((s) => s.toggleFavorite);
-  const setStage = useData((s) => s.setStage);
+  const setStage = useSetStage();
   const softDelete = useData((s) => s.softDelete);
   const restore = useData((s) => s.restore);
   const toggleItemCollection = useData((s) => s.toggleItemCollection);

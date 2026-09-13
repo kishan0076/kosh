@@ -7,6 +7,9 @@ import { requireUser, requireWrite } from "../auth/middleware.js";
 import { ingest, toClientItem } from "../modules/ingest.js";
 import { enqueue } from "../modules/queue.js";
 import { enrichItem } from "../modules/enrich.js";
+import { enrichGithub } from "../integrations/github.js";
+import { snapshotRepoSkills } from "../modules/snapshot.js";
+import { decryptSecret } from "../auth/crypto.js";
 
 export const itemsRouter: Router = Router();
 
@@ -76,6 +79,9 @@ itemsRouter.get(
           i.title?.toLowerCase().includes(q) ||
           i.description?.toLowerCase().includes(q) ||
           i.url?.toLowerCase().includes(q) ||
+          i.note?.toLowerCase().includes(q) ||
+          i.ai?.summary?.toLowerCase().includes(q) ||
+          i.prompt?.body?.toLowerCase().includes(q) ||
           i.tags.some((t) => t.toLowerCase().includes(q))
         )
       )
@@ -83,6 +89,16 @@ itemsRouter.get(
       return true;
     });
     res.json({ items: items.slice(0, limit).map(toClientItem), total: items.length });
+  }),
+);
+
+/* GET /inbox — to-try items awaiting triage (§8) */
+itemsRouter.get(
+  "/inbox",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const items = await getStore().items.find({ userId: uid, deletedAt: null, stage: "to-try" }, { sort: { createdAt: -1 } });
+    res.json({ items: items.map(toClientItem) });
   }),
 );
 
@@ -117,6 +133,7 @@ const patchSchema = z.object({
   collections: z.array(z.string()).optional(),
   pinned: z.boolean().optional(),
   favorite: z.boolean().optional(),
+  foundVia: z.object({ kind: z.string(), label: z.string(), itemId: z.string().optional() }).nullable().optional(),
   snapshotPolicy: z.enum(["auto", "manual", "all"]).optional(),
   watch: z.object({ enabled: z.boolean() }).optional(),
 });
@@ -134,6 +151,9 @@ itemsRouter.patch(
     if (body.verdict !== undefined) {
       patch.verdict = body.verdict;
       patch.verdictAt = nowIso();
+    }
+    if (body.foundVia !== undefined) {
+      patch.foundVia = (body.foundVia ?? undefined) as ServerItem["foundVia"];
     }
     if (body.snapshotPolicy || body.watch) {
       patch.github = { ...item.github, owner: item.github?.owner ?? "", repo: item.github?.repo ?? "" };
@@ -176,6 +196,45 @@ itemsRouter.delete(
     if (item.skillId) await getStore().skills.deleteById(item.skillId);
     await getStore().items.deleteById(item.id);
     res.json({ ok: true });
+  }),
+);
+
+/* POST /items/:id/extract-links — awesome-list README → Inbox (§5.7) */
+itemsRouter.post(
+  "/items/:id/extract-links",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const item = await ownedItem(uid, String(req.params.id));
+    const readme = item.github?.readme ?? "";
+    const links = [...new Set((readme.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/gi) ?? []).map((l) => l.replace(/[).,]+$/, "")))];
+    const label = item.title ?? `${item.github?.owner}/${item.github?.repo}`;
+    let saved = 0;
+    let skipped = 0;
+    for (const url of links) {
+      const { duplicate } = await ingest(uid, url, { source: "import", foundVia: { kind: "list", label, itemId: item.id }, tags: [label] });
+      duplicate ? skipped++ : saved++;
+    }
+    res.json({ found: links.length, saved, skipped });
+  }),
+);
+
+/* POST /items/:id/snapshot-skills — copy skill dirs from a repo (§6.4) */
+itemsRouter.post(
+  "/items/:id/snapshot-skills",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const item = await ownedItem(uid, String(req.params.id));
+    const g = item.github;
+    if (!g?.owner || !g.repo) throw notFound("Not a repo item.");
+    const body = z.object({ dirs: z.array(z.string()).optional() }).parse(req.body ?? {});
+    const user = await getStore().users.findById(uid);
+    const r = await enrichGithub(g.owner, g.repo, { token: decryptSecret(user?.githubToken) ?? null, prevSkillIndex: g.skillIndex, etag: undefined });
+    if (!("ok" in r) || !r.ok) {
+      res.status(502).json({ error: { code: "GITHUB_UNREACHABLE", message: "Couldn't reach GitHub to snapshot skills." } });
+      return;
+    }
+    const copied = await snapshotRepoSkills(item, r.data, { token: decryptSecret(user?.githubToken) ?? null, dirs: body.dirs });
+    res.json({ copied });
   }),
 );
 

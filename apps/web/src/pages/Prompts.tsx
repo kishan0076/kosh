@@ -6,6 +6,7 @@ import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
 import { ago } from "@/lib/time";
+import { useSetStage } from "@/lib/useSetStage";
 import { EmptyState, PageHeader, StageChip } from "@/components/common";
 import { Button } from "@/components/ui";
 import { Modal } from "@/components/overlays";
@@ -13,7 +14,7 @@ import { PromptFill } from "@/components/detail/PromptFill";
 
 export function Prompts() {
   const items = useData((s) => s.items);
-  const setStage = useData((s) => s.setStage);
+  const setStage = useSetStage();
   const openItem = useUi((s) => s.openItem);
   const [params, setParams] = useSearchParams();
   const [newOpen, setNewOpen] = useState(params.get("new") === "1");

@@ -157,6 +157,39 @@ program
   });
 
 program
+  .command("sync")
+  .description("Pull all your (copied) skills into ~/.claude/skills")
+  .option("--force", "Overwrite folders that differ locally")
+  .action(async (opts) => {
+    const cfg = loadConfig();
+    const { skills } = await api<{ skills: { name: string; indexOnly?: boolean }[] }>("/skills", cfg);
+    const base = join(homedir(), ".claude", "skills");
+    let synced = 0;
+    for (const s of skills) {
+      if (s.indexOnly) continue;
+      const m = await api<{ name: string; files: { path: string; content?: string }[] }>(`/skills/${encodeURIComponent(s.name)}/manifest`, cfg);
+      const dest = join(base, s.name);
+      if (existsSync(dest) && !opts.force) {
+        const local = await readSkillDir(dest);
+        const localHash = sha256(local.map((f) => `${f.path}:${sha256(f.content)}`).sort().join("|"));
+        const vaultHash = sha256(m.files.map((f) => `${f.path}:${sha256(f.content ?? "")}`).sort().join("|"));
+        if (localHash !== vaultHash) {
+          console.log(`  ~ ${s.name} (local differs — skipped; use --force)`);
+          continue;
+        }
+      }
+      for (const f of m.files) {
+        const target = join(dest, f.path);
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, f.content ?? "");
+      }
+      console.log(`  ✓ ${s.name}`);
+      synced++;
+    }
+    console.log(`Synced ${synced} skill(s) → ${base}`);
+  });
+
+program
   .command("import-local")
   .description("Push skills already on disk into the vault (trust: mine)")
   .action(async () => {

@@ -30,6 +30,7 @@ export const config = {
 
   // auth
   jwtSecret: env.SESSION_SECRET || "dev-insecure-secret-change-me",
+  encryptionKey: env.ENCRYPTION_KEY || "dev-insecure-encryption-key-change-me",
   allowedLogins: (env.ALLOWED_GITHUB_LOGINS ?? "")
     .split(",")
     .map((s) => s.trim())

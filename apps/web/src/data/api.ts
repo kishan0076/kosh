@@ -47,6 +47,9 @@ export const api = {
   restoreItem: (id: string) => req<{ item: Item }>(`/items/${id}/restore`, { method: "POST" }),
   purgeItem: (id: string) => req<{ ok: boolean }>(`/trash/${id}`, { method: "DELETE" }),
   refreshItem: (id: string) => req<{ ok: boolean }>(`/items/${id}/refresh`, { method: "POST" }),
+  extractLinks: (id: string) => req<{ found: number; saved: number; skipped: number }>(`/items/${id}/extract-links`, { method: "POST" }),
+  snapshotSkills: (id: string, dirs?: string[]) =>
+    req<{ copied: { name: string; path: string; skillId?: string }[] }>(`/items/${id}/snapshot-skills`, { method: "POST", body: JSON.stringify({ dirs }) }),
 
   createPrompt: (input: { title: string; body: string; tags?: string[] }) => req<{ item: Item }>("/prompts", { method: "POST", body: JSON.stringify(input) }),
   usePrompt: (id: string) => req<{ item: Item }>(`/prompts/${id}/use`, { method: "POST" }),
