@@ -56,6 +56,8 @@ export const config = {
     webhookSecret: env.TELEGRAM_WEBHOOK_SECRET || null,
   },
 
+  jobs: bool(env.ENABLE_JOBS, false),
+
   limits: {
     maxFiles: 300,
     maxFileBytes: 25 * 1024 * 1024,

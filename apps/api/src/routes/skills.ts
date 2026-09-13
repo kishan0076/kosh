@@ -119,6 +119,43 @@ skillsRouter.patch(
   }),
 );
 
+async function resolveSkill(userId: string, key: string): Promise<ServerSkill> {
+  const byId = await getStore().skills.findById(key);
+  if (byId && byId.userId === userId) return byId;
+  const byName = await getStore().skills.findOne({ userId, name: key, deletedAt: null });
+  if (byName) return byName;
+  throw notFound("Skill not found.");
+}
+
+/* manifest — powers the CLI + MCP (resolves by id or name) */
+skillsRouter.get(
+  "/skills/:id/manifest",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const s = await resolveSkill(uid, String(req.params.id));
+    const v = s.versions.find((x) => x.n === Number(req.query.v)) ?? s.versions.at(-1)!;
+    res.json({
+      name: s.name,
+      version: v.n,
+      trust: s.trust,
+      license: s.license,
+      source: s.source?.owner ? `${s.source.owner}/${s.source.repo}` : undefined,
+      scan: v.scan,
+      files: v.files.map((f) => ({ path: f.path, size: f.size, mime: f.mime, content: f.content })),
+    });
+  }),
+);
+
+skillsRouter.post(
+  "/skills/:id/installed",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const s = await resolveSkill(uid, String(req.params.id));
+    await getStore().skills.updateById(s.id, { usageCount: (s.usageCount ?? 0) + 1, lastUsedAt: nowIso() });
+    res.json({ ok: true });
+  }),
+);
+
 /* raw file (streams from object store; falls back to inline content) */
 skillsRouter.get(
   "/skills/:id/files/{*path}",

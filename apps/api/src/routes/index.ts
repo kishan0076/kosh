@@ -8,6 +8,8 @@ import { collectionsRouter } from "./collections.js";
 import { tagsRouter } from "./tags.js";
 import { filesRouter } from "./files.js";
 import { imgRouter } from "./img.js";
+import { mcpRouter } from "../mcp/server.js";
+import { telegramRouter } from "../bot/telegram.js";
 
 /** Mount all feature routers. */
 export function mountRoutes(api: Router): void {
@@ -20,4 +22,6 @@ export function mountRoutes(api: Router): void {
   api.use(tagsRouter);
   api.use(filesRouter);
   api.use(imgRouter);
+  api.use(mcpRouter);
+  api.use(telegramRouter);
 }

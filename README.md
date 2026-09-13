@@ -126,9 +126,23 @@ zero JS. Full details in [`docs/DESIGN.md`](docs/DESIGN.md).
 
 - **Front-end:** Vite 7 · React 19 · TypeScript (strict) · React Router 7 · Zustand · Tailwind CSS v4 ·
   `motion` · `cmdk` · `react-markdown` + `remark-gfm` + `rehype-sanitize` · `lucide-react`.
+- **Backend (`apps/api`):** Node 22 · Express 5 · Mongoose 8 (+ in-memory adapter) · Cloudflare R2 / S3
+  (+ local FS) · `octokit` · Anthropic SDK · grammY (Telegram) · MCP Streamable HTTP · `p-queue`/`p-retry` ·
+  `node-cron`.
+- **CLI (`packages/cli`):** `kosh login/list/add/push/status/import-local` with the install trust gate.
 - **Shared:** dependency-free, unit-tested domain logic (`@kosh/shared`).
-- **Planned backend** (see the build plan): Node 22 · Express 5 · Mongoose 8 · Cloudflare R2 ·
-  `octokit` · Anthropic SDK · grammY (Telegram) · MCP Streamable HTTP · a `kosh` CLI.
+
+### CLI & MCP
+
+```bash
+# CLI
+node packages/cli/dist/index.js login --api-url http://localhost:8787/api --key ksh_...
+kosh list
+kosh add pdf-tools --to claude       # refuses unreviewed skills unless --yes
+
+# MCP (Claude Code) — Streamable HTTP, bearer API key, 7 tools
+claude mcp add --transport http kosh http://localhost:8787/api/mcp -H "Authorization: Bearer ksh_..."
+```
 
 ## Safety by design
 

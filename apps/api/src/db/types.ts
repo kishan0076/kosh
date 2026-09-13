@@ -5,6 +5,7 @@ export interface ServerUser extends User {
   githubId?: string;
   githubToken?: string; // encrypted at rest in production
   aiSpendDate?: string;
+  telegramChatId?: number;
 }
 export interface ServerItem extends Item {
   userId: string;
