@@ -40,7 +40,7 @@ const nowIso = () => new Date().toISOString();
 const isOptimistic = (id: string) => id.startsWith("item_") || id.startsWith("skill_") || id.startsWith("col_");
 
 // Fields the API PATCH /items accepts.
-const PATCH_KEYS = ["stage", "rating", "verdict", "note", "title", "description", "tags", "collections", "pinned", "favorite", "foundVia"] as const;
+const PATCH_KEYS = ["stage", "rating", "verdict", "note", "title", "description", "tags", "collections", "pinned", "favorite", "foundVia", "snoozedUntil"] as const;
 function apiItemPatch(patch: Partial<Item>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const k of PATCH_KEYS) if (patch[k] !== undefined) out[k] = patch[k];
@@ -356,7 +356,7 @@ export const useData = create<DataState>()(
           } catch {
             /* the copy still succeeded; UI refreshes on next hydrate */
           }
-          return copied.length;
+          return copied;
         }
         // Mock mode: flip the matching skillIndex entries to snapshotted.
         const item = get().items.find((i) => i.id === itemId);

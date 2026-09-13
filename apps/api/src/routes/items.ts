@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { STAGES, type ItemSource } from "@kosh/shared";
 import { getStore, type ServerItem } from "../db/index.js";
@@ -14,6 +15,20 @@ import { decryptSecret } from "../auth/crypto.js";
 export const itemsRouter: Router = Router();
 
 const nowIso = () => new Date().toISOString();
+
+// A single extract-links / snapshot-skills / refresh call fans out into many
+// GitHub requests + enrichment jobs, so cap these amplifying endpoints well
+// below the global limiter. Keyed per authenticated user, not per IP.
+const actionLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as { userId?: string }).userId ?? req.ip ?? "anon",
+});
+
+// Hard ceiling on links ingested from one awesome-list README per call.
+const MAX_EXTRACT_LINKS = 200;
 
 async function ownedItem(userId: string, id: string): Promise<ServerItem> {
   const item = await getStore().items.findById(id);
@@ -133,7 +148,8 @@ const patchSchema = z.object({
   collections: z.array(z.string()).optional(),
   pinned: z.boolean().optional(),
   favorite: z.boolean().optional(),
-  foundVia: z.object({ kind: z.string(), label: z.string(), itemId: z.string().optional() }).nullable().optional(),
+  foundVia: z.object({ kind: z.string().max(20), label: z.string().max(200), itemId: z.string().max(100).optional() }).nullable().optional(),
+  snoozedUntil: z.string().datetime().nullable().optional(),
   snapshotPolicy: z.enum(["auto", "manual", "all"]).optional(),
   watch: z.object({ enabled: z.boolean() }).optional(),
 });
@@ -154,6 +170,9 @@ itemsRouter.patch(
     }
     if (body.foundVia !== undefined) {
       patch.foundVia = (body.foundVia ?? undefined) as ServerItem["foundVia"];
+    }
+    if (body.snoozedUntil !== undefined) {
+      patch.snoozedUntil = body.snoozedUntil ?? undefined;
     }
     if (body.snapshotPolicy || body.watch) {
       patch.github = { ...item.github, owner: item.github?.owner ?? "", repo: item.github?.repo ?? "" };
@@ -202,11 +221,13 @@ itemsRouter.delete(
 /* POST /items/:id/extract-links — awesome-list README → Inbox (§5.7) */
 itemsRouter.post(
   "/items/:id/extract-links",
+  actionLimiter,
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const item = await ownedItem(uid, String(req.params.id));
     const readme = item.github?.readme ?? "";
-    const links = [...new Set((readme.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/gi) ?? []).map((l) => l.replace(/[).,]+$/, "")))];
+    const all = [...new Set((readme.match(/https?:\/\/github\.com\/[\w.-]+\/[\w.-]+/gi) ?? []).map((l) => l.replace(/[).,]+$/, "")))];
+    const links = all.slice(0, MAX_EXTRACT_LINKS);
     const label = item.title ?? `${item.github?.owner}/${item.github?.repo}`;
     let saved = 0;
     let skipped = 0;
@@ -214,13 +235,14 @@ itemsRouter.post(
       const { duplicate } = await ingest(uid, url, { source: "import", foundVia: { kind: "list", label, itemId: item.id }, tags: [label] });
       duplicate ? skipped++ : saved++;
     }
-    res.json({ found: links.length, saved, skipped });
+    res.json({ found: all.length, processed: links.length, saved, skipped });
   }),
 );
 
 /* POST /items/:id/snapshot-skills — copy skill dirs from a repo (§6.4) */
 itemsRouter.post(
   "/items/:id/snapshot-skills",
+  actionLimiter,
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const item = await ownedItem(uid, String(req.params.id));
@@ -241,6 +263,7 @@ itemsRouter.post(
 /* POST /items/:id/refresh — re-run enrichment */
 itemsRouter.post(
   "/items/:id/refresh",
+  actionLimiter,
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const item = await ownedItem(uid, String(req.params.id));

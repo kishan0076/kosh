@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowUpRight,
@@ -146,6 +146,7 @@ function MetaRail({ item }: { item: Item }) {
   const toggleItemCollection = useData((s) => s.toggleItemCollection);
   const [tagInput, setTagInput] = useState("");
   const [foundEdit, setFoundEdit] = useState(false);
+  const foundCancelled = useRef(false);
 
   const addTag = () => {
     const t = tagInput.trim().replace(/^#/, "");
@@ -238,13 +239,20 @@ function MetaRail({ item }: { item: Item }) {
             autoFocus
             defaultValue={item.foundVia?.label ?? ""}
             onBlur={(e) => {
-              const label = e.target.value.trim();
-              patchItem(item.id, { foundVia: label ? { kind: item.foundVia?.kind ?? "other", label } : undefined });
+              if (foundCancelled.current) {
+                foundCancelled.current = false;
+              } else {
+                const label = e.target.value.trim();
+                patchItem(item.id, { foundVia: label ? { kind: item.foundVia?.kind ?? "other", label } : undefined });
+              }
               setFoundEdit(false);
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-              if (e.key === "Escape") setFoundEdit(false);
+              if (e.key === "Escape") {
+                foundCancelled.current = true; // skip the commit that the ensuing blur would run
+                setFoundEdit(false);
+              }
             }}
             placeholder="e.g. a friend, newsletter…"
             className="w-40 rounded-md bg-surface-2 px-2 py-0.5 text-right text-[11px] outline-none placeholder:text-faint focus:ring-focus"

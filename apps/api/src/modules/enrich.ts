@@ -57,8 +57,10 @@ async function computePatch(item: ServerItem, token: string | null): Promise<Par
     const watch = computeWatch(item.github?.watch, r.data);
     const github: GithubMeta = { ...r.data.github, readme: r.data.readme || undefined, watch, snapshotPolicy: item.github?.snapshotPolicy ?? r.data.github.snapshotPolicy };
     const ai = await summarizeForUser(item.userId, { title: r.data.title, url, text: r.data.readme || r.data.description || "", existingTags: item.tags });
-    // auto-snapshot small skills repos (§6.4) in the background
-    import("./snapshot.js").then(({ snapshotRepoSkills }) => snapshotRepoSkills(item, r.data)).catch(() => {});
+    // auto-snapshot small skills repos (§6.4) in the background — honour the user's
+    // stored snapshotPolicy and authenticate with their token (private repos, higher rate limit).
+    const snapData = { ...r.data, github: { ...r.data.github, snapshotPolicy: github.snapshotPolicy } };
+    import("./snapshot.js").then(({ snapshotRepoSkills }) => snapshotRepoSkills(item, snapData, { token })).catch(() => {});
     return {
       status: "ready",
       title: r.data.title,

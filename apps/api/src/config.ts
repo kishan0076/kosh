@@ -66,6 +66,16 @@ export const config = {
   },
 } as const;
 
+// Fail fast rather than silently encrypting user secrets under a public dev key.
+if (config.isProd) {
+  const insecure: string[] = [];
+  if (!env.SESSION_SECRET || env.SESSION_SECRET === "change-me" || config.jwtSecret.startsWith("dev-insecure")) insecure.push("SESSION_SECRET");
+  if (!env.ENCRYPTION_KEY || env.ENCRYPTION_KEY.length < 16 || config.encryptionKey.startsWith("dev-insecure")) insecure.push("ENCRYPTION_KEY (>=16 chars)");
+  if (insecure.length) {
+    throw new Error(`Refusing to start in production without secure ${insecure.join(", ")}. Set these environment variables to strong random values.`);
+  }
+}
+
 export const runId = randomUUID();
 
 export function storageDriver(): "r2" | "local" {

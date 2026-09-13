@@ -21,35 +21,29 @@ const IN_PER_M = 1;
 const OUT_PER_M = 5;
 const today = () => new Date().toISOString().slice(0, 10);
 
-/** Check the user's daily AI budget and record spend. Returns false when over cap. */
-async function reserveBudget(userId: string): Promise<boolean> {
+/** Atomically reserve estimated spend against the user's daily cap BEFORE the API call.
+ *  Returns false (and charges nothing) when already at/over cap. Pre-charging — rather than
+ *  recording after the call — closes the check-then-act race between concurrent enrichment jobs. */
+async function reserveBudget(userId: string, estCost: number): Promise<boolean> {
   const store = getStore();
   const user = await store.users.findById(userId);
   if (!user) return false;
-  const spent = user.aiSpendDate === today() ? user.aiSpendToday : 0;
-  return spent < (user.aiSpendCap ?? config.anthropic.dailyCapUsd);
-}
-
-async function recordSpend(userId: string, inputTokens: number, outputTokens: number): Promise<void> {
-  const store = getStore();
-  const user = await store.users.findById(userId);
-  if (!user) return;
-  const cost = (inputTokens / 1e6) * IN_PER_M + (outputTokens / 1e6) * OUT_PER_M;
   const base = user.aiSpendDate === today() ? user.aiSpendToday : 0;
-  await store.users.updateById(userId, { aiSpendToday: Math.round((base + cost) * 10000) / 10000, aiSpendDate: today() });
+  if (base >= (user.aiSpendCap ?? config.anthropic.dailyCapUsd)) return false;
+  await store.users.updateById(userId, { aiSpendToday: Math.round((base + estCost) * 10000) / 10000, aiSpendDate: today() });
+  return true;
 }
 
 /** Budget-aware summary for a user. Skips (returns null) when the daily cap is reached. */
 export async function summarizeForUser(userId: string, input: { title?: string; url?: string; text: string; existingTags?: string[] }): Promise<AiEnrichment | null> {
   if (!config.anthropic.apiKey) return null;
-  if (!(await reserveBudget(userId))) {
+  const inputTokens = Math.ceil((SYSTEM.length + input.text.length + (input.title?.length ?? 0)) / 4);
+  const estCost = (inputTokens / 1e6) * IN_PER_M + (400 / 1e6) * OUT_PER_M;
+  if (!(await reserveBudget(userId, estCost))) {
     logger.info({ userId }, "ai daily spend cap reached — skipping summary");
     return null;
   }
-  const inputTokens = Math.ceil((SYSTEM.length + input.text.length + (input.title?.length ?? 0)) / 4);
-  const result = await summarize(input);
-  await recordSpend(userId, inputTokens, 400);
-  return result;
+  return summarize(input);
 }
 
 const SYSTEM = `You describe saved web content for a personal library.

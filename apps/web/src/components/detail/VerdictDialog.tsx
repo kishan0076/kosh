@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { XCircle } from "lucide-react";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
@@ -17,6 +17,11 @@ export function VerdictDialog() {
 
   const item = id ? items.find((i) => i.id === id) : undefined;
 
+  // Each open starts empty so a reason abandoned for one item never leaks to the next.
+  useEffect(() => {
+    if (!id) setText("");
+  }, [id]);
+
   const drop = (withVerdict: boolean) => {
     if (!id) return;
     if (withVerdict && text.trim()) setVerdict(id, text.trim());
@@ -27,10 +32,10 @@ export function VerdictDialog() {
   };
 
   return (
-    <Modal open={!!id} onClose={close} className="max-w-md">
+    <Modal open={!!id} onClose={close} className="max-w-md" labelledBy="verdict-dialog-title">
       <div className="flex items-center gap-2 border-b border-border px-5 py-4">
         <XCircle size={18} className="text-danger" />
-        <h2 className="text-base font-semibold">Why are you dropping this?</h2>
+        <h2 id="verdict-dialog-title" className="text-base font-semibold">Why are you dropping this?</h2>
       </div>
       <div className="p-5">
         <p className="mb-2 text-[13px] text-muted">A one-line verdict so future-you knows why — {item?.title}.</p>
