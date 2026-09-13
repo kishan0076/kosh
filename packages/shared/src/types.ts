@@ -103,6 +103,8 @@ export interface GithubMeta {
   snapshotPolicy?: "auto" | "manual" | "all";
   watch?: WatchInfo;
   copiedCount?: number;
+  /** README markdown captured at enrichment time (shown in the detail view). */
+  readme?: string;
 }
 
 export interface PackageMeta {

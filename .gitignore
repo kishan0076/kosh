@@ -27,3 +27,7 @@ Thumbs.db
 
 # testing
 coverage/
+
+# api local data (in-memory/JSON store + local object store)
+.data/
+apps/api/.data/

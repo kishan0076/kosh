@@ -271,7 +271,7 @@ function ItemBody({ item }: { item: Item }) {
   const [fillOpen, setFillOpen] = useState(false);
 
   const g = item.github;
-  const readme = readmes[item.id];
+  const readme = readmes[item.id] ?? item.github?.readme;
 
   return (
     <div className="pb-8">

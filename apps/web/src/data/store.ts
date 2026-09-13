@@ -18,6 +18,7 @@ import {
   type User,
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
+import { api, backendEnabled } from "./api";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
 
 export interface DraftSkill {
@@ -35,6 +36,19 @@ export interface DraftFile {
 }
 export type DropDraft = DraftSkill | DraftFile;
 
+const nowIso = () => new Date().toISOString();
+const isOptimistic = (id: string) => id.startsWith("item_") || id.startsWith("skill_") || id.startsWith("col_");
+
+// Fields the API PATCH /items accepts.
+const PATCH_KEYS = ["stage", "rating", "verdict", "note", "title", "description", "tags", "collections", "pinned", "favorite"] as const;
+function apiItemPatch(patch: Partial<Item>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of PATCH_KEYS) if (patch[k] !== undefined) out[k] = patch[k];
+  if (patch.github?.watch) out.watch = { enabled: patch.github.watch.enabled };
+  if (patch.github?.snapshotPolicy) out.snapshotPolicy = patch.github.snapshotPolicy;
+  return out;
+}
+
 interface DataState {
   user: User;
   items: Item[];
@@ -42,8 +56,13 @@ interface DataState {
   collections: Collection[];
   readmes: Record<string, string>;
   filePreviews: Record<string, string>;
+  hydrated: boolean;
+  backend: boolean;
 
-  // actions
+  initBackend: () => Promise<void>;
+  upsertItem: (item: Item) => void;
+  upsertSkill: (skill: Skill) => void;
+
   ingestUrl: (rawUrl: string, opts?: { note?: string; tags?: string[]; source?: ItemSource; collectionIds?: string[] }) => { item: Item; duplicate: boolean };
   patchItem: (id: string, patch: Partial<Item>) => void;
   setStage: (id: string, stage: Stage) => void;
@@ -76,14 +95,10 @@ interface DataState {
   resetVault: () => void;
 }
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-/** Build a plausible enrichment patch for a freshly-ingested URL (demo pipeline). */
+/** Build a plausible enrichment patch for a freshly-ingested URL (mock pipeline). */
 function enrichPatch(item: Item): Partial<Item> {
   if (!item.url) return { status: "ready" };
-  const repo = item.linkType === "repo" || item.linkType === "issue" || item.linkType === "release" ? parseGithubRepo(item.url) : null;
+  const repo = item.linkType === "repo" ? parseGithubRepo(item.url) : null;
   if (repo) {
     const stars = 100 + Math.floor(Math.random() * 20000);
     return {
@@ -102,40 +117,89 @@ function enrichPatch(item: Item): Partial<Item> {
         pushedAt: nowIso(),
         defaultBranch: "main",
         repoKind: "library",
-        repoKindSignals: ["package, no bin"],
         install: { source: "none" },
         snapshotPolicy: "manual",
       },
-      ai: { summary: "Fetched metadata for this repository. In production, Kosh enriches this with stars, language, README and an AI summary.", category: "Repository" },
+      ai: { summary: "Fetched metadata for this repository (mock). Connect the API for live GitHub enrichment.", category: "Repository" },
     };
   }
   const site = siteNameFromUrl(item.url);
-  return {
-    status: "ready",
-    title: item.title ?? site,
-    description: item.description ?? `Saved from ${site}.`,
-    meta: { siteName: site },
-    ai: { summary: `Saved from ${site}. In production, Kosh pulls the Open Graph title, image and an AI summary here.`, category: "Link" },
-  };
+  return { status: "ready", title: item.title ?? site, description: item.description ?? `Saved from ${site}.`, meta: { siteName: site } };
 }
 
-let seedCounter = 0;
+const emptyUser = (): User => ({ ...seedUser(), id: "loading", name: "…", login: "…" });
+
 export const useData = create<DataState>()(
   persist(
     (set, get) => ({
-      user: seedUser(),
-      items: seedItems(),
-      skills: seedSkills(),
-      collections: seedCollections(),
+      user: backendEnabled ? emptyUser() : seedUser(),
+      items: backendEnabled ? [] : seedItems(),
+      skills: backendEnabled ? [] : seedSkills(),
+      collections: backendEnabled ? [] : seedCollections(),
       readmes: SEED_READMES,
       filePreviews: SEED_FILE_PREVIEWS,
+      hydrated: !backendEnabled,
+      backend: backendEnabled,
+
+      initBackend: async () => {
+        if (!backendEnabled || get().hydrated) return;
+        try {
+          try {
+            await api.me();
+          } catch {
+            await api.devLogin("darshan", "Darshan");
+          }
+          const [me, items, trash, skills, collections] = await Promise.all([
+            api.me(),
+            api.listItems(),
+            api.listTrash(),
+            api.listSkills(),
+            api.listCollections(),
+          ]);
+          set({ user: me.user, items: [...items.items, ...trash.items], skills: skills.skills, collections: collections.collections, hydrated: true });
+          api.events((evt) => {
+            if ((evt.kind === "item.created" || evt.kind === "item.updated") && evt.item) get().upsertItem(evt.item);
+          });
+        } catch (err) {
+          console.error("Kosh: backend hydrate failed, falling back to demo data", err);
+          set({ user: seedUser(), items: seedItems(), skills: seedSkills(), collections: seedCollections(), hydrated: true, backend: false });
+        }
+      },
+
+      upsertItem: (item) =>
+        set((s) => {
+          const byId = s.items.findIndex((i) => i.id === item.id);
+          if (byId >= 0) {
+            const copy = [...s.items];
+            copy[byId] = item;
+            return { items: copy };
+          }
+          // reconcile an optimistic placeholder with the same URL
+          const optimistic = s.items.findIndex((i) => isOptimistic(i.id) && i.url && item.url && i.url === item.url);
+          if (optimistic >= 0) {
+            const copy = [...s.items];
+            copy[optimistic] = item;
+            return { items: copy };
+          }
+          return { items: [item, ...s.items] };
+        }),
+      upsertSkill: (skill) =>
+        set((s) => {
+          const idx = s.skills.findIndex((x) => x.id === skill.id);
+          if (idx >= 0) {
+            const copy = [...s.skills];
+            copy[idx] = skill;
+            return { skills: copy };
+          }
+          return { skills: [skill, ...s.skills] };
+        }),
 
       ingestUrl: (rawUrl, opts = {}) => {
         const url = normalizeUrl(rawUrl);
         const existing = get().items.find((i) => i.url === url && !i.deletedAt);
         if (existing) return { item: existing, duplicate: true };
         const now = nowIso();
-        const item: Item = {
+        const temp: Item = {
           id: uid("item"),
           kind: "link",
           url,
@@ -151,19 +215,29 @@ export const useData = create<DataState>()(
           createdAt: now,
           updatedAt: now,
         };
-        set((s) => ({ items: [item, ...s.items] }));
-        // simulate async enrichment → materialize
-        const delay = 900 + Math.random() * 800;
-        window.setTimeout(() => {
-          get().patchItem(item.id, enrichPatch(item));
-        }, delay);
-        return { item, duplicate: false };
+        set((s) => ({ items: [temp, ...s.items] }));
+
+        if (get().backend) {
+          api
+            .createItem(url, { note: opts.note, tags: opts.tags, collectionIds: opts.collectionIds, source: opts.source })
+            .then(({ item }) => {
+              set((s) => ({ items: s.items.filter((i) => i.id !== temp.id) }));
+              get().upsertItem(item);
+            })
+            .catch(() => get().patchItem(temp.id, { status: "ready" }));
+        } else {
+          window.setTimeout(() => get().patchItem(temp.id, enrichPatch(temp)), 900 + Math.random() * 800);
+        }
+        return { item: temp, duplicate: false };
       },
 
-      patchItem: (id, patch) =>
-        set((s) => ({
-          items: s.items.map((i) => (i.id === id ? { ...i, ...patch, updatedAt: nowIso() } : i)),
-        })),
+      patchItem: (id, patch) => {
+        set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, ...patch, updatedAt: nowIso() } : i)) }));
+        if (get().backend && !isOptimistic(id)) {
+          const body = apiItemPatch(patch);
+          if (Object.keys(body).length) api.patchItem(id, body).catch(() => {});
+        }
+      },
 
       setStage: (id, stage) => get().patchItem(id, { stage }),
       snooze: (id, days) => get().patchItem(id, { snoozedUntil: new Date(Date.now() + days * 86_400_000).toISOString() }),
@@ -180,26 +254,28 @@ export const useData = create<DataState>()(
 
       softDelete: (id) => {
         const item = get().items.find((i) => i.id === id);
-        get().patchItem(id, { deletedAt: nowIso() });
+        set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: nowIso() } : i)) }));
+        if (get().backend && !isOptimistic(id)) api.deleteItem(id).catch(() => {});
         return item;
       },
-      restore: (id) => set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: undefined, updatedAt: nowIso() } : i)) })),
-      purge: (id) =>
-        set((s) => {
-          const item = s.items.find((i) => i.id === id);
-          return {
-            items: s.items.filter((i) => i.id !== id),
-            skills: item?.skillId ? s.skills.filter((sk) => sk.id !== item.skillId) : s.skills,
-          };
-        }),
-      emptyTrash: () =>
-        set((s) => {
-          const trashedSkillIds = s.items.filter((i) => i.deletedAt && i.skillId).map((i) => i.skillId);
-          return {
-            items: s.items.filter((i) => !i.deletedAt),
-            skills: s.skills.filter((sk) => !trashedSkillIds.includes(sk.id)),
-          };
-        }),
+      restore: (id) => {
+        set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: undefined, updatedAt: nowIso() } : i)) }));
+        if (get().backend && !isOptimistic(id)) api.restoreItem(id).catch(() => {});
+      },
+      purge: (id) => {
+        const item = get().items.find((i) => i.id === id);
+        set((s) => ({
+          items: s.items.filter((i) => i.id !== id),
+          skills: item?.skillId ? s.skills.filter((sk) => sk.id !== item.skillId) : s.skills,
+        }));
+        if (get().backend && !isOptimistic(id)) api.purgeItem(id).catch(() => {});
+      },
+      emptyTrash: () => {
+        const trashed = get().items.filter((i) => i.deletedAt);
+        const trashedSkillIds = trashed.filter((i) => i.skillId).map((i) => i.skillId);
+        set((s) => ({ items: s.items.filter((i) => !i.deletedAt), skills: s.skills.filter((sk) => !trashedSkillIds.includes(sk.id)) }));
+        if (get().backend) for (const i of trashed) if (!isOptimistic(i.id)) api.purgeItem(i.id).catch(() => {});
+      },
 
       createPrompt: ({ title, body, tags }) => {
         const now = nowIso();
@@ -218,27 +294,33 @@ export const useData = create<DataState>()(
           updatedAt: now,
         };
         set((s) => ({ items: [item, ...s.items] }));
+        if (get().backend) {
+          api.createPrompt({ title, body, tags }).then(({ item: real }) => {
+            set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
+            get().upsertItem(real);
+          }).catch(() => {});
+        }
         return item;
       },
-      usePrompt: (id) =>
-        set((s) => ({
-          items: s.items.map((i) =>
-            i.id === id && i.prompt ? { ...i, prompt: { ...i.prompt, usedCount: i.prompt.usedCount + 1 }, updatedAt: nowIso() } : i,
-          ),
-        })),
+      usePrompt: (id) => {
+        set((s) => ({ items: s.items.map((i) => (i.id === id && i.prompt ? { ...i, prompt: { ...i.prompt, usedCount: i.prompt.usedCount + 1 }, updatedAt: nowIso() } : i)) }));
+        if (get().backend && !isOptimistic(id)) api.usePrompt(id).catch(() => {});
+      },
 
-      reviewSkill: (skillId) =>
-        set((s) => ({
-          skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, trust: "reviewed", reviewedAt: nowIso(), updatedAt: nowIso() } : sk)),
-        })),
-      toggleSkillPublic: (skillId) =>
-        set((s) => ({
-          skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, public: !sk.public, updatedAt: nowIso() } : sk)),
-        })),
-      keepCopy: (skillId) =>
-        set((s) => ({
-          skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, indexOnly: false, updatedAt: nowIso() } : sk)),
-        })),
+      reviewSkill: (skillId) => {
+        set((s) => ({ skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, trust: "reviewed", reviewedAt: nowIso(), updatedAt: nowIso() } : sk)) }));
+        if (get().backend && !isOptimistic(skillId)) api.reviewSkill(skillId).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+      },
+      toggleSkillPublic: (skillId) => {
+        const sk = get().skills.find((x) => x.id === skillId);
+        const next = !sk?.public;
+        set((s) => ({ skills: s.skills.map((x) => (x.id === skillId ? { ...x, public: next, updatedAt: nowIso() } : x)) }));
+        if (get().backend && !isOptimistic(skillId)) api.patchSkill(skillId, { public: next }).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+      },
+      keepCopy: (skillId) => {
+        set((s) => ({ skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, indexOnly: false, updatedAt: nowIso() } : sk)) }));
+        if (get().backend && !isOptimistic(skillId)) api.keepCopy(skillId).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+      },
 
       finalizeDrafts: (drafts, source) => {
         const created: Item[] = [];
@@ -264,118 +346,83 @@ export const useData = create<DataState>()(
               createdAt: now,
               updatedAt: now,
               versions: [
-                {
-                  n: 1,
-                  createdAt: now,
-                  entry: entry?.path ?? "SKILL.md",
-                  files: d.files,
-                  frontmatter: fm,
-                  totalSize: d.files.reduce((a, f) => a + f.size, 0),
-                  lint: d.lint,
-                  scan: d.scan,
-                },
+                { n: 1, createdAt: now, entry: entry?.path ?? "SKILL.md", files: d.files, frontmatter: fm, totalSize: d.files.reduce((a, f) => a + f.size, 0), lint: d.lint, scan: d.scan },
               ],
             };
-            const item: Item = {
-              id: itemId,
-              kind: "skill",
-              skillId,
-              title: skill.displayName,
-              description: skill.description,
-              tags: ["claude"],
-              collections: [],
-              stage: "to-try",
-              source,
-              status: "ready",
-              createdAt: now,
-              updatedAt: now,
-            };
+            const item: Item = { id: itemId, kind: "skill", skillId, title: skill.displayName, description: skill.description, tags: ["claude"], collections: [], stage: "to-try", source, status: "ready", createdAt: now, updatedAt: now };
             set((s) => ({ items: [item, ...s.items], skills: [skill, ...s.skills] }));
             created.push(item);
+            if (get().backend) {
+              api
+                .createSkill({ name: d.name, tools: skill.tools, files: d.files.map((f) => ({ path: f.path, mime: f.mime, content: f.content })) })
+                .then((r) => {
+                  set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== skillId) }));
+                  get().upsertSkill(r.skill);
+                })
+                .catch(() => {});
+            }
           } else {
-            const item: Item = {
-              id: uid("item"),
-              kind: "file",
-              title: d.path,
-              description: `Uploaded file (${d.mime}).`,
-              tags: [],
-              collections: [],
-              stage: "to-try",
-              source,
-              status: "ready",
-              fileObject: { path: d.path, size: d.size, mime: d.mime },
-              createdAt: now,
-              updatedAt: now,
-            };
+            const item: Item = { id: uid("item"), kind: "file", title: d.path, description: `Uploaded file (${d.mime}).`, tags: [], collections: [], stage: "to-try", source, status: "ready", fileObject: { path: d.path, size: d.size, mime: d.mime }, createdAt: now, updatedAt: now };
             set((s) => ({ items: [item, ...s.items] }));
             created.push(item);
+            if (get().backend) {
+              api.createFile({ path: d.path, mime: d.mime, content: "" }).then(({ item: real }) => {
+                set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
+                get().upsertItem(real);
+              }).catch(() => {});
+            }
           }
         }
         return created;
       },
 
       createCollection: (name) => {
-        const col: Collection = {
-          id: uid("col"),
-          name,
-          slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
-          order: get().collections.length + 1,
-          color: ["#4f46e5", "#14b8a6", "#f59e0b", "#ec4899", "#8b5cf6"][get().collections.length % 5],
-        };
+        const col: Collection = { id: uid("col"), name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""), order: get().collections.length + 1, color: ["#4f46e5", "#14b8a6", "#f59e0b", "#ec4899", "#8b5cf6"][get().collections.length % 5] };
         set((s) => ({ collections: [...s.collections, col] }));
+        if (get().backend) {
+          api.createCollection(name).then(({ collection }) => set((s) => ({ collections: s.collections.map((c) => (c.id === col.id ? collection : c)) }))).catch(() => {});
+        }
         return col;
       },
-      toggleItemCollection: (itemId, collectionId) =>
-        set((s) => ({
-          items: s.items.map((i) => {
-            if (i.id !== itemId) return i;
-            const has = i.collections.includes(collectionId);
-            return {
-              ...i,
-              collections: has ? i.collections.filter((c) => c !== collectionId) : [...i.collections, collectionId],
-              updatedAt: nowIso(),
-            };
-          }),
-        })),
+      toggleItemCollection: (itemId, collectionId) => {
+        const cur = get().items.find((i) => i.id === itemId);
+        if (!cur) return;
+        const has = cur.collections.includes(collectionId);
+        const next = has ? cur.collections.filter((c) => c !== collectionId) : [...cur.collections, collectionId];
+        get().patchItem(itemId, { collections: next });
+      },
 
-      renameTag: (from, to) =>
-        set((s) => ({
-          items: s.items.map((i) =>
-            i.tags.includes(from) ? { ...i, tags: [...new Set(i.tags.map((t) => (t === from ? to : t)))] } : i,
-          ),
-        })),
-      deleteTag: (tag) =>
-        set((s) => ({ items: s.items.map((i) => (i.tags.includes(tag) ? { ...i, tags: i.tags.filter((t) => t !== tag) } : i)) })),
-      mergeTags: (from, to) =>
-        set((s) => ({
-          items: s.items.map((i) => {
-            if (!i.tags.some((t) => from.includes(t))) return i;
-            return { ...i, tags: [...new Set(i.tags.map((t) => (from.includes(t) ? to : t)))] };
-          }),
-        })),
+      renameTag: (from, to) => {
+        set((s) => ({ items: s.items.map((i) => (i.tags.includes(from) ? { ...i, tags: [...new Set(i.tags.map((t) => (t === from ? to : t)))] } : i)) }));
+        if (get().backend) api.renameTag(from, to).catch(() => {});
+      },
+      deleteTag: (tag) => {
+        set((s) => ({ items: s.items.map((i) => (i.tags.includes(tag) ? { ...i, tags: i.tags.filter((t) => t !== tag) } : i)) }));
+        if (get().backend) api.deleteTag(tag).catch(() => {});
+      },
+      mergeTags: (from, to) => {
+        set((s) => ({ items: s.items.map((i) => (i.tags.some((t) => from.includes(t)) ? { ...i, tags: [...new Set(i.tags.map((t) => (from.includes(t) ? to : t)))] } : i)) }));
+        if (get().backend) api.mergeTags(from, to).catch(() => {});
+      },
 
       setTheme: (theme) => set((s) => ({ user: { ...s.user, settings: { ...s.user.settings, theme } } })),
       resetVault: () => {
-        seedCounter += 1;
-        set({
-          user: seedUser(),
-          items: seedItems(),
-          skills: seedSkills(),
-          collections: seedCollections(),
-          readmes: SEED_READMES,
-          filePreviews: SEED_FILE_PREVIEWS,
-        });
+        if (backendEnabled) {
+          set({ hydrated: false });
+          void get().initBackend();
+          return;
+        }
+        set({ user: seedUser(), items: seedItems(), skills: seedSkills(), collections: seedCollections(), readmes: SEED_READMES, filePreviews: SEED_FILE_PREVIEWS });
       },
     }),
     {
       name: "kosh.data.v1",
-      partialize: (s) => ({ user: s.user, items: s.items, skills: s.skills, collections: s.collections, readmes: s.readmes, filePreviews: s.filePreviews }),
+      // In backend mode nothing is persisted locally (server is source of truth;
+      // theme lives in its own key). In mock mode the whole vault persists.
+      partialize: (s) =>
+        backendEnabled
+          ? {}
+          : { user: s.user, items: s.items, skills: s.skills, collections: s.collections, readmes: s.readmes, filePreviews: s.filePreviews },
     },
   ),
 );
-
-export const skillForItem = (skills: Skill[], item: Item): Skill | undefined =>
-  item.skillId ? skills.find((s) => s.id === item.skillId) : undefined;
-
-// keep the reference so linters don't flag the reseed counter (used to force fresh seeds)
-export const __seedCounter = () => seedCounter;

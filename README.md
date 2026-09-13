@@ -15,22 +15,30 @@ charts: it tells you what to try next and what needs attention.
 
 ## What's in this repository
 
-This repo contains a **fully-working front-end** for Kosh — a real, runnable React app that implements the
-complete product experience against a rich, seeded client-side data layer (persisted to `localStorage`), so
-you can explore the whole thing today without any backend, keys, or accounts.
+A **working full stack**:
 
-It's structured as the monorepo from [`docs/kosh-build-plan-v3.md`](docs/kosh-build-plan-v3.md) so the
-production backend (Express + MongoDB + Cloudflare R2 + GitHub/Claude APIs + Telegram bot + MCP server + CLI)
-can be filled in behind the same typed contracts.
+- **`apps/web`** — a real, runnable React app implementing the complete product experience. It runs
+  standalone against a rich, seeded client-side store (persisted to `localStorage`) with **zero setup**, and
+  transparently switches to the live API when `VITE_API_URL` is set.
+- **`apps/api`** — a real **Express 5** server: GitHub OAuth / dev-login + JWT cookies + hashed API keys, the
+  ingest pipeline (`p-queue` + `p-retry`), **live GitHub / npm / PyPI / crates enrichment**, SSRF-safe
+  fetching, Open Graph scraping, optional Claude (Haiku) summaries, content-addressed object storage, skill
+  lint + security scan + versioning, SSE, and the full REST surface. It uses a **ports-and-adapters** store:
+  real **Mongoose** schemas for production, and an in-memory/JSON adapter (the default) so it boots with
+  **no database, Docker, or credentials** required.
+- **`packages/shared`** — pure, tested domain logic shared by both (types, URL normalize/classify, repo-kind
+  detection, install extraction, skill lint, security scan, formatters). 25 unit tests.
+
+Structured as the monorepo from [`docs/kosh-build-plan-v3.md`](docs/kosh-build-plan-v3.md).
 
 ```
 kosh/
 ├─ apps/
-│  └─ web/            Vite + React 19 + TS + Tailwind v4 — the app (runnable now)
+│  ├─ web/            Vite + React 19 + TS + Tailwind v4 — the app
+│  └─ api/            Express 5 + ports-and-adapters store (memory default · Mongoose for prod)
 ├─ packages/
-│  └─ shared/         Pure, tested domain logic: types, URL normalize/classify,
-│                     skill lint, security scan, formatters
-├─ infra/             docker-compose (Mongo 7 + MinIO) + .env.example for the future backend
+│  └─ shared/         Pure, tested domain logic
+├─ infra/             docker-compose (Mongo 7 + MinIO) + .env.example for a full deployment
 ├─ docs/              The build plan + the design system reference
 └─ turbo.json · pnpm-workspace.yaml · tsconfig.base.json · CLAUDE.md
 ```
@@ -41,23 +49,42 @@ kosh/
 
 Requirements: **Node 22+** and **pnpm 10+**.
 
+### Front-end only (zero setup)
+
 ```bash
 pnpm install
-pnpm web          # start the web app  →  http://localhost:5173
+pnpm web          # web app with the seeded client store  →  http://localhost:5173
 ```
+
+### Full stack (web + live API)
+
+The API needs no database or keys — it defaults to an in-memory/JSON store and does live npm/PyPI enrichment
+out of the box (GitHub enrichment needs network access to `api.github.com`).
+
+```bash
+pnpm install
+pnpm --filter @kosh/api seed     # optional: load a demo vault into .data/
+pnpm --filter @kosh/api dev      # API on http://localhost:8787  (DEV_LOGIN is on in dev)
+
+# in another terminal — point the web app at the API:
+VITE_API_URL=http://localhost:8787/api pnpm web
+```
+
+The web app then authenticates (dev-login), hydrates from the API, and streams live enrichment over SSE.
+To use real MongoDB and Cloudflare R2, set `MONGODB_URI` and the `R2_*` vars (see `.env.example`); the code
+paths are the same.
 
 Other scripts:
 
 ```bash
 pnpm build        # build every package (turbo)
-pnpm test         # run the shared-logic test suite (vitest)
+pnpm test         # run the shared-logic test suite (vitest, 25 tests)
 pnpm typecheck    # typecheck the workspace
 pnpm web:build    # production build of the web app
-pnpm web:preview  # preview the production build
 ```
 
-Everything is seeded on first run. Use the avatar menu → **Reset demo data** (or Settings → Data) to
-restore the sample vault at any time.
+In front-end-only mode everything is seeded on first run — use the avatar menu → **Reset demo data** to
+restore the sample vault.
 
 ---
 

@@ -7,6 +7,7 @@ import { DetailPanel } from "../detail/DetailPanel";
 import { HelpSheet } from "../HelpSheet";
 import { Toaster } from "../Toaster";
 import { useUi } from "@/data/ui";
+import { useData } from "@/data/store";
 
 const COLLAPSE_KEY = "kosh.sidebar.collapsed";
 
@@ -22,6 +23,11 @@ export function AppShell() {
   const setPalette = useUi((s) => s.setPalette);
   const setHelp = useUi((s) => s.setHelp);
   const paletteOpen = useUi((s) => s.paletteOpen);
+  const initBackend = useData((s) => s.initBackend);
+
+  useEffect(() => {
+    void initBackend();
+  }, [initBackend]);
 
   const toggleCollapse = () => {
     setCollapsed((c) => {
