@@ -64,6 +64,41 @@ export async function putIfMissing(userId: string, hash: string, buf: Buffer, mi
   return key;
 }
 
+/** Does an object already exist for this user? (dedup check for POST /uploads/init) */
+export async function objectExists(userId: string, hash: string): Promise<boolean> {
+  const key = objectKey(userId, hash);
+  if (storageDriver() === "r2") {
+    try {
+      const { mod, client } = await s3();
+      await client.send(new mod.HeadObjectCommand({ Bucket: config.r2.bucket, Key: key }));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return localExists(key);
+}
+
+/** A presigned PUT URL the browser uses to upload bytes straight to R2 (never through the API).
+ *  Returns null in local-storage mode — the caller falls back to the local PUT endpoint. (§6.1–6.2) */
+export async function presignPut(userId: string, hash: string, mime: string, size: number): Promise<string | null> {
+  if (storageDriver() !== "r2") return null;
+  const { mod, client } = await s3();
+  const presigner = await import("@aws-sdk/s3-request-presigner");
+  return presigner.getSignedUrl(
+    client,
+    new mod.PutObjectCommand({ Bucket: config.r2.bucket, Key: objectKey(userId, hash), ContentType: mime, ContentLength: size }),
+    { expiresIn: 600 },
+  );
+}
+
+/** Store bytes for a local-mode direct upload, verifying the client-declared hash first. */
+export async function putVerified(userId: string, declaredHash: string, buf: Buffer, mime: string): Promise<boolean> {
+  if (sha256(buf) !== declaredHash) return false;
+  await putIfMissing(userId, declaredHash, buf, mime);
+  return true;
+}
+
 export async function getObject(userId: string, hash: string): Promise<Buffer | null> {
   const key = objectKey(userId, hash);
   if (storageDriver() === "r2") {

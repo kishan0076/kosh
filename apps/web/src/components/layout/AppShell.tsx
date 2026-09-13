@@ -5,6 +5,7 @@ import { Topbar } from "./Topbar";
 import { CommandPalette } from "../palette/CommandPalette";
 import { DetailPanel } from "../detail/DetailPanel";
 import { VerdictDialog } from "../detail/VerdictDialog";
+import { SkillEditor } from "../skills/SkillEditor";
 import { HelpSheet } from "../HelpSheet";
 import { Toaster } from "../Toaster";
 import { useUi } from "@/data/ui";
@@ -74,6 +75,7 @@ export function AppShell() {
       <CommandPalette />
       <DetailPanel />
       <VerdictDialog />
+      <SkillEditor />
       <HelpSheet />
       <Toaster />
     </div>

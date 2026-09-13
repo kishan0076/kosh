@@ -4,7 +4,7 @@ import { getStore, type ServerItem } from "../db/index.js";
 import { ah, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { toClientItem } from "../modules/ingest.js";
-import { getObject, putIfMissing, sha256 } from "../storage/objects.js";
+import { getObject, objectExists, putIfMissing, sha256 } from "../storage/objects.js";
 
 export const filesRouter: Router = Router();
 const nowIso = () => new Date().toISOString();
@@ -13,19 +13,32 @@ filesRouter.post(
   "/files",
   ah(async (req, res) => {
     const uid = requireWrite(req);
-    const { path, mime, content, bytesBase64, note, tags } = z
+    const { path, mime, content, bytesBase64, sha256: refHash, size, note, tags } = z
       .object({
         path: z.string().min(1),
         mime: z.string().default("application/octet-stream"),
         content: z.string().optional(),
         bytesBase64: z.string().optional(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+        size: z.number().int().min(0).optional(),
         note: z.string().max(2000).optional(),
         tags: z.array(z.string()).optional(),
       })
       .parse(req.body);
-    const buf = content != null ? Buffer.from(content, "utf8") : bytesBase64 != null ? Buffer.from(bytesBase64, "base64") : Buffer.alloc(0);
-    const hash = sha256(buf);
-    await putIfMissing(uid, hash, buf, mime);
+    // Prefer a pre-uploaded object (files never pass through the API on the web path, §6.2);
+    // fall back to inline bytes for bot/MCP/small saves.
+    let hash: string;
+    let byteLen: number;
+    if (refHash) {
+      if (!(await objectExists(uid, refHash))) throw notFound("Uploaded file not found — re-run the upload.");
+      hash = refHash;
+      byteLen = size ?? (await getObject(uid, refHash))?.length ?? 0;
+    } else {
+      const buf = content != null ? Buffer.from(content, "utf8") : bytesBase64 != null ? Buffer.from(bytesBase64, "base64") : Buffer.alloc(0);
+      hash = sha256(buf);
+      byteLen = buf.length;
+      await putIfMissing(uid, hash, buf, mime);
+    }
     const now = nowIso();
     const item = await getStore().items.create({
       userId: uid,
@@ -38,7 +51,7 @@ filesRouter.post(
       source: "web",
       status: "ready",
       note,
-      fileObject: { path, objectId: hash, size: buf.length, mime },
+      fileObject: { path, objectId: hash, size: byteLen, mime },
       createdAt: now,
       updatedAt: now,
     } as Omit<ServerItem, "id">);

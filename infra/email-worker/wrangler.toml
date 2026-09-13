@@ -1,0 +1,11 @@
+name = "kosh-email-worker"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Set KOSH_API_URL to your API's /api base. Store EMAIL_INBOUND_SECRET as a secret:
+#   wrangler secret put EMAIL_INBOUND_SECRET
+[vars]
+KOSH_API_URL = "https://api.yourdomain.com/api"
+
+# Then, in the Cloudflare dashboard → Email Routing, route an address
+# (e.g. inbox+<login>@yourdomain.com) to this worker.

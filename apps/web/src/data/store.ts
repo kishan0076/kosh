@@ -14,17 +14,20 @@ import {
   type ItemSource,
   type Skill,
   type SkillFile,
+  type SkillVersion,
   type Stage,
+  type Tool,
   type User,
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
-import { api, backendEnabled } from "./api";
+import { api, backendEnabled, uploadObjects } from "./api";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
 
 export interface DraftSkill {
   kind: "skill";
   name: string;
   files: SkillFile[];
+  blobs?: { path: string; mime: string; blob: Blob }[]; // raw bytes for direct upload (§6.2)
   lint: ReturnType<typeof lintSkill>;
   scan: ReturnType<typeof scanSkill>;
 }
@@ -33,6 +36,7 @@ export interface DraftFile {
   path: string;
   size: number;
   mime: string;
+  blob?: Blob; // raw bytes for direct upload (§6.2)
 }
 export type DropDraft = DraftSkill | DraftFile;
 
@@ -84,6 +88,7 @@ interface DataState {
   reviewSkill: (skillId: string) => void;
   toggleSkillPublic: (skillId: string) => void;
   keepCopy: (skillId: string) => void;
+  saveSkillEdit: (input: { skillId?: string; name: string; content: string; tools?: Tool[]; note?: string }) => Item | undefined;
   extractLinks: (itemId: string) => Promise<{ found: number; saved: number; skipped: number }>;
   snapshotSkills: (itemId: string, dirs?: string[]) => Promise<number>;
   finalizeDrafts: (drafts: DropDraft[], source: ItemSource) => Item[];
@@ -326,6 +331,73 @@ export const useData = create<DataState>()(
         if (get().backend && !isOptimistic(skillId)) api.keepCopy(skillId).then((r) => get().upsertSkill(r.skill)).catch(() => {});
       },
 
+      saveSkillEdit: ({ skillId, name, content, tools, note }) => {
+        const now = nowIso();
+        const { data: fm, content: body } = parseFrontmatter(content);
+        const skillName = name || (fm.name as string) || "new-skill";
+        const files: SkillFile[] = [{ path: "SKILL.md", size: content.length, mime: "text/markdown", content }];
+        const lint = lintSkill({ frontmatter: fm, body, files: ["SKILL.md"], folderName: skillName });
+        const scan = scanSkill(new Map([["SKILL.md", content]]));
+        const apiFiles = [{ path: "SKILL.md", mime: "text/markdown", content }];
+
+        const existing = skillId ? get().skills.find((s) => s.id === skillId) : get().skills.find((s) => s.name === skillName);
+        if (existing) {
+          const nextN = existing.latest + 1;
+          const version: SkillVersion = { n: nextN, createdAt: now, note, entry: "SKILL.md", files, frontmatter: fm, totalSize: content.length, lint, scan };
+          const tookOver = existing.origin === "repo";
+          const updated: Skill = {
+            ...existing,
+            latest: nextN,
+            versions: [...existing.versions, version],
+            displayName: (fm.name as string) ?? existing.displayName,
+            description: (fm.description as string) ?? existing.description,
+            tools: tools ?? existing.tools,
+            origin: tookOver ? "authored" : existing.origin, // editing a copy makes it yours (§6.3)
+            trust: tookOver ? "mine" : scan.risky && existing.trust === "reviewed" ? "unreviewed" : existing.trust,
+            updatedAt: now,
+          };
+          set((s) => ({
+            skills: s.skills.map((x) => (x.id === existing.id ? updated : x)),
+            items: s.items.map((i) => (i.id === existing.itemId ? { ...i, title: updated.displayName, description: updated.description, updatedAt: now } : i)),
+          }));
+          if (get().backend && !isOptimistic(existing.id)) {
+            api.createSkill({ name: skillName, tools, note, files: apiFiles }).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+          }
+          return get().items.find((i) => i.id === existing.itemId);
+        }
+
+        const itemId = uid("item");
+        const newSkillId = uid("skill");
+        const skill: Skill = {
+          id: newSkillId,
+          itemId,
+          name: skillName,
+          displayName: (fm.name as string) ?? skillName,
+          description: (fm.description as string) ?? undefined,
+          tools: tools ?? ["claude"],
+          origin: "authored",
+          trust: "mine",
+          license: (fm.license as string) ?? undefined,
+          latest: 1,
+          usageCount: 0,
+          createdAt: now,
+          updatedAt: now,
+          versions: [{ n: 1, createdAt: now, note, entry: "SKILL.md", files, frontmatter: fm, totalSize: content.length, lint, scan }],
+        };
+        const item: Item = { id: itemId, kind: "skill", skillId: newSkillId, title: skill.displayName, description: skill.description, tags: (tools ?? ["claude"]) as string[], collections: [], stage: "to-try", source: "web", status: "ready", createdAt: now, updatedAt: now };
+        set((s) => ({ items: [item, ...s.items], skills: [skill, ...s.skills] }));
+        if (get().backend) {
+          api
+            .createSkill({ name: skillName, tools, note, files: apiFiles })
+            .then((r) => {
+              set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== newSkillId) }));
+              get().upsertSkill(r.skill);
+            })
+            .catch(() => {});
+        }
+        return item;
+      },
+
       extractLinks: async (itemId) => {
         const item = get().items.find((i) => i.id === itemId);
         if (get().backend && item && !isOptimistic(itemId)) {
@@ -401,8 +473,12 @@ export const useData = create<DataState>()(
             set((s) => ({ items: [item, ...s.items], skills: [skill, ...s.skills] }));
             created.push(item);
             if (get().backend) {
-              api
-                .createSkill({ name: d.name, tools: skill.tools, files: d.files.map((f) => ({ path: f.path, mime: f.mime, content: f.content })) })
+              // Upload bytes straight to storage, then finalize with content-addressed refs (§6.2).
+              const blobs = d.blobs;
+              const finalize = blobs?.length
+                ? uploadObjects(blobs).then((refs) => api.createSkill({ name: d.name, tools: skill.tools, files: refs }))
+                : api.createSkill({ name: d.name, tools: skill.tools, files: d.files.map((f) => ({ path: f.path, mime: f.mime, content: f.content })) });
+              finalize
                 .then((r) => {
                   set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== skillId) }));
                   get().upsertSkill(r.skill);
@@ -414,10 +490,16 @@ export const useData = create<DataState>()(
             set((s) => ({ items: [item, ...s.items] }));
             created.push(item);
             if (get().backend) {
-              api.createFile({ path: d.path, mime: d.mime, content: "" }).then(({ item: real }) => {
-                set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
-                get().upsertItem(real);
-              }).catch(() => {});
+              // Upload bytes straight to storage, then finalize with a content-addressed ref (§6.2).
+              const finalize = d.blob
+                ? uploadObjects([{ path: d.path, mime: d.mime, blob: d.blob }]).then(([ref]) => api.createFile({ path: d.path, mime: d.mime, sha256: ref!.sha256, size: ref!.size }))
+                : api.createFile({ path: d.path, mime: d.mime, content: "" });
+              finalize
+                .then(({ item: real }) => {
+                  set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
+                  get().upsertItem(real);
+                })
+                .catch(() => {});
             }
           }
         }

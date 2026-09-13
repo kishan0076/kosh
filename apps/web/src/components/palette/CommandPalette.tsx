@@ -17,6 +17,7 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
+import { searchItems } from "@kosh/shared";
 import { GitHubMark, itemIcon } from "@/lib/icons";
 import { parseCapture } from "@/lib/capture";
 import { useData } from "@/data/store";
@@ -38,18 +39,10 @@ export function CommandPalette() {
   const isSave = intent.kind === "link" || intent.kind === "repo";
 
   const results = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = live(items).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-    if (!q || isSave) return list.slice(0, 6);
-    return list
-      .filter(
-        (i) =>
-          i.title?.toLowerCase().includes(q) ||
-          i.description?.toLowerCase().includes(q) ||
-          i.url?.toLowerCase().includes(q) ||
-          i.tags.some((t) => t.toLowerCase().includes(q)),
-      )
-      .slice(0, 8);
+    const list = live(items);
+    if (!search.trim() || isSave) return [...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
+    // Ranked, filter-aware search (kind:/tag:/stage:/is:) shared with the server. (§ Sprint 6)
+    return searchItems(list, search, { limit: 8 }).map((h) => h.item);
   }, [items, search, isSave]);
 
   const close = () => {

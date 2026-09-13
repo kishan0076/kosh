@@ -43,6 +43,7 @@ export function createApp(): Express {
   api.use("/settings", limiter(30));
   api.use("/mcp", limiter(120));
   api.use("/email", limiter(30));
+  api.use("/uploads", limiter(120));
 
   api.use(attachUser);
   mountRoutes(api);

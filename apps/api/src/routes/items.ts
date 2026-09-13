@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
-import { STAGES, type ItemSource } from "@kosh/shared";
+import { STAGES, searchItems, type ItemSource } from "@kosh/shared";
 import { getStore, type ServerItem } from "../db/index.js";
 import { ah, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
@@ -104,6 +104,19 @@ itemsRouter.get(
       return true;
     });
     res.json({ items: items.slice(0, limit).map(toClientItem), total: items.length });
+  }),
+);
+
+/* GET /search — ranked, filter-aware search across the vault (§ Sprint 6) */
+itemsRouter.get(
+  "/search",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const q = String(req.query.q ?? "");
+    const limit = Math.min(Number(req.query.limit ?? 25), 100);
+    const items = await getStore().items.find({ userId: uid, deletedAt: null });
+    const hits = searchItems(items, q, { limit });
+    res.json({ results: hits.map((h) => ({ item: toClientItem(h.item), score: h.score })), total: hits.length });
   }),
 );
 

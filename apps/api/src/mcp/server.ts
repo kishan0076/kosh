@@ -4,7 +4,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { extractVariables, renderPrompt } from "@kosh/shared";
+import { extractVariables, renderPrompt, searchItems } from "@kosh/shared";
 import { getStore } from "../db/index.js";
 import { requireUser } from "../auth/middleware.js";
 import { ingest } from "../modules/ingest.js";
@@ -30,12 +30,16 @@ function buildServer(userId: string): McpServer {
     "search_vault",
     { description: "Search links, skills, prompts and files.", inputSchema: { query: z.string(), kind: z.string().optional(), stage: z.string().optional(), limit: z.number().optional() } },
     async ({ query, kind, stage, limit }) => {
-      const q = query.toLowerCase();
-      const items = (await store.items.find({ userId, deletedAt: null }))
-        .filter((i) => (kind ? i.kind === kind : true) && (stage ? i.stage === stage : true))
-        .filter((i) => i.title?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q) || i.url?.toLowerCase().includes(q) || i.prompt?.body?.toLowerCase().includes(q) || i.ai?.summary?.toLowerCase().includes(q) || i.tags.some((t) => t.toLowerCase().includes(q)))
-        .slice(0, limit ?? 20)
-        .map((i) => ({ id: i.id, kind: i.kind, title: i.title, url: i.url, stage: i.stage, tags: i.tags }));
+      // Fold kind/stage into the shared ranker's query grammar so ranking + filters agree with the web.
+      const full = [query, kind ? `kind:${kind}` : "", stage ? `stage:${stage}` : ""].filter(Boolean).join(" ");
+      const items = searchItems(await store.items.find({ userId, deletedAt: null }), full, { limit: limit ?? 20 }).map((h) => ({
+        id: h.item.id,
+        kind: h.item.kind,
+        title: h.item.title,
+        url: h.item.url,
+        stage: h.item.stage,
+        tags: h.item.tags,
+      }));
       return json({ results: items });
     },
   );

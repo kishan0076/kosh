@@ -27,6 +27,11 @@ interface UiState {
   openVerdict: (id: string) => void;
   closeVerdict: () => void;
 
+  // Skill editor: null = closed, { } = new skill, { skillId } = editing an existing one
+  skillEditor: { skillId?: string } | null;
+  openSkillEditor: (skillId?: string) => void;
+  closeSkillEditor: () => void;
+
   trayOpen: boolean;
   setTray: (open: boolean) => void;
 
@@ -49,6 +54,10 @@ export const useUi = create<UiState>((set, get) => ({
   verdictItemId: null,
   openVerdict: (id) => set({ verdictItemId: id }),
   closeVerdict: () => set({ verdictItemId: null }),
+
+  skillEditor: null,
+  openSkillEditor: (skillId) => set({ skillEditor: { skillId } }),
+  closeSkillEditor: () => set({ skillEditor: null }),
 
   trayOpen: false,
   setTray: (trayOpen) => set({ trayOpen }),

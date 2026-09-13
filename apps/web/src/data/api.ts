@@ -29,6 +29,48 @@ export interface SkillDraftFile {
   mime: string;
   content?: string;
   bytesBase64?: string;
+  sha256?: string;
+  size?: number;
+}
+
+export interface UploadInput {
+  path: string;
+  mime: string;
+  blob: Blob;
+}
+export interface UploadedRef {
+  path: string;
+  mime: string;
+  sha256: string;
+  size: number;
+}
+
+/** SHA-256 of a Blob via WebCrypto (matches the server's content-addressed keys). */
+async function hashBlob(blob: Blob): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Upload file bytes straight to storage (presigned R2, or the local PUT endpoint) and return
+ *  content-addressed refs to finalize with — bytes never pass through the JSON API. (§6.2) */
+export async function uploadObjects(inputs: UploadInput[]): Promise<UploadedRef[]> {
+  const metas = await Promise.all(inputs.map(async (f) => ({ ...f, sha256: await hashBlob(f.blob), size: f.blob.size })));
+  const { uploads } = await api.initUpload(metas.map((m) => ({ path: m.path, sha256: m.sha256, size: m.size, mime: m.mime })));
+  const bySha = new Map(uploads.map((u) => [u.sha256, u]));
+  await Promise.all(
+    metas.map(async (m) => {
+      const u = bySha.get(m.sha256);
+      if (!u || u.uploaded || !u.url) return; // already stored (dedup)
+      const res = await fetch(u.url, {
+        method: "PUT",
+        body: m.blob,
+        headers: { "Content-Type": m.mime },
+        credentials: u.local ? "include" : "omit", // presigned R2 URLs are pre-authorized
+      });
+      if (!res.ok) throw new Error(`Upload failed for ${m.path} (${res.status})`);
+    }),
+  );
+  return metas.map((m) => ({ path: m.path, mime: m.mime, sha256: m.sha256, size: m.size }));
 }
 
 export const api = {
@@ -36,6 +78,7 @@ export const api = {
   me: () => req<{ user: User }>("/me"),
 
   listItems: () => req<{ items: Item[]; total: number }>("/items?limit=500"),
+  search: (q: string, limit = 25) => req<{ results: { item: Item; score: number }[]; total: number }>(`/search?q=${encodeURIComponent(q)}&limit=${limit}`),
   listTrash: () => req<{ items: Item[] }>("/trash"),
   listSkills: () => req<{ skills: Skill[] }>("/skills"),
   listCollections: () => req<{ collections: Collection[] }>("/collections"),
@@ -54,9 +97,15 @@ export const api = {
   createPrompt: (input: { title: string; body: string; tags?: string[] }) => req<{ item: Item }>("/prompts", { method: "POST", body: JSON.stringify(input) }),
   usePrompt: (id: string) => req<{ item: Item }>(`/prompts/${id}/use`, { method: "POST" }),
 
+  initUpload: (files: { path: string; sha256: string; size: number; mime: string }[]) =>
+    req<{ sessionId: string; uploads: { path: string; sha256: string; uploaded: boolean; url: string | null; local: boolean }[] }>("/uploads/init", {
+      method: "POST",
+      body: JSON.stringify({ files }),
+    }),
   createSkill: (input: { name?: string; files: SkillDraftFile[]; tools?: string[]; note?: string }) =>
     req<{ skill: Skill; itemId?: string; changed: boolean }>("/skills", { method: "POST", body: JSON.stringify(input) }),
-  createFile: (input: { path: string; mime: string; content?: string; bytesBase64?: string }) => req<{ item: Item }>("/files", { method: "POST", body: JSON.stringify(input) }),
+  createFile: (input: { path: string; mime: string; content?: string; bytesBase64?: string; sha256?: string; size?: number }) =>
+    req<{ item: Item }>("/files", { method: "POST", body: JSON.stringify(input) }),
   reviewSkill: (id: string) => req<{ skill: Skill }>(`/skills/${id}/review`, { method: "POST" }),
   keepCopy: (id: string) => req<{ skill: Skill }>(`/skills/${id}/keep-copy`, { method: "POST" }),
   patchSkill: (id: string, patch: Record<string, unknown>) => req<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),

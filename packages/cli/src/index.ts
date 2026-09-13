@@ -103,6 +103,18 @@ program
   .option("--yes", "Install even if unreviewed")
   .action(async (name, opts) => {
     const cfg = loadConfig();
+    // `kosh add owner/repo:path` — copy an indexed skill from a saved repo, then install it. (§6.9)
+    if (/^[\w.-]+\/[\w.-]+:/.test(name)) {
+      const idx = name.indexOf(":");
+      const [owner, repo] = name.slice(0, idx).split("/");
+      const path = name.slice(idx + 1);
+      const copied = await api<{ copied: number; skill: { name: string } }>("/skills/copy-from-repo", cfg, {
+        method: "POST",
+        body: JSON.stringify({ owner, repo, path }),
+      });
+      console.log(`✓ Copied ${owner}/${repo}:${path || "(root)"} → ${copied.skill.name}`);
+      name = copied.skill.name;
+    }
     type Manifest = { name: string; version: number; trust: string; license?: string; source?: string; files: { path: string; content?: string }[] };
     const m = await api<Manifest>(`/skills/${encodeURIComponent(name)}/manifest${opts.version ? `?v=${opts.version}` : ""}`, cfg);
     if (m.trust === "unreviewed" && !opts.yes) {

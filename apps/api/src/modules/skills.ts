@@ -12,16 +12,19 @@ import {
 } from "@kosh/shared";
 import { getStore, type ServerItem, type ServerSkill } from "../db/index.js";
 import { publish } from "../events.js";
-import { putIfMissing, sha256 } from "../storage/objects.js";
+import { getObject, putIfMissing, sha256 } from "../storage/objects.js";
 
 const nowIso = () => new Date().toISOString();
 const TEXT_MAX = 64 * 1024;
+const VERIFY_MAX = 2_000_000; // re-hash objects up to 2 MB server-side (§6.3)
 
 export interface IncomingFile {
   path: string;
   mime: string;
-  content?: string; // utf8 text
-  bytesBase64?: string; // binary
+  content?: string; // utf8 text (inline)
+  bytesBase64?: string; // binary (inline)
+  sha256?: string; // reference to an object already uploaded via /uploads/init (§6.2)
+  size?: number;
 }
 
 export interface CreateSkillOpts {
@@ -73,13 +76,32 @@ export async function createSkillVersion(
   const texts = new Map<string, string>();
   const skillFiles: SkillFile[] = [];
   for (const f of files) {
-    const buf = bufOf(f);
-    const hash = sha256(buf);
-    await putIfMissing(userId, hash, buf, f.mime);
+    let buf: Buffer;
+    let hash: string;
+    let verified = true;
+    if (f.content != null || f.bytesBase64 != null) {
+      // Inline bytes (bot, MCP, snapshot, small pastes) — store them now.
+      buf = bufOf(f);
+      hash = sha256(buf);
+      await putIfMissing(userId, hash, buf, f.mime);
+    } else if (f.sha256) {
+      // Pre-uploaded via /uploads/init — read it back to lint/scan and verify integrity.
+      const stored = await getObject(userId, f.sha256);
+      if (!stored) throw new Error("OBJECT_MISSING");
+      buf = stored;
+      hash = f.sha256;
+      // Re-hash small objects; a mismatch means the upload was tampered with.
+      if (buf.length <= VERIFY_MAX && sha256(buf) !== hash) throw new Error("HASH_MISMATCH");
+      verified = buf.length <= VERIFY_MAX;
+    } else {
+      buf = Buffer.alloc(0);
+      hash = sha256(buf);
+      await putIfMissing(userId, hash, buf, f.mime);
+    }
     const isText = /\.(md|mdx|txt|json|ya?ml|toml|csv|py|js|ts|tsx|jsx|sh|ps1|rb|go|rs|sql|html|css|svg)$/i.test(f.path);
     const content = isText && buf.length <= TEXT_MAX ? buf.toString("utf8") : undefined;
     if (content) texts.set(f.path, content);
-    skillFiles.push({ path: f.path, objectId: hash, size: buf.length, mime: f.mime, sha256: hash, verified: true, content });
+    skillFiles.push({ path: f.path, objectId: hash, size: buf.length, mime: f.mime, sha256: hash, verified, content });
     void store; // objects persisted; StorageObject bookkeeping omitted in this build
   }
 

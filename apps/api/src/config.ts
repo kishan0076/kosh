@@ -57,6 +57,15 @@ export const config = {
     webhookSecret: env.TELEGRAM_WEBHOOK_SECRET || null,
   },
 
+  email: {
+    inboundSecret: env.EMAIL_INBOUND_SECRET || null,
+    // Optional allowlist of sender addresses or domains (comma-separated). Empty = accept any (dev).
+    allowedSenders: (env.EMAIL_ALLOWED_SENDERS ?? "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
+  },
+
   jobs: bool(env.ENABLE_JOBS, false),
 
   limits: {

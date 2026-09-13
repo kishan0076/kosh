@@ -7,10 +7,13 @@ import {
   Download,
   GitMerge,
   KeyRound,
+  Mail,
   MessageCircle,
   Plus,
   RefreshCw,
   Settings as SettingsIcon,
+  Share2,
+  Smartphone,
   Tag as TagIcon,
   Terminal,
   Trash2,
@@ -109,6 +112,15 @@ export function Settings() {
             <Snippet icon={Blocks} title="MCP (Claude Code)" cmd='claude mcp add --transport http kosh https://api.kosh.app/mcp -H "Authorization: Bearer ksh_xxx"' onCopy={copy} />
             <Snippet icon={MessageCircle} title="Telegram bot" cmd="/start to link · send a link, .md/.zip, or text" onCopy={copy} plain />
             <Snippet icon={Bookmark} title="Bookmarklet" cmd={bookmarklet} onCopy={copy} truncate />
+            <Snippet icon={Smartphone} title="Android — share sheet" cmd="Install Kosh to your home screen, then Share → Kosh from any app" onCopy={copy} plain />
+            <Snippet
+              icon={Share2}
+              title="iPhone Shortcut"
+              cmd='Shortcuts → new → Receive URLs & Text from Share Sheet → Get Contents of URL: POST {API}/items, body {"url": Input}, header Authorization: Bearer ksh_…'
+              onCopy={copy}
+              plain
+            />
+            <Snippet icon={Mail} title="Email-in" cmd={`Forward newsletters to inbox+${user.login}@yourdomain.com — links land in your Inbox`} onCopy={copy} plain />
           </div>
         </SectionCard>
 

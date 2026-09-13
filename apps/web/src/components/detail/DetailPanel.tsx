@@ -12,6 +12,7 @@ import {
   FileCode2,
   FileText,
   GitBranch,
+  Pencil,
   Pin,
   Sparkles,
   Star,
@@ -544,6 +545,7 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
   const reviewSkill = useData((s) => s.reviewSkill);
   const keepCopy = useData((s) => s.keepCopy);
   const toggleSkillPublic = useData((s) => s.toggleSkillPublic);
+  const openSkillEditor = useUi((s) => s.openSkillEditor);
   const toast = useUi((s) => s.toast);
   const [versionN, setVersionN] = useState(skill.latest);
   const version = skill.versions.find((v) => v.n === versionN) ?? skill.versions.at(-1)!;
@@ -621,6 +623,9 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
               ))}
             </Menu>
           )}
+          <Button variant="ghost" size="sm" onClick={() => openSkillEditor(skill.id)}>
+            <Pencil size={14} /> Edit
+          </Button>
           <Button variant="ghost" size="sm" onClick={() => { toggleSkillPublic(skill.id); toast({ message: skill.public ? "Made private" : "Made public", tone: "ok" }); }}>
             {skill.public ? "Public" : "Make public"}
           </Button>

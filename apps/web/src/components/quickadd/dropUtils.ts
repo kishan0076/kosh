@@ -6,6 +6,7 @@ export interface CollectedFile {
   size: number;
   mime: string;
   text?: string;
+  blob: Blob; // raw bytes, for direct upload to storage (§6.2)
 }
 
 const TEXT_RE = /\.(md|mdx|txt|json|yaml|yml|toml|csv|py|js|ts|tsx|jsx|sh|ps1|rb|go|rs|sql|html|css|svg)$/i;
@@ -35,7 +36,7 @@ async function readEntry(entry: FileSystemEntry, prefix: string, out: CollectedF
     const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
     const path = `${prefix}${entry.name}`;
     const text = TEXT_RE.test(path) ? await file.text().catch(() => undefined) : undefined;
-    out.push({ path, size: file.size, mime: mimeFor(path), text });
+    out.push({ path, size: file.size, mime: mimeFor(path), text, blob: file });
   } else if (entry.isDirectory) {
     const reader = (entry as FileSystemDirectoryEntry).createReader();
     const readBatch = () =>
@@ -61,7 +62,7 @@ export async function collectDrop(dt: DataTransfer): Promise<CollectedFile[]> {
   } else {
     for (const file of Array.from(dt.files)) {
       const text = TEXT_RE.test(file.name) ? await file.text().catch(() => undefined) : undefined;
-      out.push({ path: file.name, size: file.size, mime: mimeFor(file.name), text });
+      out.push({ path: file.name, size: file.size, mime: mimeFor(file.name), text, blob: file });
     }
   }
   return out;
@@ -73,7 +74,7 @@ export async function collectFiles(files: FileList): Promise<CollectedFile[]> {
   for (const file of Array.from(files)) {
     const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     const text = TEXT_RE.test(path) ? await file.text().catch(() => undefined) : undefined;
-    out.push({ path, size: file.size, mime: mimeFor(path), text });
+    out.push({ path, size: file.size, mime: mimeFor(path), text, blob: file });
   }
   return out;
 }
@@ -99,12 +100,13 @@ export function groupIntoDrafts(collected: CollectedFile[]): DropDraft[] {
     const fm = entry.text ? parseFrontmatter(entry.text).data : {};
     const name = (fm.name as string) ?? "new-skill";
     const skillFiles: SkillFile[] = stripped.map((f) => ({ path: f.path, size: f.size, mime: f.mime, content: f.text }));
+    const blobs = stripped.map((f) => ({ path: f.path, mime: f.mime, blob: f.blob }));
     const texts = new Map<string, string>();
     for (const f of stripped) if (f.text) texts.set(f.path, f.text);
     const lint = lintSkill({ frontmatter: fm, body: entry.text ? parseFrontmatter(entry.text).content : "", files: stripped.map((f) => f.path), folderName: name });
     const scan = scanSkill(texts);
-    return [{ kind: "skill", name, files: skillFiles, lint, scan }];
+    return [{ kind: "skill", name, files: skillFiles, blobs, lint, scan }];
   }
 
-  return files.map((f) => ({ kind: "file", path: f.path, size: f.size, mime: f.mime }));
+  return files.map((f) => ({ kind: "file", path: f.path, size: f.size, mime: f.mime, blob: f.blob }));
 }

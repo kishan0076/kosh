@@ -6,6 +6,9 @@ import { ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { createSkillVersion, toClientSkill, type IncomingFile } from "../modules/skills.js";
 import { getObject } from "../storage/objects.js";
+import { enrichGithub } from "../integrations/github.js";
+import { snapshotRepoSkills } from "../modules/snapshot.js";
+import { decryptSecret } from "../auth/crypto.js";
 
 export const skillsRouter: Router = Router();
 const nowIso = () => new Date().toISOString();
@@ -49,7 +52,16 @@ const createSchema = z.object({
   note: z.string().max(500).optional(),
   tools: z.array(z.enum(["claude", "codex", "cursor", "gemini", "generic"])).optional(),
   files: z
-    .array(z.object({ path: z.string().min(1), mime: z.string().default("text/plain"), content: z.string().optional(), bytesBase64: z.string().optional() }))
+    .array(
+      z.object({
+        path: z.string().min(1),
+        mime: z.string().default("text/plain"),
+        content: z.string().optional(),
+        bytesBase64: z.string().optional(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+        size: z.number().int().min(0).optional(),
+      }),
+    )
     .min(1),
 });
 
@@ -69,9 +81,41 @@ skillsRouter.post(
       });
       res.status(201).json({ skill: toClientSkill(skill), itemId: item?.id, changed });
     } catch (e) {
-      if ((e as Error).message === "NO_SKILL_MD") throw badRequest("NO_SKILL_MD", "No SKILL.md at the top level.");
+      const msg = (e as Error).message;
+      if (msg === "NO_SKILL_MD") throw badRequest("NO_SKILL_MD", "No SKILL.md at the top level.");
+      if (msg === "OBJECT_MISSING") throw badRequest("OBJECT_MISSING", "An uploaded file is missing — re-run the upload.");
+      if (msg === "HASH_MISMATCH") throw badRequest("HASH_MISMATCH", "An uploaded file failed integrity verification.");
       throw e;
     }
+  }),
+);
+
+/* copy-from-repo — powers `kosh add owner/repo:path` (§6.9): snapshot one skill dir
+ * from a repo already saved in the vault, then return its name so the CLI can install it. */
+skillsRouter.post(
+  "/skills/copy-from-repo",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const { owner, repo, path } = z
+      .object({ owner: z.string().min(1), repo: z.string().min(1), path: z.string().default("") })
+      .parse(req.body);
+    const items = await getStore().items.find({ userId: uid, kind: "link", deletedAt: null });
+    const item = items.find(
+      (i) => i.github?.owner?.toLowerCase() === owner.toLowerCase() && i.github?.repo?.toLowerCase() === repo.toLowerCase(),
+    );
+    if (!item?.github) throw notFound(`Save ${owner}/${repo} in Kosh first, then copy a skill from it.`);
+
+    const user = await getStore().users.findById(uid);
+    const token = decryptSecret(user?.githubToken) ?? null;
+    const r = await enrichGithub(owner, repo, { token, prevSkillIndex: item.github.skillIndex, etag: undefined });
+    if (!("ok" in r) || !r.ok) {
+      res.status(502).json({ error: { code: "GITHUB_UNREACHABLE", message: "Couldn't reach GitHub to copy this skill." } });
+      return;
+    }
+    const copied = await snapshotRepoSkills(item, r.data, { token, dirs: [path] });
+    const skill = await getStore().skills.findOne({ userId: uid, "source.itemId": item.id, "source.path": path, deletedAt: null });
+    if (!skill) throw notFound(`No skill found at ${owner}/${repo}:${path || "(root)"}.`);
+    res.json({ copied, skill: { name: skill.name, latest: skill.latest, trust: skill.trust } });
   }),
 );
 
