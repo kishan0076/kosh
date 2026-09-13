@@ -1,0 +1,38 @@
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+import "./index.css";
+import { initTheme } from "@/lib/theme";
+import { AppShell } from "@/components/layout/AppShell";
+import { Home } from "@/pages/Home";
+import { Library } from "@/pages/Library";
+import { Skills } from "@/pages/Skills";
+import { Prompts } from "@/pages/Prompts";
+import { Inbox } from "@/pages/Inbox";
+import { Trash } from "@/pages/Trash";
+import { Collections, CollectionDetail } from "@/pages/Collections";
+import { Settings } from "@/pages/Settings";
+import { NotFound } from "@/pages/NotFound";
+
+initTheme();
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <BrowserRouter>
+      <Routes>
+        <Route element={<AppShell />}>
+          <Route index element={<Home />} />
+          <Route path="inbox" element={<Inbox />} />
+          <Route path="library" element={<Library />} />
+          <Route path="skills" element={<Skills />} />
+          <Route path="prompts" element={<Prompts />} />
+          <Route path="collections" element={<Collections />} />
+          <Route path="collections/:slug" element={<CollectionDetail />} />
+          <Route path="trash" element={<Trash />} />
+          <Route path="settings" element={<Settings />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  </StrictMode>,
+);

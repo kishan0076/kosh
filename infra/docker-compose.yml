@@ -1,0 +1,59 @@
+# Local dev backing services for Kosh (Sprint 0 of the build plan).
+# The web app in this repo runs standalone without these; they are here for when
+# the Express/Mongoose API is implemented.
+#
+#   docker compose -f infra/docker-compose.yml up -d
+#
+# MinIO stands in for Cloudflare R2 (same @aws-sdk/client-s3 code, with
+# R2_ENDPOINT=http://localhost:9000 and forcePathStyle: true).
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: kosh-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - kosh-mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: kosh-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: kosh
+      MINIO_ROOT_PASSWORD: kosh-secret
+    ports:
+      - "9000:9000" # S3 API  (R2_ENDPOINT)
+      - "9001:9001" # web console
+    volumes:
+      - kosh-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-shot: create the bucket MinIO/R2 will use.
+  createbucket:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until (mc alias set local http://minio:9000 kosh kosh-secret) do sleep 1; done;
+      mc mb --ignore-existing local/kosh;
+      mc anonymous set none local/kosh;
+      exit 0;
+      "
+
+volumes:
+  kosh-mongo-data:
+  kosh-minio-data:

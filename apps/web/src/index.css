@@ -1,0 +1,336 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ─────────────────────────────────────────────────────────────
+   Design tokens — "a vault with a light inside"
+   Clean, spacious dashboard polish (Shopeers-inspired) with a
+   distinctive Kosh identity: indigo primary + a warm gold treasure
+   accent reserved for the materialize pulse and brand moments.
+   Light is the base; dark overrides only what changes.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --edge-highlight: none;
+  /* surfaces */
+  --bg: #f5f6f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f7;
+  --surface-3: #e9edf3;
+  --elevated: #ffffff;
+
+  /* lines */
+  --line: #e6e9f0;
+  --line-strong: #d6dce6;
+
+  /* text */
+  --text: #0f172a;
+  --muted: #5a6478;
+  --faint: #97a0b2;
+
+  /* primary (indigo) */
+  --primary: #4f46e5;
+  --primary-hover: #4338ca;
+  --primary-foreground: #ffffff;
+  --primary-soft: #eef0fe;
+  --primary-ring: rgb(79 70 229 / 0.35);
+
+  /* gold — treasure accent, used sparingly */
+  --gold: #b07d12;
+  --gold-soft: #fbf1da;
+
+  /* semantic */
+  --ok: #158a54;
+  --ok-soft: #dff3e9;
+  --warn: #b45309;
+  --warn-soft: #fbeed7;
+  --danger: #d33c33;
+  --danger-soft: #fcebe9;
+  --info: #2563eb;
+  --info-soft: #e4edfe;
+
+  /* data / chart palette (works in both themes) */
+  --c1: #4f46e5;
+  --c2: #14b8a6;
+  --c3: #f59e0b;
+  --c4: #ec4899;
+  --c5: #8b5cf6;
+  --c6: #0ea5e9;
+
+  /* tool colors */
+  --tool-claude: #7c5cbf;
+  --tool-codex: #1f8f79;
+  --tool-cursor: #2f6fd1;
+  --tool-gemini: #c24b84;
+  --tool-generic: #5b6478;
+
+  /* elevation */
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06), 0 1px 3px rgb(15 23 42 / 0.04);
+  --shadow: 0 6px 20px -6px rgb(15 23 42 / 0.12), 0 2px 6px -2px rgb(15 23 42 / 0.06);
+  --shadow-lg: 0 24px 48px -14px rgb(15 23 42 / 0.2);
+
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0b1120;
+  --surface: #141c30;
+  --surface-2: #1a2338;
+  --surface-3: #212c44;
+  --elevated: #1b2439;
+
+  --line: #263149;
+  --line-strong: #35415d;
+
+  --text: #e9edf5;
+  --muted: #97a3bf;
+  --faint: #64728e;
+
+  --primary: #6f76f6;
+  --primary-hover: #838aff;
+  --primary-foreground: #ffffff;
+  --primary-soft: #1d2247;
+  --primary-ring: rgb(111 118 246 / 0.45);
+
+  --gold: #f0b84a;
+  --gold-soft: #2a2312;
+
+  --ok: #5cd39a;
+  --ok-soft: #10251d;
+  --warn: #f0b84a;
+  --warn-soft: #2a2312;
+  --danger: #f4726f;
+  --danger-soft: #2c1717;
+  --info: #6aa5ff;
+  --info-soft: #14213c;
+
+  --c1: #818cf8;
+  --c2: #2dd4bf;
+  --c3: #fbbf24;
+  --c4: #f472b6;
+  --c5: #a78bfa;
+  --c6: #38bdf8;
+
+  --tool-claude: #c9a7ff;
+  --tool-codex: #7dd3c0;
+  --tool-cursor: #7fb4ff;
+  --tool-gemini: #f49ac2;
+  --tool-generic: #97a3bf;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow: 0 10px 30px -10px rgb(0 0 0 / 0.55);
+  --shadow-lg: 0 28px 56px -16px rgb(0 0 0 / 0.65);
+
+  /* depth in dark comes from surface lightness + a hairline rim, not big shadows */
+  --edge-highlight: inset 0 1px 0 rgb(255 255 255 / 0.05);
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-elevated: var(--elevated);
+
+  --color-border: var(--line);
+  --color-border-strong: var(--line-strong);
+
+  --color-foreground: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-soft: var(--primary-soft);
+
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
+
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+
+  --color-tool-claude: var(--tool-claude);
+  --color-tool-codex: var(--tool-codex);
+  --color-tool-cursor: var(--tool-cursor);
+  --color-tool-gemini: var(--tool-gemini);
+  --color-tool-generic: var(--tool-generic);
+
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --radius-chip: 9999px;
+  --radius-control: 0.625rem;
+  --radius-card: 1rem;
+  --radius-panel: 1.25rem;
+
+  --shadow-sm: var(--shadow-sm);
+  --shadow-card: var(--shadow);
+  --shadow-pop: var(--shadow-lg);
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    font-weight: 600;
+  }
+
+  ::selection {
+    background: var(--primary-soft);
+    color: var(--text);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Scrollbars — subtle, theme-aware */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: var(--line-strong);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--faint);
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  .font-display { font-family: var(--font-display); }
+  .font-mono { font-family: var(--font-mono); }
+
+  /* Subtle mesh backdrop for the hero / auth screens */
+  .mesh {
+    background-image:
+      radial-gradient(60% 55% at 12% 8%, color-mix(in oklab, var(--primary) 16%, transparent), transparent 70%),
+      radial-gradient(50% 45% at 92% 4%, color-mix(in oklab, var(--gold) 12%, transparent), transparent 70%),
+      radial-gradient(70% 60% at 80% 100%, color-mix(in oklab, var(--c2) 10%, transparent), transparent 70%);
+  }
+
+  .card-hover {
+    transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.18s ease, border-color 0.18s ease;
+    box-shadow: var(--edge-highlight);
+  }
+  .card-hover:hover {
+    box-shadow: var(--shadow), var(--edge-highlight);
+    transform: translateY(-2px);
+  }
+  .raised {
+    box-shadow: var(--edge-highlight);
+  }
+
+  .ring-focus {
+    box-shadow: 0 0 0 3px var(--primary-ring);
+  }
+
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Gold pulse used when a card materializes */
+  @keyframes kosh-pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--gold) 55%, transparent); }
+    70% { box-shadow: 0 0 0 10px color-mix(in oklab, var(--gold) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--gold) 0%, transparent); }
+  }
+  .animate-pulse-gold {
+    animation: kosh-pulse 1.1s cubic-bezier(0.2, 0.8, 0.2, 1) 1;
+  }
+
+  @keyframes kosh-shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      var(--surface-2) 0%,
+      color-mix(in oklab, var(--surface-2) 60%, var(--surface-3)) 50%,
+      var(--surface-2) 100%
+    );
+    background-size: 200% 100%;
+    animation: kosh-shimmer 1.4s ease-in-out infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .animate-pulse-gold,
+    .shimmer {
+      animation: none !important;
+    }
+    .card-hover:hover {
+      transform: none;
+    }
+  }
+}
+
+/* ── cmdk command palette ─────────────────────────────────────── */
+.cmdk-item {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.12s ease;
+}
+.cmdk-item[data-selected="true"] {
+  background: var(--surface-2);
+}
+.cmdk-item[data-disabled="true"] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+[cmdk-group-heading] {
+  padding: 0.6rem 0.625rem 0.3rem;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--faint);
+}
+[cmdk-group]:not(:first-child) [cmdk-group-heading] {
+  border-top: 1px solid var(--line);
+  margin-top: 0.25rem;
+}
