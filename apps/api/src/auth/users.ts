@@ -1,4 +1,8 @@
+import { randomBytes } from "node:crypto";
 import { getStore, type ServerUser } from "../db/index.js";
+
+/** Unguessable per-user token for the inbound email address (inbox+<token>@…). */
+export const newEmailToken = () => randomBytes(9).toString("base64url");
 
 export interface GithubProfile {
   githubId?: string;
@@ -26,6 +30,7 @@ export async function getOrCreateUser(p: GithubProfile): Promise<ServerUser> {
     githubBudget: { remaining: 5000, total: 5000, resetAt: now },
     aiSpendToday: 0,
     aiSpendCap: 2,
+    emailToken: newEmailToken(),
     createdAt: now,
     updatedAt: now,
   } as Omit<ServerUser, "id">);
@@ -44,5 +49,6 @@ export function publicUser(u: ServerUser) {
     githubBudget: u.githubBudget,
     aiSpendToday: u.aiSpendToday,
     aiSpendCap: u.aiSpendCap,
+    emailToken: u.emailToken,
   };
 }

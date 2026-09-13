@@ -295,6 +295,7 @@
 
   @media (prefers-reduced-motion: reduce) {
     .animate-pulse-gold,
+    .animate-spin,
     .shimmer {
       animation: none !important;
     }

@@ -18,7 +18,7 @@ export function createApp(): Express {
 
   app.use(
     helmet({
-      contentSecurityPolicy: false, // JSON API; the web app sets its own CSP
+      contentSecurityPolicy: false, // JSON API; the web app ships its own CSP via apps/web/public/_headers
       crossOriginResourcePolicy: { policy: "cross-origin" },
     }),
   );
@@ -29,7 +29,11 @@ export function createApp(): Express {
       allowedHeaders: ["Content-Type", "Authorization"],
     }),
   );
-  app.use(express.json({ limit: "2mb" }));
+  // JSON everywhere EXCEPT the raw byte-upload endpoint, which reads the body as a Buffer.
+  // (Without this skip, express.json consumes the stream first and direct uploads of any
+  // application/json file fail hash verification.)
+  const jsonParser = express.json({ limit: "2mb" });
+  app.use((req, res, next) => (req.path.startsWith("/api/uploads/local/") ? next() : jsonParser(req, res, next)));
   app.use(cookieParser());
   app.use(pinoHttp({ logger, autoLogging: { ignore: (req) => req.url === "/api/health" } }));
 

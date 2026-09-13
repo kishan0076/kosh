@@ -9,10 +9,15 @@ import { objectExists, presignPut, putVerified } from "../storage/objects.js";
 export const uploadsRouter: Router = Router();
 
 // Allowlisted upload extensions (§6.2). Zips are unpacked client-side, never stored.
+// Includes common extensionless/config files that legitimately live in skill folders
+// (LICENSE, Dockerfile, .gitignore, …) — extOf() lowercases the trailing token.
 const ALLOWED = new Set(
-  "md mdx txt json yaml yml toml csv py js ts tsx jsx sh ps1 rb go rs sql html css svg png jpg jpeg webp pdf".split(" "),
+  (
+    "md mdx txt json yaml yml toml csv py js ts tsx jsx sh ps1 rb go rs sql html css svg png jpg jpeg webp pdf lock " +
+    "license licence copying notice dockerfile makefile gitignore gitattributes editorconfig"
+  ).split(" "),
 );
-const extOf = (p: string) => p.split(".").pop()?.toLowerCase() ?? "";
+const extOf = (p: string) => (p.split("/").pop() ?? "").split(".").pop()?.toLowerCase() ?? "";
 
 const initSchema = z.object({
   files: z
@@ -37,13 +42,15 @@ uploadsRouter.post(
     const uid = requireWrite(req);
     const { files } = initSchema.parse(req.body);
 
-    const bad = files.find((f) => !ALLOWED.has(extOf(f.path)));
-    if (bad) throw badRequest("BAD_EXTENSION", `Files of type .${extOf(bad.path)} aren't allowed.`);
-    const total = files.reduce((a, f) => a + f.size, 0);
+    // Skip disallowed files rather than rejecting the whole batch (§6.2). The client
+    // omits skipped paths from finalize, so a stray binary never blocks a valid skill.
+    const accepted = files.filter((f) => ALLOWED.has(extOf(f.path)));
+    const skipped = files.filter((f) => !ALLOWED.has(extOf(f.path))).map((f) => f.path);
+    const total = accepted.reduce((a, f) => a + f.size, 0);
     if (total > config.limits.maxTotalBytes) throw badRequest("TOO_LARGE", `Upload exceeds the ${Math.round(config.limits.maxTotalBytes / 1e6)} MB per-batch limit.`);
 
     const uploads = await Promise.all(
-      files.map(async (f) => {
+      accepted.map(async (f) => {
         if (await objectExists(uid, f.sha256)) return { path: f.path, sha256: f.sha256, uploaded: true, url: null, local: false };
         const url = await presignPut(uid, f.sha256, f.mime, f.size);
         return {
@@ -55,7 +62,7 @@ uploadsRouter.post(
         };
       }),
     );
-    res.json({ sessionId: randomUUID(), uploads });
+    res.json({ sessionId: randomUUID(), uploads, skipped });
   }),
 );
 

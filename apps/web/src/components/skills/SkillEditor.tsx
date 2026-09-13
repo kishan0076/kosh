@@ -117,10 +117,12 @@ export function SkillEditor() {
 
         {/* side panel: lint / scan / preview */}
         <div className="min-w-0">
-          <div className="mb-2 flex gap-1">
+          <div role="tablist" aria-label="Skill checks" className="mb-2 flex gap-1">
             {(["lint", "scan", "preview"] as Tab[]).map((t) => (
               <button
                 key={t}
+                role="tab"
+                aria-selected={tab === t}
                 onClick={() => setTab(t)}
                 className={cn(
                   "rounded-md px-2.5 py-1 text-[12px] font-medium capitalize transition-colors",

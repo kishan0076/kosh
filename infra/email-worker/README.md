@@ -10,9 +10,11 @@ forwards land in your Inbox with their links extracted. See build plan §9.5.
 3. `wrangler secret put EMAIL_INBOUND_SECRET` — use the **same** value as the API's
    `EMAIL_INBOUND_SECRET` env var.
 4. `pnpm deploy`.
-5. In the Cloudflare dashboard → **Email Routing**, route an address to this worker
-   (e.g. `inbox+<your-login>@yourdomain.com`; the `+<login>` plus-tag tells the API
-   which account to save to).
+5. In the Cloudflare dashboard → **Email Routing**, route an address to this worker.
+   Use your unguessable inbox token from **Settings → Ways in → Email-in**
+   (e.g. `inbox+<your-token>@yourdomain.com`); the `+<token>` plus-tag tells the API
+   which account to save to. Set `EMAIL_ALLOWED_SENDERS` on the API (required in
+   production) so only senders you trust are accepted.
 
 ## Security
 

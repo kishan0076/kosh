@@ -1,10 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getStore, type ServerItem } from "../db/index.js";
-import { ah, notFound } from "../errors.js";
+import { ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { toClientItem } from "../modules/ingest.js";
-import { getObject, objectExists, putIfMissing, sha256 } from "../storage/objects.js";
+import { getObject, putIfMissing, sha256 } from "../storage/objects.js";
 
 export const filesRouter: Router = Router();
 const nowIso = () => new Date().toISOString();
@@ -13,7 +13,7 @@ filesRouter.post(
   "/files",
   ah(async (req, res) => {
     const uid = requireWrite(req);
-    const { path, mime, content, bytesBase64, sha256: refHash, size, note, tags } = z
+    const { path, mime, content, bytesBase64, sha256: refHash, note, tags } = z
       .object({
         path: z.string().min(1),
         mime: z.string().default("application/octet-stream"),
@@ -30,9 +30,12 @@ filesRouter.post(
     let hash: string;
     let byteLen: number;
     if (refHash) {
-      if (!(await objectExists(uid, refHash))) throw notFound("Uploaded file not found — re-run the upload.");
+      const stored = await getObject(uid, refHash);
+      if (!stored) throw notFound("Uploaded file not found — re-run the upload.");
+      // Re-hash small objects so a file's objectId always matches its bytes (§6.3).
+      if (stored.length <= 2_000_000 && sha256(stored) !== refHash) throw badRequest("HASH_MISMATCH", "Uploaded bytes do not match the declared hash.");
       hash = refHash;
-      byteLen = size ?? (await getObject(uid, refHash))?.length ?? 0;
+      byteLen = stored.length;
     } else {
       const buf = content != null ? Buffer.from(content, "utf8") : bytesBase64 != null ? Buffer.from(bytesBase64, "base64") : Buffer.alloc(0);
       hash = sha256(buf);

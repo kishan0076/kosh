@@ -22,7 +22,8 @@ const bodySchema = z.object({
 
 function senderAllowed(from: string): boolean {
   const list = config.email.allowedSenders;
-  if (!list.length) return true; // dev: accept any
+  // In production, an empty allowlist means "trust nobody" (never accept-any). Dev accepts any.
+  if (!list.length) return !config.isProd;
   const addr = from.toLowerCase();
   return list.some((entry) => addr === entry || domainOf(addr) === entry || addr.endsWith(`@${entry}`));
 }
@@ -41,12 +42,19 @@ emailRouter.post(
       return;
     }
     const body = bodySchema.parse(req.body);
+    // body.from is the unauthenticated (spoofable) envelope sender — it only gates against an
+    // allowlist and never selects the account. Verify SPF/DKIM at the worker before trusting it.
     if (!senderAllowed(body.from)) throw forbidden("This sender isn't on your allowlist.");
 
-    // Resolve the target user: a plus-tag (kosh+<login>@…) wins; otherwise the sole user.
+    // Resolve the target user by their UNGUESSABLE inbox token (inbox+<token>@…), never by login,
+    // so an emailer can't target an arbitrary account. The sole-user fallback is dev-only.
     const users = await getStore().users.find({});
-    const plus = body.to?.match(/\+([a-z0-9_-]+)@/i)?.[1];
-    const user = plus ? users.find((u) => u.login === plus) : users.length === 1 ? users[0] : undefined;
+    const plus = body.to?.match(/\+([A-Za-z0-9_-]+)@/)?.[1];
+    const user = plus
+      ? users.find((u) => u.emailToken && u.emailToken === plus)
+      : !config.isProd && users.length === 1
+        ? users[0]
+        : undefined;
     if (!user) throw badRequest("NO_USER", "Couldn't match this email to a Kosh account.");
 
     const haystack = `${body.subject ?? ""}\n${body.text ?? (body.html ? stripHtml(body.html) : "")}`;

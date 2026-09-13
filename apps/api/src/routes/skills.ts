@@ -4,7 +4,7 @@ import archiver from "archiver";
 import { getStore, type ServerSkill } from "../db/index.js";
 import { ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
-import { createSkillVersion, toClientSkill, type IncomingFile } from "../modules/skills.js";
+import { addSkillVersion, createSkillVersion, toClientSkill, type IncomingFile } from "../modules/skills.js";
 import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
@@ -116,6 +116,32 @@ skillsRouter.post(
     const skill = await getStore().skills.findOne({ userId: uid, "source.itemId": item.id, "source.path": path, deletedAt: null });
     if (!skill) throw notFound(`No skill found at ${owner}/${repo}:${path || "(root)"}.`);
     res.json({ copied, skill: { name: skill.name, latest: skill.latest, trust: skill.trust } });
+  }),
+);
+
+/* add a version to an existing skill by id — the in-app editor (§6.8). Handles rename,
+ * tool/changelog edits, and preserves multi-file skills. */
+skillsRouter.post(
+  "/skills/:id/versions",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const body = createSchema.parse(req.body);
+    try {
+      const { skill, item, changed } = await addSkillVersion(uid, String(req.params.id), body.files as IncomingFile[], {
+        name: body.name,
+        tools: body.tools,
+        note: body.note,
+      });
+      res.status(changed ? 201 : 200).json({ skill: toClientSkill(skill), itemId: item?.id, changed });
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg === "SKILL_NOT_FOUND") throw notFound("Skill not found.");
+      if (msg === "NO_SKILL_MD") throw badRequest("NO_SKILL_MD", "No SKILL.md at the top level.");
+      if (msg === "NAME_TAKEN") throw badRequest("NAME_TAKEN", "A skill with that name already exists.");
+      if (msg === "OBJECT_MISSING") throw badRequest("OBJECT_MISSING", "An uploaded file is missing — re-run the upload.");
+      if (msg === "HASH_MISMATCH") throw badRequest("HASH_MISMATCH", "An uploaded file failed integrity verification.");
+      throw e;
+    }
   }),
 );
 

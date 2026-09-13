@@ -16,7 +16,8 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return; // never cache the API or third parties
+  if (url.origin !== self.location.origin) return; // third parties / cross-origin API
+  if (url.pathname.startsWith("/api")) return; // never touch the API or SSE, even same-origin
 
   // App navigations (incl. the /share target): fresh when online, cached shell when not.
   if (req.mode === "navigate") {

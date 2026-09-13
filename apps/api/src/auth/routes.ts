@@ -3,7 +3,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { getStore } from "../db/index.js";
 import { ah, forbidden, unauthorized } from "../errors.js";
-import { getOrCreateUser, publicUser } from "./users.js";
+import { getOrCreateUser, newEmailToken, publicUser } from "./users.js";
 import { requireUser } from "./middleware.js";
 import { encryptSecret } from "./crypto.js";
 import { SESSION_COOKIE, signSession } from "./jwt.js";
@@ -86,8 +86,10 @@ authRouter.get(
   "/me",
   ah(async (req, res) => {
     const uid = requireUser(req);
-    const user = await getStore().users.findById(uid);
+    let user = await getStore().users.findById(uid);
     if (!user) throw unauthorized();
+    // Backfill the inbound-email token for users created before it existed.
+    if (!user.emailToken) user = (await getStore().users.updateById(uid, { emailToken: newEmailToken() })) ?? user;
     res.json({ user: publicUser(user) });
   }),
 );

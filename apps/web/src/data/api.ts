@@ -56,11 +56,12 @@ async function hashBlob(blob: Blob): Promise<string> {
 export async function uploadObjects(inputs: UploadInput[]): Promise<UploadedRef[]> {
   const metas = await Promise.all(inputs.map(async (f) => ({ ...f, sha256: await hashBlob(f.blob), size: f.blob.size })));
   const { uploads } = await api.initUpload(metas.map((m) => ({ path: m.path, sha256: m.sha256, size: m.size, mime: m.mime })));
-  const bySha = new Map(uploads.map((u) => [u.sha256, u]));
+  // The server may skip disallowed files (binaries etc.); finalize only what it accepted.
+  const byPath = new Map(uploads.map((u) => [u.path, u]));
   await Promise.all(
     metas.map(async (m) => {
-      const u = bySha.get(m.sha256);
-      if (!u || u.uploaded || !u.url) return; // already stored (dedup)
+      const u = byPath.get(m.path);
+      if (!u || u.uploaded || !u.url) return; // skipped, or already stored (dedup)
       const res = await fetch(u.url, {
         method: "PUT",
         body: m.blob,
@@ -70,7 +71,7 @@ export async function uploadObjects(inputs: UploadInput[]): Promise<UploadedRef[
       if (!res.ok) throw new Error(`Upload failed for ${m.path} (${res.status})`);
     }),
   );
-  return metas.map((m) => ({ path: m.path, mime: m.mime, sha256: m.sha256, size: m.size }));
+  return metas.filter((m) => byPath.has(m.path)).map((m) => ({ path: m.path, mime: m.mime, sha256: m.sha256, size: m.size }));
 }
 
 export const api = {
@@ -98,12 +99,14 @@ export const api = {
   usePrompt: (id: string) => req<{ item: Item }>(`/prompts/${id}/use`, { method: "POST" }),
 
   initUpload: (files: { path: string; sha256: string; size: number; mime: string }[]) =>
-    req<{ sessionId: string; uploads: { path: string; sha256: string; uploaded: boolean; url: string | null; local: boolean }[] }>("/uploads/init", {
+    req<{ sessionId: string; uploads: { path: string; sha256: string; uploaded: boolean; url: string | null; local: boolean }[]; skipped: string[] }>("/uploads/init", {
       method: "POST",
       body: JSON.stringify({ files }),
     }),
   createSkill: (input: { name?: string; files: SkillDraftFile[]; tools?: string[]; note?: string }) =>
     req<{ skill: Skill; itemId?: string; changed: boolean }>("/skills", { method: "POST", body: JSON.stringify(input) }),
+  addSkillVersion: (id: string, input: { name?: string; files: SkillDraftFile[]; tools?: string[]; note?: string }) =>
+    req<{ skill: Skill; itemId?: string; changed: boolean }>(`/skills/${id}/versions`, { method: "POST", body: JSON.stringify(input) }),
   createFile: (input: { path: string; mime: string; content?: string; bytesBase64?: string; sha256?: string; size?: number }) =>
     req<{ item: Item }>("/files", { method: "POST", body: JSON.stringify(input) }),
   reviewSkill: (id: string) => req<{ skill: Skill }>(`/skills/${id}/review`, { method: "POST" }),

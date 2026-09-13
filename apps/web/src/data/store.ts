@@ -342,11 +342,26 @@ export const useData = create<DataState>()(
 
         const existing = skillId ? get().skills.find((s) => s.id === skillId) : get().skills.find((s) => s.name === skillName);
         if (existing) {
+          // Carry the previous version's supporting files through — the editor only touches SKILL.md (#2).
+          const prevFiles = existing.versions.at(-1)?.files ?? [];
+          const prevEntry = prevFiles.find((f) => /^SKILL\.md$/i.test(f.path));
+          const prevOthers = prevFiles.filter((f) => !/^SKILL\.md$/i.test(f.path));
+          const mergedFiles: SkillFile[] = [{ path: "SKILL.md", size: content.length, mime: "text/markdown", content }, ...prevOthers];
+
+          // No-op when nothing actually changed, so we don't bump the version for a re-save (#10).
+          const contentChanged = (prevEntry?.content ?? "") !== content;
+          const toolsChanged = !!tools && (tools.length !== existing.tools.length || tools.some((t) => !existing.tools.includes(t)));
+          const nameChanged = skillName !== existing.name;
+          if (!contentChanged && !toolsChanged && !nameChanged && !note) {
+            return get().items.find((i) => i.id === existing.itemId);
+          }
+
           const nextN = existing.latest + 1;
-          const version: SkillVersion = { n: nextN, createdAt: now, note, entry: "SKILL.md", files, frontmatter: fm, totalSize: content.length, lint, scan };
+          const version: SkillVersion = { n: nextN, createdAt: now, note, entry: "SKILL.md", files: mergedFiles, frontmatter: fm, totalSize: mergedFiles.reduce((a, f) => a + f.size, 0), lint, scan };
           const tookOver = existing.origin === "repo";
           const updated: Skill = {
             ...existing,
+            name: skillName, // allow rename; the server versions by id, not name (#4/#5)
             latest: nextN,
             versions: [...existing.versions, version],
             displayName: (fm.name as string) ?? existing.displayName,
@@ -361,7 +376,12 @@ export const useData = create<DataState>()(
             items: s.items.map((i) => (i.id === existing.itemId ? { ...i, title: updated.displayName, description: updated.description, updatedAt: now } : i)),
           }));
           if (get().backend && !isOptimistic(existing.id)) {
-            api.createSkill({ name: skillName, tools, note, files: apiFiles }).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+            // Version by id (survives rename), carrying supporting files as content-addressed refs.
+            const apiFiles = [
+              { path: "SKILL.md", mime: "text/markdown", content },
+              ...prevOthers.map((f) => ({ path: f.path, mime: f.mime, sha256: f.sha256, size: f.size })),
+            ];
+            api.addSkillVersion(existing.id, { name: skillName, tools, note, files: apiFiles }).then((r) => get().upsertSkill(r.skill)).catch(() => {});
           }
           return get().items.find((i) => i.id === existing.itemId);
         }

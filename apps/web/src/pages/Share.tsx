@@ -37,7 +37,7 @@ export function Share() {
   }, [params, hydrated, ingestUrl, navigate, openItem, toast]);
 
   return (
-    <div className="mx-auto flex max-w-md flex-col items-center justify-center rounded-[var(--radius-card)] border border-border bg-surface px-6 py-16 text-center">
+    <div role="status" aria-live="polite" className="mx-auto flex max-w-md flex-col items-center justify-center rounded-[var(--radius-card)] border border-border bg-surface px-6 py-16 text-center">
       {status === "working" && (
         <>
           <Spinner size={28} className="mb-4 text-primary" />

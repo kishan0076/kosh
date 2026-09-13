@@ -300,4 +300,6 @@ export interface User {
   githubBudget: { remaining: number; total: number; resetAt: string };
   aiSpendToday: number;
   aiSpendCap: number;
+  /** Opaque, unguessable token for the user's inbound email address (inbox+<token>@…). */
+  emailToken?: string;
 }

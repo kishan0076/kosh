@@ -120,7 +120,7 @@ export function Settings() {
               onCopy={copy}
               plain
             />
-            <Snippet icon={Mail} title="Email-in" cmd={`Forward newsletters to inbox+${user.login}@yourdomain.com — links land in your Inbox`} onCopy={copy} plain />
+            <Snippet icon={Mail} title="Email-in" cmd={`Forward newsletters to inbox+${user.emailToken ?? "<your-token>"}@yourdomain.com — links land in your Inbox`} onCopy={copy} plain />
           </div>
         </SectionCard>
 

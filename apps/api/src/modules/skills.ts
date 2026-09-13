@@ -62,17 +62,9 @@ function sameFiles(a: SkillFile[], b: SkillFile[]): boolean {
 
 const inferTools = (files: IncomingFile[]): Tool[] => (files.some((f) => /\.mdx?$/i.test(f.path)) ? ["claude"] : ["generic"]);
 
-/** The single finalize path for every skill source (upload, bot, snapshot, editor, CLI, MCP). (§6.3) */
-export async function createSkillVersion(
-  userId: string,
-  incoming: IncomingFile[],
-  opts: CreateSkillOpts,
-): Promise<{ skill: ServerSkill; item: ServerItem | null; changed: boolean }> {
-  const store = getStore();
-  const files = stripCommonRoot(incoming).filter((f) => !/(^|\/)(__MACOSX|\.DS_Store|node_modules)(\/|$)/.test(f.path));
-  const entry = files.find((f) => /^SKILL\.md$/i.test(f.path));
-  if (!entry) throw new Error("NO_SKILL_MD");
-
+/** Turn incoming files (inline bytes OR pre-uploaded sha256 refs) into stored SkillFiles +
+ *  a map of small text contents for lint/scan. Shared by create and version paths. (§6.3) */
+async function materializeFiles(userId: string, files: IncomingFile[]): Promise<{ skillFiles: SkillFile[]; texts: Map<string, string> }> {
   const texts = new Map<string, string>();
   const skillFiles: SkillFile[] = [];
   for (const f of files) {
@@ -80,17 +72,14 @@ export async function createSkillVersion(
     let hash: string;
     let verified = true;
     if (f.content != null || f.bytesBase64 != null) {
-      // Inline bytes (bot, MCP, snapshot, small pastes) — store them now.
       buf = bufOf(f);
       hash = sha256(buf);
       await putIfMissing(userId, hash, buf, f.mime);
     } else if (f.sha256) {
-      // Pre-uploaded via /uploads/init — read it back to lint/scan and verify integrity.
       const stored = await getObject(userId, f.sha256);
       if (!stored) throw new Error("OBJECT_MISSING");
       buf = stored;
       hash = f.sha256;
-      // Re-hash small objects; a mismatch means the upload was tampered with.
       if (buf.length <= VERIFY_MAX && sha256(buf) !== hash) throw new Error("HASH_MISMATCH");
       verified = buf.length <= VERIFY_MAX;
     } else {
@@ -102,8 +91,22 @@ export async function createSkillVersion(
     const content = isText && buf.length <= TEXT_MAX ? buf.toString("utf8") : undefined;
     if (content) texts.set(f.path, content);
     skillFiles.push({ path: f.path, objectId: hash, size: buf.length, mime: f.mime, sha256: hash, verified, content });
-    void store; // objects persisted; StorageObject bookkeeping omitted in this build
   }
+  return { skillFiles, texts };
+}
+
+/** The single finalize path for every skill source (upload, bot, snapshot, editor, CLI, MCP). (§6.3) */
+export async function createSkillVersion(
+  userId: string,
+  incoming: IncomingFile[],
+  opts: CreateSkillOpts,
+): Promise<{ skill: ServerSkill; item: ServerItem | null; changed: boolean }> {
+  const store = getStore();
+  const files = stripCommonRoot(incoming).filter((f) => !/(^|\/)(__MACOSX|\.DS_Store|node_modules)(\/|$)/.test(f.path));
+  const entry = files.find((f) => /^SKILL\.md$/i.test(f.path));
+  if (!entry) throw new Error("NO_SKILL_MD");
+
+  const { skillFiles, texts } = await materializeFiles(userId, files);
 
   const { data: fm, content: body } = parseFrontmatter(texts.get(entry.path) ?? "");
   const name = (opts.name ?? (fm.name as string) ?? "").toString();
@@ -193,6 +196,80 @@ export async function createSkillVersion(
 
   publish(userId, { kind: "item.created", item });
   return { skill, item, changed: true };
+}
+
+/** Add a version to an EXISTING skill resolved by id (the in-app editor path, §6.8).
+ *  Unlike createSkillVersion (resolve-by-name), this survives a frontmatter rename and
+ *  persists tool/name/changelog-only edits as real versions instead of deduping them away. */
+export async function addSkillVersion(
+  userId: string,
+  skillId: string,
+  incoming: IncomingFile[],
+  opts: { name?: string; tools?: Tool[]; note?: string },
+): Promise<{ skill: ServerSkill; item: ServerItem | null; changed: boolean }> {
+  const store = getStore();
+  const existing = await store.skills.findById(skillId);
+  if (!existing || existing.userId !== userId) throw new Error("SKILL_NOT_FOUND");
+  const files = stripCommonRoot(incoming).filter((f) => !/(^|\/)(__MACOSX|\.DS_Store|node_modules)(\/|$)/.test(f.path));
+  const entry = files.find((f) => /^SKILL\.md$/i.test(f.path));
+  if (!entry) throw new Error("NO_SKILL_MD");
+
+  const { skillFiles, texts } = await materializeFiles(userId, files);
+  const { data: fm, content: body } = parseFrontmatter(texts.get(entry.path) ?? "");
+  const newName = (opts.name || (fm.name as string) || existing.name).toString();
+  if (newName !== existing.name) {
+    const clash = await store.skills.findOne({ userId, name: newName, deletedAt: null });
+    if (clash && clash.id !== existing.id) throw new Error("NAME_TAKEN");
+  }
+  const lint = lintSkill({ frontmatter: fm, body, files: skillFiles.map((f) => f.path), folderName: newName });
+  const scan = scanSkill(texts);
+
+  const last = existing.versions.at(-1);
+  const filesUnchanged = !!last && sameFiles(last.files, skillFiles);
+  const toolsChanged = !!opts.tools && (opts.tools.length !== existing.tools.length || opts.tools.some((t) => !existing.tools.includes(t)));
+  const nameChanged = newName !== existing.name;
+  if (filesUnchanged && !toolsChanged && !nameChanged && !opts.note) {
+    const item = await store.items.findById(existing.itemId);
+    return { skill: existing, item, changed: false };
+  }
+
+  const version: SkillVersion = {
+    n: existing.latest + 1,
+    createdAt: nowIso(),
+    note: opts.note,
+    entry: entry.path,
+    files: skillFiles,
+    frontmatter: fm,
+    totalSize: skillFiles.reduce((a, f) => a + f.size, 0),
+    lint,
+    scan,
+  };
+  let trust = existing.trust;
+  let origin = existing.origin;
+  if (existing.origin === "repo") {
+    origin = opts.name || fm.name ? "authored" : existing.origin;
+    trust = "mine"; // editing a copy makes it yours (§6.3)
+  } else if (scan.risky && trust === "reviewed") {
+    trust = "unreviewed";
+  }
+  const updated = await store.skills.updateById(existing.id, {
+    name: newName,
+    displayName: (fm.name as string) ?? existing.displayName,
+    versions: [...existing.versions, version],
+    latest: version.n,
+    description: (fm.description as string) ?? existing.description,
+    searchText: [...texts.values()].join("\n").slice(0, 200_000),
+    tools: opts.tools ?? existing.tools,
+    trust,
+    origin,
+    updatedAt: nowIso(),
+  });
+  const item = await store.items.findById(existing.itemId);
+  if (item) {
+    await store.items.updateById(item.id, { title: updated!.displayName, description: updated!.description, updatedAt: nowIso() });
+    publish(userId, { kind: "item.updated", item: (await store.items.findById(item.id))! });
+  }
+  return { skill: updated!, item, changed: true };
 }
 
 export function toClientSkill(s: ServerSkill): Skill {
