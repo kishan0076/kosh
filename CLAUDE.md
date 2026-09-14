@@ -7,7 +7,7 @@ Kosh is an npm workspaces + Turborepo monorepo. Read this before making changes.
 - `apps/web` — Vite + React 19 + TypeScript + Tailwind v4. The runnable app.
 - `packages/shared` (`@kosh/shared`) — pure, dependency-free, unit-tested domain logic
   (types, URL normalize/classify, skill lint, security scan, formatters). No React, no Node APIs.
-- `infra/` — docker-compose + env template for the future backend.
+- `infra/` — the Cloudflare email worker (`infra/email-worker`) for email-in.
 - `docs/` — the build plan (`kosh-build-plan-v3.md`) and the design system (`DESIGN.md`).
 
 ## Golden rules

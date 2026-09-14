@@ -41,7 +41,6 @@ kosh/
 │  ├─ shared/         Pure, tested domain logic (incl. the ranked search engine)
 │  └─ cli/            `npx kosh …` — install skills into any agent, with the trust gate
 ├─ infra/
-│  ├─ docker-compose.yml   Mongo 7 + MinIO for a full local deployment
 │  └─ email-worker/        Cloudflare email worker → POST /api/email/inbound
 ├─ docs/              The build plan + the design system reference
 ├─ .github/workflows/ CI: typecheck · test · build on every PR and on main
