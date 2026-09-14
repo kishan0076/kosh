@@ -5,6 +5,8 @@ import { fileURLToPath, URL } from "node:url";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Read env (VITE_API_URL, …) from the repo-root .env so one file drives the whole stack.
+  envDir: fileURLToPath(new URL("../../", import.meta.url)),
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

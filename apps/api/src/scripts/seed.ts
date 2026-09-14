@@ -1,3 +1,4 @@
+import "../load-env.js"; // load repo-root .env before the store reads config
 import { createHash } from "node:crypto";
 import { normalizeUrl } from "@kosh/shared";
 import { initStore, getStore, type ServerItem } from "../db/index.js";

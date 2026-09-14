@@ -1,3 +1,4 @@
+import "./load-env.js"; // must run before config.js reads process.env
 import { createApp } from "./app.js";
 import { config } from "./config.js";
 import { initStore } from "./db/index.js";
