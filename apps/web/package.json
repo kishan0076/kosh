@@ -11,7 +11,7 @@
     "lint": "echo \"(lint configured at repo level)\""
   },
   "dependencies": {
-    "@kosh/shared": "workspace:*",
+    "@kosh/shared": "*",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "lucide-react": "^0.475.0",

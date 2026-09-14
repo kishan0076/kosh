@@ -5,11 +5,11 @@ forwards land in your Inbox with their links extracted. See build plan §9.5.
 
 ## Setup
 
-1. `pnpm install` in this folder (or `npm install`).
+1. `npm install` in this folder.
 2. Edit `wrangler.toml` → set `KOSH_API_URL` to your API's `/api` base.
 3. `wrangler secret put EMAIL_INBOUND_SECRET` — use the **same** value as the API's
    `EMAIL_INBOUND_SECRET` env var.
-4. `pnpm deploy`.
+4. `npm run deploy`.
 5. In the Cloudflare dashboard → **Email Routing**, route an address to this worker.
    Use your unguessable inbox token from **Settings → Ways in → Email-in**
    (e.g. `inbox+<your-token>@yourdomain.com`); the `+<token>` plus-tag tells the API

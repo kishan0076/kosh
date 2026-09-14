@@ -1,6 +1,6 @@
 # CLAUDE.md — conventions for coding agents
 
-Kosh is a pnpm + Turborepo monorepo. Read this before making changes.
+Kosh is an npm workspaces + Turborepo monorepo. Read this before making changes.
 
 ## Layout
 
@@ -13,7 +13,7 @@ Kosh is a pnpm + Turborepo monorepo. Read this before making changes.
 ## Golden rules
 
 - **Validate with shared logic.** Domain rules (URL handling, skill lint, security scan) live in
-  `@kosh/shared` and are covered by tests — reuse them; add tests when you change them (`pnpm test`).
+  `@kosh/shared` and are covered by tests — reuse them; add tests when you change them (`npm test`).
 - **Never render unsanitized markdown.** Use the `<Markdown>` component (`react-markdown` + `rehype-sanitize`).
   No `dangerouslySetInnerHTML` anywhere.
 - **The link/skill is saved first.** Enrichment must never block a save; model it as a follow-up patch.
@@ -35,9 +35,9 @@ Kosh is a pnpm + Turborepo monorepo. Read this before making changes.
 ## Checks before you commit
 
 ```bash
-pnpm typecheck   # tsc across the workspace
-pnpm test        # vitest for @kosh/shared
-pnpm build       # turbo build (includes the web production build)
+npm run typecheck   # tsc across the workspace
+npm test            # vitest for @kosh/shared
+npm run build       # turbo build (includes the web production build)
 ```
 
 ## When wiring the real backend

@@ -45,20 +45,20 @@ kosh/
 │  └─ email-worker/        Cloudflare email worker → POST /api/email/inbound
 ├─ docs/              The build plan + the design system reference
 ├─ .github/workflows/ CI: typecheck · test · build on every PR and on main
-└─ turbo.json · pnpm-workspace.yaml · tsconfig.base.json · CLAUDE.md
+└─ turbo.json · package.json (npm workspaces) · tsconfig.base.json · CLAUDE.md
 ```
 
 ---
 
 ## Quick start
 
-Requirements: **Node 22+** and **pnpm 10+**.
+Requirements: **Node 22+** and **npm 10+** (npm workspaces + Turborepo).
 
 ### Front-end only (zero setup)
 
 ```bash
-pnpm install
-pnpm web          # web app with the seeded client store  →  http://localhost:5173
+npm install
+npm run web       # web app with the seeded client store  →  http://localhost:5173
 ```
 
 ### Full stack (web + live API)
@@ -67,12 +67,12 @@ The API needs no database or keys — it defaults to an in-memory/JSON store and
 out of the box (GitHub enrichment needs network access to `api.github.com`).
 
 ```bash
-pnpm install
-pnpm --filter @kosh/api seed     # optional: load a demo vault into .data/
-pnpm --filter @kosh/api dev      # API on http://localhost:8787  (DEV_LOGIN is on in dev)
+npm install
+npm run seed      # optional: load a demo vault into .data/
+npm run api       # API on http://localhost:8787  (DEV_LOGIN is on in dev)
 
-# in another terminal — point the web app at the API:
-VITE_API_URL=http://localhost:8787/api pnpm web
+# in another terminal — the web app reads VITE_API_URL from the repo-root .env:
+npm run web
 ```
 
 The web app then authenticates (dev-login), hydrates from the API, and streams live enrichment over SSE.
@@ -82,10 +82,10 @@ paths are the same.
 Other scripts:
 
 ```bash
-pnpm build        # build every package (turbo)
-pnpm test         # run the test suites (vitest — 33 shared + 9 API)
-pnpm typecheck    # typecheck the workspace
-pnpm web:build    # production build of the web app
+npm run build     # build every package (turbo)
+npm test          # run the test suites (vitest — 33 shared + 9 API)
+npm run typecheck # typecheck the workspace
+npm run web:build # production build of the web app
 ```
 
 A ready-to-run `.env` for local dev (in-memory store, local file storage, `DEV_LOGIN`, generated

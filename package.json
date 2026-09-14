@@ -3,27 +3,28 @@
   "version": "0.1.0",
   "private": true,
   "description": "Kosh — a treasury for your links, repos, skills, prompts and files. One curated library for your AI toolbox.",
-  "packageManager": "pnpm@10.33.0",
+  "packageManager": "npm@10.9.7",
   "engines": {
     "node": ">=22"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "web": "pnpm --filter @kosh/web dev",
-    "web:build": "pnpm --filter @kosh/web build",
-    "web:preview": "pnpm --filter @kosh/web preview"
+    "web": "npm run dev -w @kosh/web",
+    "web:build": "npm run build -w @kosh/web",
+    "web:preview": "npm run preview -w @kosh/web",
+    "api": "npm run dev -w @kosh/api",
+    "seed": "npm run seed -w @kosh/api"
   },
   "devDependencies": {
     "turbo": "^2.5.5",
     "typescript": "^5.7.3"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
   }
 }
