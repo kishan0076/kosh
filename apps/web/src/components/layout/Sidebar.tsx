@@ -8,6 +8,7 @@ import {
   Inbox,
   LibraryBig,
   PanelLeftClose,
+  Plus,
   Quote,
   Settings,
   Trash2,
@@ -52,6 +53,7 @@ export function Sidebar({
 
   const main: NavItem[] = [
     { to: "/", label: "Home", icon: Home, end: true },
+    { to: "/add", label: "Add", icon: Plus },
     { to: "/inbox", label: "Inbox", icon: Inbox, badge: inboxCount },
     { to: "/library", label: "Library", icon: LibraryBig },
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },

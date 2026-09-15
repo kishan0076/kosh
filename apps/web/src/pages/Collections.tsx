@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, FolderOpen, FolderPlus } from "lucide-react";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
@@ -13,6 +13,17 @@ export function Collections() {
   const items = useData((s) => s.items);
   const collections = useData((s) => s.collections);
   const [newOpen, setNewOpen] = useState(false);
+  const [params, setParams] = useSearchParams();
+
+  // Support the ?new=1 deep link (e.g. from the Add page) to open the creator.
+  useEffect(() => {
+    if (params.get("new") === "1") {
+      setNewOpen(true);
+      const next = new URLSearchParams(params);
+      next.delete("new");
+      setParams(next, { replace: true });
+    }
+  }, [params, setParams]);
 
   return (
     <div>

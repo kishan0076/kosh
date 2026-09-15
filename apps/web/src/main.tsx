@@ -13,6 +13,7 @@ import { Trash } from "@/pages/Trash";
 import { Collections, CollectionDetail } from "@/pages/Collections";
 import { Settings } from "@/pages/Settings";
 import { Share } from "@/pages/Share";
+import { Add } from "@/pages/Add";
 import { NotFound } from "@/pages/NotFound";
 
 initTheme();
@@ -30,6 +31,7 @@ createRoot(document.getElementById("root")!).render(
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<Home />} />
+          <Route path="add" element={<Add />} />
           <Route path="inbox" element={<Inbox />} />
           <Route path="library" element={<Library />} />
           <Route path="skills" element={<Skills />} />

@@ -43,7 +43,7 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
       <div className="flex-1" />
 
       <div className="flex items-center gap-1.5 sm:gap-2">
-        <Button variant="primary" size="sm" className="hidden sm:inline-flex" onClick={() => setPalette(true)}>
+        <Button variant="primary" size="sm" className="hidden sm:inline-flex" onClick={() => navigate("/add")}>
           <Plus size={16} />
           Add
         </Button>
