@@ -1,9 +1,8 @@
-import { useEffect, useMemo } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useMemo } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Blocks, Plus } from "lucide-react";
 import { TOOL_LABEL, TOOLS, TRUST_LABEL, type Tool, type Trust } from "@kosh/shared";
 import { useData } from "@/data/store";
-import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
 import { EmptyState, PageHeader } from "@/components/common";
 import { ItemGrid } from "@/components/ItemGrid";
@@ -14,21 +13,11 @@ const TRUSTS: Trust[] = ["mine", "reviewed", "unreviewed"];
 export function Skills() {
   const items = useData((s) => s.items);
   const skills = useData((s) => s.skills);
-  const openSkillEditor = useUi((s) => s.openSkillEditor);
+  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
 
   const tool = params.get("tool") as Tool | null;
   const trust = params.get("trust") as Trust | null;
-
-  // Support the ?new=1 deep link (e.g. from the command palette) to open the editor.
-  useEffect(() => {
-    if (params.get("new") === "1") {
-      openSkillEditor();
-      const next = new URLSearchParams(params);
-      next.delete("new");
-      setParams(next, { replace: true });
-    }
-  }, [params, openSkillEditor, setParams]);
 
   const setParam = (key: string, val?: string) => {
     const next = new URLSearchParams(params);
@@ -57,7 +46,7 @@ export function Skills() {
         subtitle={`${skillItems.length} skills · installable into Claude, Codex, Cursor & more`}
         icon={Blocks}
         actions={
-          <Button variant="primary" onClick={() => openSkillEditor()}>
+          <Button variant="primary" onClick={() => navigate("/skills/new")}>
             <Plus size={16} /> New skill
           </Button>
         }
@@ -93,7 +82,7 @@ export function Skills() {
           title="No skills yet"
           description="Drop a folder with a SKILL.md, paste one below, run kosh import-local, or send one to your Telegram bot."
           action={
-            <Button variant="primary" onClick={() => openSkillEditor()}>
+            <Button variant="primary" onClick={() => navigate("/skills/new")}>
               <Plus size={16} /> New skill
             </Button>
           }

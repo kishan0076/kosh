@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import {
   ArrowUpRight,
@@ -545,7 +546,8 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
   const reviewSkill = useData((s) => s.reviewSkill);
   const keepCopy = useData((s) => s.keepCopy);
   const toggleSkillPublic = useData((s) => s.toggleSkillPublic);
-  const openSkillEditor = useUi((s) => s.openSkillEditor);
+  const closePanel = useUi((s) => s.closePanel);
+  const navigate = useNavigate();
   const toast = useUi((s) => s.toast);
   const [versionN, setVersionN] = useState(skill.latest);
   const version = skill.versions.find((v) => v.n === versionN) ?? skill.versions.at(-1)!;
@@ -623,7 +625,7 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
               ))}
             </Menu>
           )}
-          <Button variant="ghost" size="sm" onClick={() => openSkillEditor(skill.id)}>
+          <Button variant="ghost" size="sm" onClick={() => { closePanel(); navigate(`/skills/${skill.id}/edit`); }}>
             <Pencil size={14} /> Edit
           </Button>
           <Button variant="ghost" size="sm" onClick={() => { toggleSkillPublic(skill.id); toast({ message: skill.public ? "Made private" : "Made public", tone: "ok" }); }}>

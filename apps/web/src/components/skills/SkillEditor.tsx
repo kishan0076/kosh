@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { Blocks, Check } from "lucide-react";
 import { TOOL_LABEL, TOOLS, lintSkill, parseFrontmatter, scanSkill, type Tool } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { Button, Chip } from "../ui";
-import { Modal } from "../overlays";
 import { Markdown } from "../markdown";
+import { PageHeader } from "../common";
 
 const SAMPLE = `---
 name: my-skill
@@ -21,38 +22,41 @@ Explain what the skill does and when to use it.
 
 type Tab = "lint" | "scan" | "preview";
 
-/** In-app skill editor (§6.8): edit SKILL.md with live lint + scan + rendered preview;
- *  Save writes a new version. Reachable from "New skill" and a skill's "Edit" action. */
+/** Dedicated skill editor page (§6.8): /skills/new and /skills/:id/edit.
+ *  Edit SKILL.md with live lint + scan + rendered preview; Save writes a new version. */
 export function SkillEditor() {
-  const editor = useUi((s) => s.skillEditor);
-  const close = useUi((s) => s.closeSkillEditor);
-  const openItem = useUi((s) => s.openItem);
-  const toast = useUi((s) => s.toast);
+  const { id } = useParams(); // present → editing an existing skill
+  const navigate = useNavigate();
   const skills = useData((s) => s.skills);
   const saveSkillEdit = useData((s) => s.saveSkillEdit);
+  const openItem = useUi((s) => s.openItem);
+  const toast = useUi((s) => s.toast);
 
-  const existing = editor?.skillId ? skills.find((s) => s.id === editor.skillId) : undefined;
+  const existing = id ? skills.find((s) => s.id === id) : undefined;
   const [text, setText] = useState(SAMPLE);
   const [tools, setTools] = useState<Tool[]>(["claude"]);
   const [note, setNote] = useState("");
   const [tab, setTab] = useState<Tab>("lint");
+  const [seeded, setSeeded] = useState(false);
 
-  // Seed the textarea when the dialog opens (existing SKILL.md, or the sample for a new skill).
+  // Seed once — from the existing SKILL.md when editing, or the sample for a new skill.
   useEffect(() => {
-    if (!editor) return;
-    if (existing) {
-      const v = existing.versions.at(-1);
-      const entry = v?.files.find((f) => /^SKILL\.md$/i.test(f.path)) ?? v?.files[0];
-      setText(entry?.content ?? SAMPLE);
-      setTools(existing.tools.length ? existing.tools : ["claude"]);
-      setNote("");
-    } else {
-      setText(SAMPLE);
-      setTools(["claude"]);
-      setNote("");
+    if (seeded || !id) {
+      if (!id && !seeded) setSeeded(true);
+      return;
     }
-    setTab("lint");
-  }, [editor, existing]);
+    if (!existing) return; // wait for the store to hydrate
+    const v = existing.versions.at(-1);
+    const entry = v?.files.find((f) => /^SKILL\.md$/i.test(f.path)) ?? v?.files[0];
+    setText(entry?.content ?? SAMPLE);
+    setTools(existing.tools.length ? existing.tools : ["claude"]);
+    setSeeded(true);
+  }, [id, existing, seeded]);
+
+  // A bad /skills/:id/edit URL (or a deleted skill) bounces back once the store is loaded.
+  useEffect(() => {
+    if (id && skills.length > 0 && !existing) navigate("/skills", { replace: true });
+  }, [id, skills.length, existing, navigate]);
 
   const { data: fm, content: body } = useMemo(() => parseFrontmatter(text), [text]);
   const name = (fm.name as string) ?? "";
@@ -62,36 +66,44 @@ export function SkillEditor() {
   const save = () => {
     const item = saveSkillEdit({ skillId: existing?.id, name, content: text, tools, note: note.trim() || undefined });
     toast({ message: existing ? `Saved v${existing.latest + 1}` : "Skill saved", description: name, tone: "ok" });
-    close();
+    navigate("/skills");
     if (item) openItem(item.id);
   };
-
   const toggleTool = (t: Tool) => setTools((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]));
 
   return (
-    <Modal open={!!editor} onClose={close} className="max-w-3xl" labelledBy="skill-editor-title">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
-        <Blocks size={18} className="text-tool-claude" />
-        <h2 id="skill-editor-title" className="text-base font-semibold">
-          {existing ? `Edit ${existing.name}` : "New skill"}
-        </h2>
-        {existing && <span className="text-[12px] text-muted">→ saves v{existing.latest + 1}</span>}
-      </div>
+    <div className="pb-8">
+      <PageHeader
+        title={existing ? `Edit ${existing.name}` : "New skill"}
+        subtitle={existing ? `Saves version ${existing.latest + 1}` : "Author a SKILL.md — it's linted and security-scanned live."}
+        icon={Blocks}
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => navigate("/skills")}>
+              Cancel
+            </Button>
+            <Button variant="primary" onClick={save} disabled={!lint.ok}>
+              {existing ? "Save new version" : "Save skill"}
+            </Button>
+          </>
+        }
+      />
 
-      <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-5 md:grid-cols-[1.4fr_1fr]">
+      <div className="grid gap-5 lg:grid-cols-[1.7fr_1fr]">
+        {/* editor */}
         <div>
-          <label htmlFor="skill-editor-md" className="mb-1.5 block text-[12px] font-medium text-muted">
+          <label htmlFor="skill-md" className="mb-1.5 block text-[12px] font-medium text-muted">
             SKILL.md
           </label>
           <textarea
-            id="skill-editor-md"
+            id="skill-md"
             value={text}
             onChange={(e) => setText(e.target.value)}
             spellCheck={false}
-            rows={12}
+            rows={20}
             className="w-full resize-y rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 font-mono text-[12.5px] leading-relaxed outline-none focus:border-primary focus:ring-focus"
           />
-          <div className="mt-3">
+          <div className="mt-4">
             <div className="mb-1.5 text-[12px] font-medium text-muted">Tools</div>
             <div className="flex flex-wrap gap-1.5">
               {TOOLS.filter((t) => t !== "generic").map((t) => (
@@ -101,12 +113,12 @@ export function SkillEditor() {
               ))}
             </div>
           </div>
-          <div className="mt-3">
-            <label htmlFor="skill-editor-note" className="mb-1.5 block text-[12px] font-medium text-muted">
+          <div className="mt-4 max-w-md">
+            <label htmlFor="skill-note" className="mb-1.5 block text-[12px] font-medium text-muted">
               Changelog {existing ? "" : "(optional)"}
             </label>
             <input
-              id="skill-editor-note"
+              id="skill-note"
               value={note}
               onChange={(e) => setNote(e.target.value)}
               placeholder={existing ? "What changed in this version?" : "First cut"}
@@ -115,7 +127,7 @@ export function SkillEditor() {
           </div>
         </div>
 
-        {/* side panel: lint / scan / preview */}
+        {/* lint / scan / preview */}
         <div className="min-w-0">
           <div role="tablist" aria-label="Skill checks" className="mb-2 flex gap-1">
             {(["lint", "scan", "preview"] as Tab[]).map((t) => (
@@ -164,21 +176,12 @@ export function SkillEditor() {
           )}
 
           {tab === "preview" && (
-            <div className="max-h-[360px] overflow-y-auto rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
+            <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
               <Markdown>{body}</Markdown>
             </div>
           )}
         </div>
       </div>
-
-      <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3.5">
-        <Button variant="ghost" onClick={close}>
-          Cancel
-        </Button>
-        <Button variant="primary" onClick={save} disabled={!lint.ok}>
-          {existing ? "Save new version" : "Save skill"}
-        </Button>
-      </div>
-    </Modal>
+    </div>
   );
 }

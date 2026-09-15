@@ -13,7 +13,6 @@ import { QuickAdd } from "@/components/quickadd/QuickAdd";
 /** Dedicated "Add" module — a full page (not a popup) for capturing and creating. */
 export function Add() {
   const items = useData((s) => s.items);
-  const openSkillEditor = useUi((s) => s.openSkillEditor);
   const openItem = useUi((s) => s.openItem);
   const navigate = useNavigate();
 
@@ -24,7 +23,7 @@ export function Add() {
 
   const creators = [
     { icon: Quote, title: "New prompt", desc: "A reusable prompt with {{variables}} and fill-and-copy.", accent: "var(--primary)", onClick: () => navigate("/prompts?new=1") },
-    { icon: Blocks, title: "New skill", desc: "Author a SKILL.md with live lint, scan and preview.", accent: "var(--tool-claude)", onClick: () => openSkillEditor() },
+    { icon: Blocks, title: "New skill", desc: "Author a SKILL.md with live lint, scan and preview.", accent: "var(--tool-claude)", onClick: () => navigate("/skills/new") },
     { icon: FolderPlus, title: "New collection", desc: "Group links, skills and prompts together.", accent: "var(--gold)", onClick: () => navigate("/collections?new=1") },
   ];
 

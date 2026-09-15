@@ -7,6 +7,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { Home } from "@/pages/Home";
 import { Library } from "@/pages/Library";
 import { Skills } from "@/pages/Skills";
+import { SkillEditor } from "@/components/skills/SkillEditor";
 import { Prompts } from "@/pages/Prompts";
 import { Inbox } from "@/pages/Inbox";
 import { Trash } from "@/pages/Trash";
@@ -35,6 +36,8 @@ createRoot(document.getElementById("root")!).render(
           <Route path="inbox" element={<Inbox />} />
           <Route path="library" element={<Library />} />
           <Route path="skills" element={<Skills />} />
+          <Route path="skills/new" element={<SkillEditor />} />
+          <Route path="skills/:id/edit" element={<SkillEditor />} />
           <Route path="prompts" element={<Prompts />} />
           <Route path="collections" element={<Collections />} />
           <Route path="collections/:slug" element={<CollectionDetail />} />

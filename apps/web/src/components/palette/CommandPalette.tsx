@@ -147,7 +147,7 @@ export function CommandPalette() {
           {!isSave && (
             <Command.Group heading="Create" className="cmdk-group">
               <PaletteRow icon={Quote} title="New prompt" onSelect={() => go("/prompts?new=1")} />
-              <PaletteRow icon={Blocks} title="New skill" onSelect={() => go("/skills?new=1")} />
+              <PaletteRow icon={Blocks} title="New skill" onSelect={() => go("/skills/new")} />
               <PaletteRow icon={FolderOpen} title="New collection" onSelect={() => go("/collections")} />
             </Command.Group>
           )}
