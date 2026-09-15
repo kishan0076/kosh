@@ -13,6 +13,7 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const resetVault = useData((s) => s.resetVault);
   const setPalette = useUi((s) => s.setPalette);
   const toast = useUi((s) => s.toast);
+  const openConfirm = useUi((s) => s.openConfirm);
   const navigate = useNavigate();
 
   const changes = watchedChanges(items);
@@ -106,10 +107,14 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           <MenuSeparator />
           <MenuItem
             icon={RefreshCw}
-            onClick={() => {
-              resetVault();
-              toast({ message: "Vault reset to demo data", tone: "ok" });
-            }}
+            onClick={() =>
+              openConfirm({
+                title: "Reset demo data?",
+                message: "This replaces your current vault with the original demo content. Any changes you've made will be lost.",
+                confirmLabel: "Reset vault",
+                onConfirm: () => { resetVault(); toast({ message: "Vault reset to demo data", tone: "ok" }); },
+              })
+            }
           >
             Reset demo data
           </MenuItem>

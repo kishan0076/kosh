@@ -13,6 +13,7 @@ export function Trash() {
   const purge = useData((s) => s.purge);
   const emptyTrash = useData((s) => s.emptyTrash);
   const toast = useUi((s) => s.toast);
+  const openConfirm = useUi((s) => s.openConfirm);
 
   const list = trashed(items).sort((a, b) => (b.deletedAt ?? "").localeCompare(a.deletedAt ?? ""));
 
@@ -24,7 +25,17 @@ export function Trash() {
         icon={Trash2}
         actions={
           list.length > 0 ? (
-            <Button variant="outline" onClick={() => { emptyTrash(); toast({ message: "Trash emptied", tone: "ok" }); }}>
+            <Button
+              variant="outline"
+              onClick={() =>
+                openConfirm({
+                  title: "Empty trash?",
+                  message: `This permanently deletes ${list.length} item${list.length === 1 ? "" : "s"}. This can't be undone.`,
+                  confirmLabel: "Empty trash",
+                  onConfirm: () => { emptyTrash(); toast({ message: "Trash emptied", tone: "ok" }); },
+                })
+              }
+            >
               Empty trash
             </Button>
           ) : undefined
@@ -49,7 +60,20 @@ export function Trash() {
                 <Button variant="ghost" size="sm" onClick={() => { restore(i.id); toast({ message: "Restored", description: i.title, tone: "ok" }); }}>
                   <RotateCcw size={14} /> Restore
                 </Button>
-                <Button variant="ghost" size="icon-sm" className="text-danger hover:bg-danger-soft" onClick={() => { purge(i.id); toast({ message: "Purged permanently", tone: "warn" }); }} aria-label="Delete forever">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-danger hover:bg-danger-soft"
+                  onClick={() =>
+                    openConfirm({
+                      title: "Delete forever?",
+                      message: `"${i.title}" will be permanently deleted. This can't be undone.`,
+                      confirmLabel: "Delete forever",
+                      onConfirm: () => { purge(i.id); toast({ message: "Purged permanently", tone: "warn" }); },
+                    })
+                  }
+                  aria-label="Delete forever"
+                >
                   <Trash2 size={15} />
                 </Button>
               </div>

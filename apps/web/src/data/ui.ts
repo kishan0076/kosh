@@ -12,6 +12,17 @@ export interface Toast {
 
 export type PanelTarget = { kind: "item"; id: string } | null;
 
+export interface ConfirmOptions {
+  title: string;
+  message?: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: "danger" | "primary";
+  /** When present the dialog shows a text field and passes its value to onConfirm. */
+  input?: { label?: string; placeholder?: string; defaultValue?: string };
+  onConfirm: (value: string) => void;
+}
+
 interface UiState {
   panel: PanelTarget;
   openItem: (id: string) => void;
@@ -26,6 +37,10 @@ interface UiState {
   verdictItemId: string | null;
   openVerdict: (id: string) => void;
   closeVerdict: () => void;
+
+  confirm: ConfirmOptions | null;
+  openConfirm: (opts: ConfirmOptions) => void;
+  closeConfirm: () => void;
 
   trayOpen: boolean;
   setTray: (open: boolean) => void;
@@ -49,6 +64,10 @@ export const useUi = create<UiState>((set, get) => ({
   verdictItemId: null,
   openVerdict: (id) => set({ verdictItemId: id }),
   closeVerdict: () => set({ verdictItemId: null }),
+
+  confirm: null,
+  openConfirm: (confirm) => set({ confirm }),
+  closeConfirm: () => set({ confirm: null }),
 
   trayOpen: false,
   setTray: (trayOpen) => set({ trayOpen }),
