@@ -66,7 +66,8 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onOpenMobileNav={() => setMobileOpen(true)} />
         <main className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto w-full max-w-[1600px] px-5 py-6 sm:px-7 lg:px-9 2xl:px-12">
+          {/* Fluid content — fills the width with a small responsive side gutter (16–20px), no fixed max width. */}
+          <div className="w-full px-4 py-6 sm:px-5">
             <Outlet />
           </div>
         </main>

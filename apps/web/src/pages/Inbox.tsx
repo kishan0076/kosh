@@ -94,7 +94,7 @@ export function Inbox() {
           <p className="mt-1 max-w-sm text-sm text-muted">Everything's triaged. New captures from the web, bot, share sheet and email land here.</p>
         </div>
       ) : (
-        <div className="mx-auto max-w-2xl">
+        <div className="w-full">
           <div className="mb-4 flex items-center gap-3">
             <Progress value={(idx / total) * 100} className="flex-1" />
             <span className="tabular text-[13px] text-muted">

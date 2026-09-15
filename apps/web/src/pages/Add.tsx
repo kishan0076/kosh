@@ -36,7 +36,7 @@ export function Add() {
   ];
 
   return (
-    <div className="mx-auto max-w-4xl space-y-8">
+    <div className="space-y-8">
       <PageHeader title="Add to Kosh" subtitle={`Capture a link, drop a folder, or create something new — your treasury has ${formatNumber(live(items).length)} things.`} icon={PlusCircle} />
 
       {/* primary capture */}
