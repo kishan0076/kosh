@@ -33,6 +33,15 @@ export interface SkillDraftFile {
   size?: number;
 }
 
+export interface ApiKeyPublic {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  lastUsedAt?: string;
+  createdAt: string;
+}
+
 export interface UploadInput {
   path: string;
   mime: string;
@@ -114,6 +123,12 @@ export const api = {
   patchSkill: (id: string, patch: Record<string, unknown>) => req<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   createCollection: (name: string) => req<{ collection: Collection }>("/collections", { method: "POST", body: JSON.stringify({ name }) }),
+
+  listApiKeys: () => req<{ apiKeys: ApiKeyPublic[] }>("/settings/api-keys"),
+  // Returns the full plaintext key ONCE — the server only stores its hash, so it can never be shown again.
+  createApiKey: (input: { name: string; scopes?: string[] }) =>
+    req<{ apiKey: ApiKeyPublic; key: string }>("/settings/api-keys", { method: "POST", body: JSON.stringify(input) }),
+  revokeApiKey: (id: string) => req<{ ok: boolean }>(`/settings/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   renameTag: (from: string, to: string) => req("/tags/rename", { method: "POST", body: JSON.stringify({ from, to }) }),
   mergeTags: (from: string[], to: string) => req("/tags/merge", { method: "POST", body: JSON.stringify({ from, to }) }),

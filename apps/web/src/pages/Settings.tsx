@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Blocks,
   Bookmark,
@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Settings as SettingsIcon,
   Share2,
+  ShieldCheck,
   Smartphone,
   Tag as TagIcon,
   Terminal,
@@ -23,19 +24,36 @@ import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { allTags } from "@/data/selectors";
+import { api, type ApiKeyPublic } from "@/data/api";
 import { uid } from "@/lib/ids";
+import { ago } from "@/lib/time";
 import { PageHeader, SectionCard } from "@/components/common";
+import { Modal } from "@/components/overlays";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Avatar, Badge, Button } from "@/components/ui";
+
+/** Generate a proper random API key locally (mock mode) — same shape the server issues:
+ *  "ksh_" + base64url of 24 random bytes. The full key is shown once; only its prefix is kept. */
+function generateLocalKey(): { key: string; prefix: string } {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  const raw = btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const key = `ksh_${raw}`;
+  return { key, prefix: key.slice(0, 8) };
+}
 
 export function Settings() {
   const user = useData((s) => s.user);
   const items = useData((s) => s.items);
+  const backend = useData((s) => s.backend);
   const renameTag = useData((s) => s.renameTag);
   const deleteTag = useData((s) => s.deleteTag);
   const mergeTags = useData((s) => s.mergeTags);
   const resetVault = useData((s) => s.resetVault);
   const toast = useUi((s) => s.toast);
+  const openConfirm = useUi((s) => s.openConfirm);
 
   const tags = allTags(items);
   const [mergeMode, setMergeMode] = useState(false);
@@ -57,15 +75,74 @@ export function Settings() {
     toast({ message: `Merged ${from.length} tag${from.length === 1 ? "" : "s"} into #${to}`, tone: "ok" });
     exitMerge();
   };
-  const [apiKeys, setApiKeys] = useState([
-    { id: "k1", name: "Laptop CLI", prefix: "ksh_a1b2", scopes: ["read", "write"], created: "3 weeks ago" },
-    { id: "k2", name: "Bookmarklet", prefix: "ksh_9f8e", scopes: ["write"], created: "1 week ago" },
+  // Demo keys for mock mode; real keys are loaded from the API when a backend is wired.
+  const demoNow = Date.now();
+  const [apiKeys, setApiKeys] = useState<ApiKeyPublic[]>([
+    { id: "k1", name: "Laptop CLI", prefix: "ksh_a1b2", scopes: ["read", "write"], createdAt: new Date(demoNow - 21 * 864e5).toISOString() },
+    { id: "k2", name: "Bookmarklet", prefix: "ksh_9f8e", scopes: ["write"], createdAt: new Date(demoNow - 7 * 864e5).toISOString() },
   ]);
+  // The freshly-created key's plaintext, shown once in a reveal dialog.
+  const [newKey, setNewKey] = useState<{ name: string; key: string } | null>(null);
+
+  // In backend mode the server is the source of truth — replace the demo rows with the real ones.
+  useEffect(() => {
+    if (!backend) return;
+    let alive = true;
+    api
+      .listApiKeys()
+      .then(({ apiKeys }) => alive && setApiKeys(apiKeys))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [backend]);
 
   const copy = (text: string, label = "Copied") => {
     navigator.clipboard?.writeText(text).catch(() => {});
     toast({ message: label, tone: "ok" });
   };
+
+  // Generate a proper key — via the API when connected (hashed server-side, plaintext returned once),
+  // or locally in mock mode. Either way the full key is revealed exactly once.
+  const createKey = (rawName: string) => {
+    const name = rawName.trim() || "New key";
+    if (backend) {
+      api
+        .createApiKey({ name })
+        .then(({ apiKey, key }) => {
+          setApiKeys((k) => [apiKey, ...k]);
+          setNewKey({ name, key });
+        })
+        .catch((err: unknown) => toast({ message: "Couldn't create key", description: err instanceof Error ? err.message : undefined, tone: "danger" }));
+      return;
+    }
+    const { key, prefix } = generateLocalKey();
+    const row: ApiKeyPublic = { id: uid("k"), name, prefix, scopes: ["read", "write"], createdAt: new Date().toISOString() };
+    setApiKeys((k) => [row, ...k]);
+    setNewKey({ name, key });
+  };
+
+  const promptNewKey = () =>
+    openConfirm({
+      title: "Create API key",
+      message: "Give this key a name so you can recognize it later. The full key is shown only once.",
+      confirmLabel: "Create key",
+      tone: "primary",
+      input: { label: "Key name", placeholder: "Laptop CLI", defaultValue: "" },
+      onConfirm: createKey,
+    });
+
+  const revokeKey = (k: ApiKeyPublic) =>
+    openConfirm({
+      title: "Revoke this key?",
+      message: `"${k.name}" (${k.prefix}…) will stop working immediately. Any client using it must be updated.`,
+      confirmLabel: "Revoke key",
+      onConfirm: () => {
+        setApiKeys((keys) => keys.filter((x) => x.id !== k.id));
+        if (backend) api.revokeApiKey(k.id).catch(() => {});
+        toast({ message: "API key revoked", tone: "warn" });
+      },
+    });
 
   const bookmarklet = `javascript:(()=>{fetch("https://api.kosh.app/api/items",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer ksh_xxx"},body:JSON.stringify({url:location.href,note:String(getSelection())||undefined,source:"bookmarklet"})}).then(r=>alert(r.ok?"Saved to Kosh":"Kosh: failed "+r.status))})();`;
 
@@ -129,34 +206,36 @@ export function Settings() {
           title="API keys"
           subtitle="Bearer keys for the CLI, MCP, bookmarklet and Shortcuts"
           action={
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setApiKeys((k) => [...k, { id: uid("k"), name: "New key", prefix: `ksh_${Math.random().toString(36).slice(2, 6)}`, scopes: ["read", "write"], created: "just now" }]);
-                toast({ message: "API key created", description: "Copy it now — it won't be shown again", tone: "ok" });
-              }}
-            >
+            <Button variant="outline" size="sm" onClick={promptNewKey}>
               <Plus size={15} /> New key
             </Button>
           }
         >
           <div className="space-y-2">
+            {apiKeys.length === 0 && (
+              <p className="rounded-[var(--radius-control)] border border-dashed border-border px-3 py-4 text-center text-[13px] text-muted">
+                No API keys yet. Create one to use the CLI, MCP or bookmarklet.
+              </p>
+            )}
             {apiKeys.map((k) => (
               <div key={k.id} className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
                 <KeyRound size={16} className="shrink-0 text-muted" />
                 <div className="min-w-0 flex-1">
                   <div className="text-[13.5px] font-medium">{k.name}</div>
-                  <div className="font-mono text-[12px] text-faint">{k.prefix}••••••••</div>
+                  <div className="font-mono text-[12px] text-faint">
+                    {k.prefix}••••••••
+                    <span className="ml-2 font-sans">· created {ago(k.createdAt)}</span>
+                    {k.lastUsedAt && <span className="ml-1.5 font-sans">· used {ago(k.lastUsedAt)}</span>}
+                  </div>
                 </div>
-                <div className="flex gap-1">
+                <div className="hidden gap-1 sm:flex">
                   {k.scopes.map((s) => (
                     <Badge key={s} tone="neutral">
                       {s}
                     </Badge>
                   ))}
                 </div>
-                <Button variant="ghost" size="icon-sm" className="text-danger hover:bg-danger-soft" onClick={() => setApiKeys((keys) => keys.filter((x) => x.id !== k.id))} aria-label="Revoke">
+                <Button variant="ghost" size="icon-sm" className="text-danger hover:bg-danger-soft" onClick={() => revokeKey(k)} aria-label="Revoke">
                   <Trash2 size={15} />
                 </Button>
               </div>
@@ -202,20 +281,35 @@ export function Settings() {
                   <span>{t.tag}</span>
                   <span className="tabular text-[11px] text-faint">{t.value}</span>
                   <button
-                    onClick={() => {
-                      const to = window.prompt(`Rename #${t.tag} to:`, t.tag);
-                      if (to && to !== t.tag) {
-                        renameTag(t.tag, to);
-                        toast({ message: `Renamed to #${to}`, tone: "ok" });
-                      }
-                    }}
+                    onClick={() =>
+                      openConfirm({
+                        title: `Rename #${t.tag}`,
+                        confirmLabel: "Rename",
+                        tone: "primary",
+                        input: { label: "New tag name", placeholder: t.tag, defaultValue: t.tag },
+                        onConfirm: (value) => {
+                          const to = value.trim().replace(/^#/, "");
+                          if (to && to !== t.tag) {
+                            renameTag(t.tag, to);
+                            toast({ message: `Renamed to #${to}`, tone: "ok" });
+                          }
+                        },
+                      })
+                    }
                     className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground group-hover:opacity-100"
                     aria-label="Rename tag"
                   >
                     <RefreshCw size={12} />
                   </button>
                   <button
-                    onClick={() => { deleteTag(t.tag); toast({ message: `Removed #${t.tag}`, tone: "warn" }); }}
+                    onClick={() =>
+                      openConfirm({
+                        title: `Remove #${t.tag}?`,
+                        message: `This removes the tag from ${t.value} item${t.value === 1 ? "" : "s"}. The items themselves are kept.`,
+                        confirmLabel: "Remove tag",
+                        onConfirm: () => { deleteTag(t.tag); toast({ message: `Removed #${t.tag}`, tone: "warn" }); },
+                      })
+                    }
                     className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-danger-soft hover:text-danger group-hover:opacity-100"
                     aria-label="Delete tag"
                   >
@@ -260,10 +354,14 @@ export function Settings() {
             <Button
               variant="ghost"
               className="text-danger hover:bg-danger-soft"
-              onClick={() => {
-                resetVault();
-                toast({ message: "Vault reset to demo data", tone: "ok" });
-              }}
+              onClick={() =>
+                openConfirm({
+                  title: "Reset demo data?",
+                  message: "This replaces your current vault with the original demo content. Any changes you've made will be lost.",
+                  confirmLabel: "Reset vault",
+                  onConfirm: () => { resetVault(); toast({ message: "Vault reset to demo data", tone: "ok" }); },
+                })
+              }
             >
               <RefreshCw size={15} /> Reset demo data
             </Button>
@@ -273,7 +371,52 @@ export function Settings() {
           </p>
         </SectionCard>
       </div>
+
+      <NewKeyModal newKey={newKey} onClose={() => setNewKey(null)} onCopy={copy} />
     </div>
+  );
+}
+
+/** Reveal dialog shown once after creating a key — the plaintext is never retrievable again. */
+function NewKeyModal({ newKey, onClose, onCopy }: { newKey: { name: string; key: string } | null; onClose: () => void; onCopy: (text: string, label?: string) => void }) {
+  return (
+    <Modal open={!!newKey} onClose={onClose} className="max-w-md" labelledBy="newkey-title">
+      {newKey && (
+        <>
+          <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+            <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-full bg-ok-soft text-ok">
+              <ShieldCheck size={18} />
+            </span>
+            <div className="min-w-0">
+              <h2 id="newkey-title" className="text-base font-semibold">API key created</h2>
+              <p className="mt-0.5 text-[13px] leading-snug text-muted">
+                Copy “{newKey.name}” now — for your security it won’t be shown again.
+              </p>
+            </div>
+          </div>
+          <div className="px-5 py-4">
+            <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+              <code className="min-w-0 flex-1 break-all font-mono text-[12.5px] text-foreground">{newKey.key}</code>
+              <button
+                onClick={() => onCopy(newKey.key, "API key copied")}
+                className="shrink-0 rounded-md p-1.5 text-faint hover:bg-surface-3 hover:text-foreground"
+                aria-label="Copy key"
+              >
+                <Copy size={15} />
+              </button>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
+            <Button variant="outline" onClick={() => onCopy(newKey.key, "API key copied")}>
+              <Copy size={15} /> Copy key
+            </Button>
+            <Button variant="primary" onClick={onClose}>
+              Done
+            </Button>
+          </div>
+        </>
+      )}
+    </Modal>
   );
 }
 
