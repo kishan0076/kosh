@@ -228,7 +228,7 @@ export function Modal({
             exit={{ opacity: 0, y: 8, scale: 0.98 }}
             transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
             className={cn(
-              "relative z-10 my-8 w-full max-w-lg rounded-[var(--radius-panel)] border border-border bg-elevated shadow-[var(--shadow-pop)]",
+              "relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-elevated shadow-[var(--shadow-pop)]",
               className,
             )}
           >

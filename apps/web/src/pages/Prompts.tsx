@@ -107,11 +107,11 @@ function NewPromptModal({ open, onClose }: { open: boolean; onClose: () => void 
 
   return (
     <Modal open={open} onClose={onClose} className="max-w-xl">
-      <div className="flex items-center gap-2 border-b border-border px-5 py-4">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
         <Quote size={18} className="text-primary" />
         <h2 className="text-base font-semibold">New prompt</h2>
       </div>
-      <div className="space-y-3 p-5">
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -134,7 +134,7 @@ function NewPromptModal({ open, onClose }: { open: boolean; onClose: () => void 
           </div>
         )}
       </div>
-      <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3.5">
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>

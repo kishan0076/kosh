@@ -215,6 +215,35 @@
     border-radius: 4px;
   }
 
+  /* Pointer cursor on every interactive control (Tailwind v4 preflight defaults buttons to `default`). */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  label[for],
+  summary,
+  select {
+    cursor: pointer;
+  }
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* Smooth micro-transitions on interactive elements so hover/focus/active never snaps. */
+  a,
+  button,
+  [role="button"],
+  input,
+  select,
+  textarea,
+  summary {
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease,
+      border-color 0.15s ease,
+      box-shadow 0.15s ease,
+      opacity 0.15s ease;
+  }
+
   /* Scrollbars — subtle, theme-aware */
   * {
     scrollbar-width: thin;
@@ -294,10 +323,13 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .animate-pulse-gold,
-    .animate-spin,
-    .shimmer {
-      animation: none !important;
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
     }
     .card-hover:hover {
       transform: none;

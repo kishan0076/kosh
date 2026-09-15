@@ -35,7 +35,9 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     <button
       ref={ref}
       className={cn(
-        "inline-flex items-center font-medium transition-colors select-none",
+        "inline-flex items-center justify-center font-medium select-none",
+        "transition-[color,background-color,border-color,box-shadow,transform] duration-150 ease-out",
+        "motion-safe:active:scale-[0.97]",
         "disabled:opacity-50 disabled:pointer-events-none",
         "focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2",
         BUTTON_VARIANT[variant],
@@ -87,7 +89,8 @@ export function Chip({
   return (
     <button
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-3 h-8 text-[13px] font-medium transition-colors",
+        "inline-flex items-center gap-1.5 rounded-full border px-3 h-8 text-[13px] font-medium",
+        "transition-[color,background-color,border-color,transform] duration-150 ease-out motion-safe:active:scale-[0.97]",
         active
           ? "bg-primary text-primary-foreground border-transparent"
           : "bg-surface text-muted border-border hover:text-foreground hover:bg-surface-2 hover:border-border-strong",

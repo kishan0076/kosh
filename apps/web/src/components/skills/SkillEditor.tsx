@@ -70,7 +70,7 @@ export function SkillEditor() {
 
   return (
     <Modal open={!!editor} onClose={close} className="max-w-3xl" labelledBy="skill-editor-title">
-      <div className="flex items-center gap-2 border-b border-border px-5 py-4">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
         <Blocks size={18} className="text-tool-claude" />
         <h2 id="skill-editor-title" className="text-base font-semibold">
           {existing ? `Edit ${existing.name}` : "New skill"}
@@ -78,7 +78,7 @@ export function SkillEditor() {
         {existing && <span className="text-[12px] text-muted">→ saves v{existing.latest + 1}</span>}
       </div>
 
-      <div className="grid gap-4 p-5 md:grid-cols-[1.4fr_1fr]">
+      <div className="grid min-h-0 flex-1 gap-4 overflow-y-auto p-5 md:grid-cols-[1.4fr_1fr]">
         <div>
           <label htmlFor="skill-editor-md" className="mb-1.5 block text-[12px] font-medium text-muted">
             SKILL.md
@@ -88,7 +88,7 @@ export function SkillEditor() {
             value={text}
             onChange={(e) => setText(e.target.value)}
             spellCheck={false}
-            rows={17}
+            rows={12}
             className="w-full resize-y rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 font-mono text-[12.5px] leading-relaxed outline-none focus:border-primary focus:ring-focus"
           />
           <div className="mt-3">
@@ -171,7 +171,7 @@ export function SkillEditor() {
         </div>
       </div>
 
-      <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3.5">
         <Button variant="ghost" onClick={close}>
           Cancel
         </Button>
