@@ -8,6 +8,7 @@ import { Home } from "@/pages/Home";
 import { Library } from "@/pages/Library";
 import { Skills } from "@/pages/Skills";
 import { SkillEditor } from "@/components/skills/SkillEditor";
+import { ItemPage } from "@/pages/ItemPage";
 import { Prompts } from "@/pages/Prompts";
 import { Inbox } from "@/pages/Inbox";
 import { Trash } from "@/pages/Trash";
@@ -33,6 +34,7 @@ createRoot(document.getElementById("root")!).render(
         <Route element={<AppShell />}>
           <Route index element={<Home />} />
           <Route path="add" element={<Add />} />
+          <Route path="items/:id" element={<ItemPage />} />
           <Route path="inbox" element={<Inbox />} />
           <Route path="library" element={<Library />} />
           <Route path="skills" element={<Skills />} />

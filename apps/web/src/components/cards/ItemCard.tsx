@@ -1,10 +1,12 @@
 import { motion } from "motion/react";
+import { useNavigate } from "react-router-dom";
 import {
   Bookmark,
   Copy,
   Eye,
   FolderPlus,
   GitFork,
+  Maximize2,
   MoreHorizontal,
   Pin,
   Star,
@@ -58,6 +60,7 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
   const toggleItemCollection = useData((s) => s.toggleItemCollection);
   const openItem = useUi((s) => s.openItem);
   const toast = useUi((s) => s.toast);
+  const navigate = useNavigate();
 
   const Icon = itemIcon(item);
   const edge = edgeColor(item, skill);
@@ -143,6 +146,9 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
           >
             <MenuItem icon={Eye} onClick={() => openItem(item.id)}>
               Open
+            </MenuItem>
+            <MenuItem icon={Maximize2} onClick={() => navigate(`/items/${item.id}`)}>
+              Open as page
             </MenuItem>
             <MenuItem icon={Pin} onClick={() => togglePin(item.id)}>
               {item.pinned ? "Unpin" : "Pin"}

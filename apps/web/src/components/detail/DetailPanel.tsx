@@ -13,6 +13,7 @@ import {
   FileCode2,
   FileText,
   GitBranch,
+  Maximize2,
   Pencil,
   Pin,
   Sparkles,
@@ -52,6 +53,7 @@ export function DetailPanel() {
   const closePanel = useUi((s) => s.closePanel);
   const openItem = useUi((s) => s.openItem);
   const items = useData((s) => s.items);
+  const navigate = useNavigate();
 
   const ordered = useMemo(() => live(items).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [items]);
   const item = panel ? items.find((i) => i.id === panel.id) : undefined;
@@ -89,7 +91,7 @@ export function DetailPanel() {
             transition={{ type: "spring", stiffness: 380, damping: 38 }}
             className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[480px] flex-col border-l border-border bg-surface shadow-[var(--shadow-pop)]"
           >
-            <PanelBody item={item} onClose={closePanel} />
+            <PanelBody item={item} onClose={closePanel} onExpand={() => { closePanel(); navigate(`/items/${item.id}`); }} />
           </motion.aside>
         </>
       )}
@@ -97,7 +99,15 @@ export function DetailPanel() {
   );
 }
 
-function PanelBody({ item, onClose }: { item: Item; onClose: () => void }) {
+/** The scrollable detail content (summary, actions, meta, type-specific body) — shared by the
+ *  drawer and the dedicated /items/:id page so both stay in sync. */
+export function ItemDetailContent({ item }: { item: Item }) {
+  const skills = useData((s) => s.skills);
+  const skill = item.skillId ? skills.find((s) => s.id === item.skillId) : undefined;
+  return skill ? <SkillBody item={item} skill={skill} /> : <ItemBody item={item} />;
+}
+
+function PanelBody({ item, onClose, onExpand }: { item: Item; onClose: () => void; onExpand: () => void }) {
   const skills = useData((s) => s.skills);
   const skill = item.skillId ? skills.find((s) => s.id === item.skillId) : undefined;
 
@@ -127,13 +137,16 @@ function PanelBody({ item, onClose }: { item: Item; onClose: () => void }) {
             </Button>
           </a>
         )}
+        <Button variant="ghost" size="icon-sm" onClick={onExpand} aria-label="Open as page">
+          <Maximize2 size={16} />
+        </Button>
         <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close">
           <X size={17} />
         </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {skill ? <SkillBody item={item} skill={skill} /> : <ItemBody item={item} />}
+        <ItemDetailContent item={item} />
       </div>
     </>
   );
