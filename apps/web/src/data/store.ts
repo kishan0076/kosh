@@ -21,7 +21,18 @@ import {
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
 import { api, backendEnabled, publishRepoWithProgress, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
+import { useUi } from "./ui";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
+
+/** Surface a failed save to the user instead of swallowing it — silent failures are how data
+ *  "disappears after refresh" (the optimistic row never reached the server). */
+function notifyError(message: string, err: unknown) {
+  const description = err instanceof Error ? err.message : "Is the Kosh API running?";
+  useUi.getState().toast({ message, description, tone: "danger", duration: 6000 });
+}
+
+// A single SSE subscription for the tab's lifetime (guards against StrictMode / retry double-subscribe).
+let sseUnsub: (() => void) | null = null;
 
 export interface DraftSkill {
   kind: "skill";
@@ -64,8 +75,11 @@ interface DataState {
   filePreviews: Record<string, string>;
   hydrated: boolean;
   backend: boolean;
+  /** Set when backend mode is configured but the API couldn't be reached — drives the offline banner. */
+  backendError: string | null;
 
   initBackend: () => Promise<void>;
+  retryBackend: () => void;
   upsertItem: (item: Item) => void;
   upsertSkill: (skill: Skill) => void;
 
@@ -151,6 +165,7 @@ export const useData = create<DataState>()(
       filePreviews: SEED_FILE_PREVIEWS,
       hydrated: !backendEnabled,
       backend: backendEnabled,
+      backendError: null,
 
       initBackend: async () => {
         if (!backendEnabled || get().hydrated) return;
@@ -167,14 +182,22 @@ export const useData = create<DataState>()(
             api.listSkills(),
             api.listCollections(),
           ]);
-          set({ user: me.user, items: [...items.items, ...trash.items], skills: skills.skills, collections: collections.collections, hydrated: true });
-          api.events((evt) => {
-            if ((evt.kind === "item.created" || evt.kind === "item.updated") && evt.item) get().upsertItem(evt.item);
-          });
+          set({ user: me.user, items: [...items.items, ...trash.items], skills: skills.skills, collections: collections.collections, hydrated: true, backend: true, backendError: null });
+          if (!sseUnsub) {
+            sseUnsub = api.events((evt) => {
+              if ((evt.kind === "item.created" || evt.kind === "item.updated") && evt.item) get().upsertItem(evt.item);
+            });
+          }
         } catch (err) {
-          console.error("Kosh: backend hydrate failed, falling back to demo data", err);
-          set({ user: seedUser(), items: seedItems(), skills: seedSkills(), collections: seedCollections(), hydrated: true, backend: false });
+          // Do NOT silently swap in demo data — that hides the outage and drops the user's writes.
+          // Surface it; the app shows an offline banner with Retry and keeps the server as source of truth.
+          console.error("Kosh: backend hydrate failed", err);
+          set({ hydrated: true, backendError: err instanceof Error ? err.message : "Can't reach the Kosh API." });
         }
+      },
+      retryBackend: () => {
+        set({ hydrated: false, backendError: null });
+        void get().initBackend();
       },
 
       upsertItem: (item) =>
@@ -235,7 +258,12 @@ export const useData = create<DataState>()(
               set((s) => ({ items: s.items.filter((i) => i.id !== temp.id) }));
               get().upsertItem(item);
             })
-            .catch(() => get().patchItem(temp.id, { status: "ready" }));
+            .catch((err) => {
+              // The save didn't reach the server — remove the phantom rather than showing a
+              // fake "ready" card that vanishes on refresh.
+              set((s) => ({ items: s.items.filter((i) => i.id !== temp.id) }));
+              notifyError("Couldn't save link", err);
+            });
         } else {
           window.setTimeout(() => get().patchItem(temp.id, enrichPatch(temp)), 900 + Math.random() * 800);
         }
@@ -243,10 +271,16 @@ export const useData = create<DataState>()(
       },
 
       patchItem: (id, patch) => {
+        const prev = get().items.find((i) => i.id === id);
         set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, ...patch, updatedAt: nowIso() } : i)) }));
         if (get().backend && !isOptimistic(id)) {
           const body = apiItemPatch(patch);
-          if (Object.keys(body).length) api.patchItem(id, body).catch(() => {});
+          if (Object.keys(body).length)
+            api.patchItem(id, body).catch((err) => {
+              // Revert so the UI matches the server rather than showing an unsaved change.
+              if (prev) set((s) => ({ items: s.items.map((i) => (i.id === id ? prev : i)) }));
+              notifyError("Couldn't save changes", err);
+            });
         }
       },
 
@@ -266,26 +300,50 @@ export const useData = create<DataState>()(
       softDelete: (id) => {
         const item = get().items.find((i) => i.id === id);
         set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: nowIso() } : i)) }));
-        if (get().backend && !isOptimistic(id)) api.deleteItem(id).catch(() => {});
+        if (get().backend && !isOptimistic(id))
+          api.deleteItem(id).catch((err) => {
+            set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: undefined } : i)) }));
+            notifyError("Couldn't move to Trash", err);
+          });
         return item;
       },
       restore: (id) => {
+        const prev = get().items.find((i) => i.id === id);
         set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: undefined, updatedAt: nowIso() } : i)) }));
-        if (get().backend && !isOptimistic(id)) api.restoreItem(id).catch(() => {});
+        if (get().backend && !isOptimistic(id))
+          api.restoreItem(id).catch((err) => {
+            if (prev) set((s) => ({ items: s.items.map((i) => (i.id === id ? prev : i)) }));
+            notifyError("Couldn't restore", err);
+          });
       },
       purge: (id) => {
         const item = get().items.find((i) => i.id === id);
+        const skill = item?.skillId ? get().skills.find((sk) => sk.id === item.skillId) : undefined;
         set((s) => ({
           items: s.items.filter((i) => i.id !== id),
           skills: item?.skillId ? s.skills.filter((sk) => sk.id !== item.skillId) : s.skills,
         }));
-        if (get().backend && !isOptimistic(id)) api.purgeItem(id).catch(() => {});
+        if (get().backend && !isOptimistic(id))
+          api.purgeItem(id).catch((err) => {
+            // Put it back so it isn't lost from the UI while still present on the server.
+            set((s) => ({ items: item ? [item, ...s.items] : s.items, skills: skill ? [skill, ...s.skills] : s.skills }));
+            notifyError("Couldn't delete permanently", err);
+          });
       },
       emptyTrash: () => {
         const trashed = get().items.filter((i) => i.deletedAt);
         const trashedSkillIds = trashed.filter((i) => i.skillId).map((i) => i.skillId);
+        const removedSkills = get().skills.filter((sk) => trashedSkillIds.includes(sk.id));
         set((s) => ({ items: s.items.filter((i) => !i.deletedAt), skills: s.skills.filter((sk) => !trashedSkillIds.includes(sk.id)) }));
-        if (get().backend) for (const i of trashed) if (!isOptimistic(i.id)) api.purgeItem(i.id).catch(() => {});
+        if (get().backend) {
+          Promise.allSettled(trashed.filter((i) => !isOptimistic(i.id)).map((i) => api.purgeItem(i.id))).then((results) => {
+            if (results.some((r) => r.status === "rejected")) {
+              // Restore what we removed so nothing silently vanishes; a refresh resyncs with the server.
+              set((s) => ({ items: [...trashed, ...s.items], skills: [...removedSkills, ...s.skills] }));
+              notifyError("Couldn't empty Trash", new Error("Some items could not be deleted."));
+            }
+          });
+        }
       },
 
       createPrompt: ({ title, body, tags }) => {
@@ -306,31 +364,53 @@ export const useData = create<DataState>()(
         };
         set((s) => ({ items: [item, ...s.items] }));
         if (get().backend) {
-          api.createPrompt({ title, body, tags }).then(({ item: real }) => {
-            set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
-            get().upsertItem(real);
-          }).catch(() => {});
+          api
+            .createPrompt({ title, body, tags })
+            .then(({ item: real }) => {
+              set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
+              get().upsertItem(real);
+              // If the user already opened the optimistic card, re-point the drawer at the real id.
+              if (useUi.getState().panel?.id === item.id) useUi.getState().openItem(real.id);
+            })
+            .catch((err) => {
+              set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
+              notifyError("Couldn't save prompt", err);
+            });
         }
         return item;
       },
       usePrompt: (id) => {
         set((s) => ({ items: s.items.map((i) => (i.id === id && i.prompt ? { ...i, prompt: { ...i.prompt, usedCount: i.prompt.usedCount + 1 }, updatedAt: nowIso() } : i)) }));
-        if (get().backend && !isOptimistic(id)) api.usePrompt(id).catch(() => {});
+        if (get().backend && !isOptimistic(id)) api.usePrompt(id).then(({ item }) => get().upsertItem(item)).catch(() => {});
       },
 
       reviewSkill: (skillId) => {
+        const prev = get().skills.find((x) => x.id === skillId);
         set((s) => ({ skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, trust: "reviewed", reviewedAt: nowIso(), updatedAt: nowIso() } : sk)) }));
-        if (get().backend && !isOptimistic(skillId)) api.reviewSkill(skillId).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+        if (get().backend && !isOptimistic(skillId))
+          api.reviewSkill(skillId).then((r) => get().upsertSkill(r.skill)).catch((err) => {
+            if (prev) get().upsertSkill(prev);
+            notifyError("Couldn't mark reviewed", err);
+          });
       },
       toggleSkillPublic: (skillId) => {
-        const sk = get().skills.find((x) => x.id === skillId);
-        const next = !sk?.public;
+        const prev = get().skills.find((x) => x.id === skillId);
+        const next = !prev?.public;
         set((s) => ({ skills: s.skills.map((x) => (x.id === skillId ? { ...x, public: next, updatedAt: nowIso() } : x)) }));
-        if (get().backend && !isOptimistic(skillId)) api.patchSkill(skillId, { public: next }).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+        if (get().backend && !isOptimistic(skillId))
+          api.patchSkill(skillId, { public: next }).then((r) => get().upsertSkill(r.skill)).catch((err) => {
+            if (prev) get().upsertSkill(prev);
+            notifyError("Couldn't update visibility", err);
+          });
       },
       keepCopy: (skillId) => {
+        const prev = get().skills.find((x) => x.id === skillId);
         set((s) => ({ skills: s.skills.map((sk) => (sk.id === skillId ? { ...sk, indexOnly: false, updatedAt: nowIso() } : sk)) }));
-        if (get().backend && !isOptimistic(skillId)) api.keepCopy(skillId).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+        if (get().backend && !isOptimistic(skillId))
+          api.keepCopy(skillId).then((r) => get().upsertSkill(r.skill)).catch((err) => {
+            if (prev) get().upsertSkill(prev);
+            notifyError("Couldn't keep a copy", err);
+          });
       },
 
       saveSkillEdit: ({ skillId, name, content, tools, note }) => {
@@ -373,6 +453,7 @@ export const useData = create<DataState>()(
             trust: tookOver ? "mine" : scan.risky && existing.trust === "reviewed" ? "unreviewed" : existing.trust,
             updatedAt: now,
           };
+          const prevItem = get().items.find((i) => i.id === existing.itemId);
           set((s) => ({
             skills: s.skills.map((x) => (x.id === existing.id ? updated : x)),
             items: s.items.map((i) => (i.id === existing.itemId ? { ...i, title: updated.displayName, description: updated.description, updatedAt: now } : i)),
@@ -383,7 +464,12 @@ export const useData = create<DataState>()(
               { path: "SKILL.md", mime: "text/markdown", content },
               ...prevOthers.map((f) => ({ path: f.path, mime: f.mime, sha256: f.sha256, size: f.size })),
             ];
-            api.addSkillVersion(existing.id, { name: skillName, tools, note, files: apiFiles }).then((r) => get().upsertSkill(r.skill)).catch(() => {});
+            api.addSkillVersion(existing.id, { name: skillName, tools, note, files: apiFiles }).then((r) => get().upsertSkill(r.skill)).catch((err) => {
+              // Roll the version bump back so the UI doesn't show an unsaved edit.
+              get().upsertSkill(existing);
+              if (prevItem) get().upsertItem(prevItem);
+              notifyError("Couldn't save skill", err);
+            });
           }
           return get().items.find((i) => i.id === existing.itemId);
         }
@@ -412,10 +498,19 @@ export const useData = create<DataState>()(
           api
             .createSkill({ name: skillName, tools, note, files: apiFiles })
             .then((r) => {
-              set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== newSkillId) }));
+              // Re-point the optimistic card at the server ids so it stays visible (and a later
+              // item.created SSE with the same id reconciles instead of duplicating).
+              set((s) => ({
+                items: s.items.map((i) => (i.id === itemId ? { ...i, id: r.itemId ?? i.id, skillId: r.skill.id } : i)),
+                skills: s.skills.filter((sk) => sk.id !== newSkillId),
+              }));
               get().upsertSkill(r.skill);
+              if (r.itemId && useUi.getState().panel?.id === itemId) useUi.getState().openItem(r.itemId);
             })
-            .catch(() => {});
+            .catch((err) => {
+              set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== newSkillId) }));
+              notifyError("Couldn't save skill", err);
+            });
         }
         return item;
       },
@@ -502,10 +597,16 @@ export const useData = create<DataState>()(
                 : api.createSkill({ name: d.name, tools: skill.tools, files: d.files.map((f) => ({ path: f.path, mime: f.mime, content: f.content })) });
               finalize
                 .then((r) => {
-                  set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== skillId) }));
+                  set((s) => ({
+                    items: s.items.map((i) => (i.id === itemId ? { ...i, id: r.itemId ?? i.id, skillId: r.skill.id } : i)),
+                    skills: s.skills.filter((sk) => sk.id !== skillId),
+                  }));
                   get().upsertSkill(r.skill);
                 })
-                .catch(() => {});
+                .catch((err) => {
+                  set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== skillId) }));
+                  notifyError(`Couldn't save skill "${d.name}"`, err);
+                });
             }
           } else {
             const item: Item = { id: uid("item"), kind: "file", title: d.path, description: `Uploaded file (${d.mime}).`, tags: [], collections: [], stage: "to-try", source, status: "ready", fileObject: { path: d.path, size: d.size, mime: d.mime }, createdAt: now, updatedAt: now };
@@ -521,7 +622,10 @@ export const useData = create<DataState>()(
                   set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
                   get().upsertItem(real);
                 })
-                .catch(() => {});
+                .catch((err) => {
+                  set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
+                  notifyError(`Couldn't upload "${d.path}"`, err);
+                });
             }
           }
         }
@@ -532,7 +636,22 @@ export const useData = create<DataState>()(
         const col: Collection = { id: uid("col"), name, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""), order: get().collections.length + 1, color: ["#4f46e5", "#14b8a6", "#f59e0b", "#ec4899", "#8b5cf6"][get().collections.length % 5] };
         set((s) => ({ collections: [...s.collections, col] }));
         if (get().backend) {
-          api.createCollection(name).then(({ collection }) => set((s) => ({ collections: s.collections.map((c) => (c.id === col.id ? collection : c)) }))).catch(() => {});
+          api
+            .createCollection(name)
+            .then(({ collection }) =>
+              // Swap the temp col_ id for the server id everywhere it's referenced.
+              set((s) => ({
+                collections: s.collections.map((c) => (c.id === col.id ? collection : c)),
+                items: s.items.map((i) => (i.collections.includes(col.id) ? { ...i, collections: i.collections.map((c) => (c === col.id ? collection.id : c)) } : i)),
+              })),
+            )
+            .catch((err) => {
+              set((s) => ({
+                collections: s.collections.filter((c) => c.id !== col.id),
+                items: s.items.map((i) => (i.collections.includes(col.id) ? { ...i, collections: i.collections.filter((c) => c !== col.id) } : i)),
+              }));
+              notifyError("Couldn't create collection", err);
+            });
         }
         return col;
       },
@@ -588,23 +707,27 @@ export const useData = create<DataState>()(
       },
 
       renameTag: (from, to) => {
+        const prev = get().items;
         set((s) => ({ items: s.items.map((i) => (i.tags.includes(from) ? { ...i, tags: [...new Set(i.tags.map((t) => (t === from ? to : t)))] } : i)) }));
-        if (get().backend) api.renameTag(from, to).catch(() => {});
+        if (get().backend) api.renameTag(from, to).catch((err) => { set({ items: prev }); notifyError("Couldn't rename tag", err); });
       },
       deleteTag: (tag) => {
+        const prev = get().items;
         set((s) => ({ items: s.items.map((i) => (i.tags.includes(tag) ? { ...i, tags: i.tags.filter((t) => t !== tag) } : i)) }));
-        if (get().backend) api.deleteTag(tag).catch(() => {});
+        if (get().backend) api.deleteTag(tag).catch((err) => { set({ items: prev }); notifyError("Couldn't remove tag", err); });
       },
       mergeTags: (from, to) => {
+        const prev = get().items;
         set((s) => ({ items: s.items.map((i) => (i.tags.some((t) => from.includes(t)) ? { ...i, tags: [...new Set(i.tags.map((t) => (from.includes(t) ? to : t)))] } : i)) }));
-        if (get().backend) api.mergeTags(from, to).catch(() => {});
+        if (get().backend) api.mergeTags(from, to).catch((err) => { set({ items: prev }); notifyError("Couldn't merge tags", err); });
       },
 
       setTheme: (theme) => set((s) => ({ user: { ...s.user, settings: { ...s.user.settings, theme } } })),
       resetVault: () => {
+        // In backend mode this re-syncs from the server (the source of truth); in demo mode it
+        // restores the seeded sample vault.
         if (backendEnabled) {
-          set({ hydrated: false });
-          void get().initBackend();
+          get().retryBackend();
           return;
         }
         set({ user: seedUser(), items: seedItems(), skills: seedSkills(), collections: seedCollections(), readmes: SEED_READMES, filePreviews: SEED_FILE_PREVIEWS });
@@ -612,10 +735,11 @@ export const useData = create<DataState>()(
     }),
     {
       name: "kosh.data.v1",
-      // In backend mode nothing is persisted locally (server is source of truth;
-      // theme lives in its own key). In mock mode the whole vault persists.
+      // Backend mode: persist nothing locally (the server is the source of truth; theme lives in
+      // its own key). Demo mode: the whole vault persists to localStorage. Keyed on the runtime
+      // `backend` flag so a demo-mode session always has a durable local copy.
       partialize: (s) =>
-        backendEnabled
+        s.backend
           ? {}
           : { user: s.user, items: s.items, skills: s.skills, collections: s.collections, readmes: s.readmes, filePreviews: s.filePreviews },
     },

@@ -40,6 +40,24 @@ function translate(filter: Filter): Filter {
   return { ...rest, _id: id };
 }
 
+/**
+ * Split a patch into $set (defined fields) and $unset (fields explicitly set to undefined).
+ * Mongoose strips `undefined` from `$set`, so clearing a field (e.g. restore → deletedAt:undefined)
+ * would otherwise never persist — the field would keep its old value. $unset removes it.
+ */
+function toUpdate(patch: Record<string, unknown>): Record<string, unknown> {
+  const $set: Record<string, unknown> = {};
+  const $unset: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined) $unset[k] = "";
+    else $set[k] = v;
+  }
+  const update: Record<string, unknown> = {};
+  if (Object.keys($set).length) update.$set = $set;
+  if (Object.keys($unset).length) update.$unset = $unset;
+  return update;
+}
+
 function mongoColl<T extends { id: string }>(model: Model<Record<string, unknown>>): Coll<T> {
   return {
     async create(doc) {
@@ -63,11 +81,11 @@ function mongoColl<T extends { id: string }>(model: Model<Record<string, unknown
       return docs.map((d) => toPlain<T>(d));
     },
     async updateById(id, patch) {
-      const d = await model.findByIdAndUpdate(id, { $set: patch }, { new: true }).lean();
+      const d = await model.findByIdAndUpdate(id, toUpdate(patch as Record<string, unknown>), { new: true }).lean();
       return d ? toPlain<T>(d) : null;
     },
     async updateOne(filter, patch) {
-      const d = await model.findOneAndUpdate(translate(filter), { $set: patch }, { new: true }).lean();
+      const d = await model.findOneAndUpdate(translate(filter), toUpdate(patch as Record<string, unknown>), { new: true }).lean();
       return d ? toPlain<T>(d) : null;
     },
     async deleteById(id) {
@@ -88,7 +106,10 @@ export async function createMongoStore(uri: string): Promise<Store> {
     items: mongoose.model(
       "Item",
       flexSchema((s) => {
-        s.index({ userId: 1, urlHash: 1 }, { unique: true, sparse: true });
+        // Partial (not sparse): a COMPOUND sparse index still indexes docs that have userId but no
+        // urlHash (prompts, skills, files), so the 2nd such doc per user collides on (userId, null)
+        // → E11000. A partial index only enforces uniqueness on docs that actually have a urlHash.
+        s.index({ userId: 1, urlHash: 1 }, { unique: true, partialFilterExpression: { urlHash: { $type: "string" } } });
         s.index({ userId: 1, kind: 1, deletedAt: 1, createdAt: -1 });
         s.index({ userId: 1, stage: 1 });
       }),

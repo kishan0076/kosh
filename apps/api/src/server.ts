@@ -1,7 +1,7 @@
 import "./load-env.js"; // must run before config.js reads process.env
 import { createApp } from "./app.js";
 import { config } from "./config.js";
-import { initStore } from "./db/index.js";
+import { getStore, initStore } from "./db/index.js";
 import { logger } from "./logger.js";
 import { startJobs } from "./jobs/index.js";
 
@@ -15,7 +15,10 @@ async function main() {
 
   const shutdown = (sig: string) => {
     logger.info(`${sig} received, shutting down`);
-    server.close(() => process.exit(0));
+    server.close(() => {
+      // Flush the store (memory adapter writes its JSON; Mongo disconnects) so no writes are lost.
+      void getStore().close().finally(() => process.exit(0));
+    });
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));

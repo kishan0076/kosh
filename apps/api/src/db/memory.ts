@@ -105,18 +105,21 @@ export function createMemoryStore(dataDir: string): Store {
   }
 
   let saveTimer: NodeJS.Timeout | null = null;
+  const flush = () => {
+    try {
+      mkdirSync(dirname(file), { recursive: true });
+      const snapshot: Record<string, unknown[]> = {};
+      for (const name of COLLECTIONS) snapshot[name] = (store[name] as unknown as { dump: () => unknown[] }).dump();
+      writeFileSync(file, JSON.stringify(snapshot));
+    } catch {
+      /* best effort */
+    }
+  };
   const persist = () => {
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      try {
-        mkdirSync(dirname(file), { recursive: true });
-        const snapshot: Record<string, unknown[]> = {};
-        for (const name of COLLECTIONS) snapshot[name] = (store[name] as unknown as { dump: () => unknown[] }).dump();
-        writeFileSync(file, JSON.stringify(snapshot));
-      } catch {
-        /* best effort */
-      }
+      flush();
     }, 150);
   };
 
@@ -130,6 +133,7 @@ export function createMemoryStore(dataDir: string): Store {
       clearTimeout(saveTimer);
       saveTimer = null;
     }
+    flush(); // write any pending changes so the last ≤150ms of writes survive a restart
   };
   return store;
 }
