@@ -33,7 +33,14 @@ export function createApp(): Express {
   // (Without this skip, express.json consumes the stream first and direct uploads of any
   // application/json file fail hash verification.)
   const jsonParser = express.json({ limit: "2mb" });
-  app.use((req, res, next) => (req.path.startsWith("/api/uploads/local/") ? next() : jsonParser(req, res, next)));
+  // Publishing inlines all project file bytes in the JSON body, so it needs a larger cap than the
+  // 2 MB default (10 MB decoded → ~13.3 MB base64 + JSON overhead → 15 MB).
+  const publishJsonParser = express.json({ limit: "15mb" });
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/uploads/local/")) return next(); // raw byte upload reads a Buffer
+    if (req.path === "/api/repos/publish") return publishJsonParser(req, res, next);
+    return jsonParser(req, res, next);
+  });
   app.use(cookieParser());
   app.use(pinoHttp({ logger, autoLogging: { ignore: (req) => req.url === "/api/health" } }));
 
@@ -63,6 +70,10 @@ export function createApp(): Express {
     }
     if (err instanceof ZodError) {
       res.status(400).json({ error: { code: "VALIDATION", message: "Invalid request.", details: err.flatten() } });
+      return;
+    }
+    if ((err as { type?: string })?.type === "entity.too.large") {
+      res.status(413).json({ error: { code: "TOO_LARGE", message: "That request is too large. Remove big files and try again." } });
       return;
     }
     logger.error({ err }, "unhandled error");

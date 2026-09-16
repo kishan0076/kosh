@@ -32,6 +32,7 @@ describe("makeGitignoreMatcher", () => {
     expect(m("secret.txt")).toBe(true);
     expect(m("nested/secret.txt")).toBe(true);
     expect(m("build/output.js")).toBe(true);
+    expect(m("build")).toBe(false); // dir-only rule must not match a file named "build"
     expect(m("root-only.txt")).toBe(true);
     expect(m("sub/root-only.txt")).toBe(false); // rooted
     expect(m("index.ts")).toBe(false);
@@ -134,6 +135,15 @@ describe("scanSecrets", () => {
     const res = scanSecrets(texts);
     expect(res.risky).toBe(false);
     expect(res.findings).toHaveLength(0);
+  });
+
+  it("still flags a real secret that merely starts with a placeholder word", () => {
+    const texts = new Map<string, string>([
+      ["db.js", `const DB_PASSWORD = "my-Prod-P@ssw0rd-9x7";`],
+    ]);
+    const res = scanSecrets(texts);
+    expect(res.risky).toBe(true);
+    expect(res.findings.some((f) => f.rule === "hardcoded-secret")).toBe(true);
   });
 
   it("returns clean for ordinary code", () => {

@@ -22,24 +22,11 @@ import { Button, Spinner } from "@/components/ui";
 
 /* ── file reading helpers ────────────────────────────────────── */
 
-const TEXT_EXT = new Set([
-  "ts", "tsx", "js", "jsx", "mjs", "cjs", "json", "md", "mdx", "txt", "css", "scss", "less",
-  "html", "htm", "xml", "svg", "yml", "yaml", "toml", "ini", "env", "sh", "bash", "zsh",
-  "py", "rb", "go", "rs", "java", "kt", "c", "h", "cpp", "hpp", "cs", "php", "swift", "sql",
-  "graphql", "gql", "vue", "svelte", "astro", "lock", "gitignore", "dockerignore", "editorconfig",
-  "prettierrc", "eslintrc", "npmrc", "properties", "gradle", "cfg", "conf", "csv", "tsv",
-]);
-function isTextPath(path: string): boolean {
-  const base = path.split("/").pop() ?? path;
-  if (base.startsWith(".")) return true; // dotfiles (.gitignore, .env, .prettierrc…) are text
-  if (!base.includes(".")) return true; // no extension (README, LICENSE, Makefile…) → assume text
-  const ext = base.split(".").pop()!.toLowerCase();
-  return TEXT_EXT.has(ext);
-}
-
-async function readContent(file: File, path: string): Promise<{ content: string; encoding: "utf-8" | "base64" }> {
-  if (isTextPath(path)) return { content: await file.text(), encoding: "utf-8" };
+/** Detect binary by content (a NUL byte is a reliable tell), matching the CLI — reading a binary
+ *  file as UTF-8 would silently corrupt it, so extension guessing isn't safe. */
+async function readContent(file: File): Promise<{ content: string; encoding: "utf-8" | "base64" }> {
   const bytes = new Uint8Array(await file.arrayBuffer());
+  if (!bytes.includes(0)) return { content: new TextDecoder().decode(bytes), encoding: "utf-8" };
   let bin = "";
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
@@ -67,6 +54,7 @@ export function PublishRepo() {
   const toast = useUi((s) => s.toast);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
+  const nameEdited = useRef(false); // did the user hand-edit the repo name?
 
   const [folderName, setFolderName] = useState("");
   const [files, setFiles] = useState<LoadedFile[]>([]);
@@ -101,7 +89,11 @@ export function PublishRepo() {
   const totalBytes = useMemo(() => files.reduce((a, f) => a + f.size, 0), [files]);
 
   async function onPick(fileList: FileList | null) {
-    if (!fileList || fileList.length === 0) return;
+    if (!fileList) return; // picker cancelled
+    if (fileList.length === 0) {
+      toast({ message: "That folder is empty — nothing to publish.", tone: "warn" });
+      return;
+    }
     setReading(true);
     setError(null);
     setResult(null);
@@ -132,7 +124,7 @@ export function PublishRepo() {
         const file = byPath.get(m.path);
         if (!file) continue;
         try {
-          const { content, encoding } = await readContent(file, m.path);
+          const { content, encoding } = await readContent(file);
           loaded.push({ path: m.path, size: m.size, content, encoding });
           if (encoding === "utf-8") texts.set(m.path, content);
         } catch {
@@ -141,11 +133,14 @@ export function PublishRepo() {
       }
 
       setFolderName(topFolder);
-      setName((prev) => prev || sanitizeRepoName(topFolder));
+      // Refresh the suggested name on every (re-)pick unless the user has hand-edited it.
+      setName((prev) => (nameEdited.current ? prev : sanitizeRepoName(topFolder)));
       setFiles(loaded);
       setSkipped(plan.skipped);
       setFindings(scanSecrets(texts).findings);
       setConfirmSecrets(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not read that folder.");
     } finally {
       setReading(false);
       if (inputRef.current) inputRef.current.value = ""; // allow re-picking the same folder
@@ -228,7 +223,7 @@ export function PublishRepo() {
             </a>
           </div>
           <div className="flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3.5">
-            <Button variant="ghost" onClick={() => { setResult(null); setFiles([]); setSkipped([]); setFindings([]); setName(""); setFolderName(""); }}>
+            <Button variant="ghost" onClick={() => { setResult(null); setFiles([]); setSkipped([]); setFindings([]); setName(""); setFolderName(""); nameEdited.current = false; }}>
               Publish another
             </Button>
             <Button variant="outline" onClick={() => navigate("/library")}>View in vault</Button>
@@ -262,6 +257,21 @@ export function PublishRepo() {
         <span className="text-[14px] font-medium">{reading ? "Reading folder…" : files.length ? "Choose a different folder" : "Choose a project folder"}</span>
         <span className="text-[12px] text-muted">Build files and secrets are filtered out automatically. Up to {PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB.</span>
       </button>
+
+      {/* nothing publishable — everything got filtered out */}
+      {files.length === 0 && skipped.length > 0 && !reading && (
+        <SectionCard title="Nothing to publish" subtitle={`Every file in ${folderName ? `“${folderName}”` : "that folder"} was filtered out`}>
+          <div className="max-h-60 overflow-y-auto rounded-[var(--radius-control)] border border-border">
+            {skipped.map((s) => (
+              <div key={s.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] last:border-0">
+                <span className="min-w-0 flex-1 truncate font-mono text-faint">{s.path}</span>
+                <span className="shrink-0 text-faint">{s.reason}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-[12px] text-muted">Pick a folder with source files, or check your .gitignore and the size limits.</p>
+        </SectionCard>
+      )}
 
       {files.length > 0 && (
         <>
@@ -329,7 +339,7 @@ export function PublishRepo() {
                 <input
                   id="repo-name"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => { nameEdited.current = true; setName(e.target.value); }}
                   placeholder="my-project"
                   className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[14px] outline-none focus:border-primary focus:ring-focus"
                 />

@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { Command } from "commander";
-import { DEFAULT_IGNORES, isValidRepoName, planRepoUpload, sanitizeRepoName, scanSecrets } from "@kosh/shared";
+import { DEFAULT_IGNORES, isValidRepoName, makeGitignoreMatcher, planRepoUpload, sanitizeRepoName, scanSecrets } from "@kosh/shared";
 
 interface Config {
   apiUrl: string;
@@ -58,15 +58,32 @@ function resolveTarget(to: string, name: string): string {
   return join(to.startsWith("~") ? to.replace("~", homedir()) : to, name);
 }
 
-/** Walk every file under a folder (skipping heavy/ignored dirs early), with posix paths + sizes. */
-async function walkProject(root: string): Promise<{ path: string; size: number }[]> {
+/** Walk a folder for publishable files, pruning default-ignored and .gitignored paths *during*
+ *  traversal (so huge build/dep trees are never descended or statted), with posix paths + sizes. */
+async function walkProject(root: string, ignored: (rel: string) => boolean): Promise<{ path: string; size: number }[]> {
   const out: { path: string; size: number }[] = [];
   async function walk(d: string) {
     for (const e of await readdir(d, { withFileTypes: true })) {
       if (DEFAULT_IGNORES.includes(e.name)) continue;
       const full = join(d, e.name);
-      if (e.isDirectory()) await walk(full);
-      else if (e.isFile()) out.push({ path: relative(root, full).replace(/\\/g, "/"), size: (await stat(full)).size });
+      const rel = relative(root, full).replace(/\\/g, "/");
+      if (e.isDirectory()) {
+        if (ignored(rel) || ignored(`${rel}/`)) continue; // prune ignored dirs (incl. `build/` rules)
+        await walk(full);
+      } else if (ignored(rel)) {
+        continue;
+      } else if (e.isFile()) {
+        out.push({ path: rel, size: (await stat(full)).size });
+      } else if (e.isSymbolicLink()) {
+        // Follow symlinked files (readSkillDir includes them too); skip link dirs and broken links.
+        try {
+          const st = await stat(full);
+          if (st.isFile()) out.push({ path: rel, size: st.size });
+          else console.error(`⚠ Skipping symlinked directory ${rel}`);
+        } catch {
+          console.error(`⚠ Skipping broken symlink ${rel}`);
+        }
+      }
     }
   }
   await walk(root);
@@ -256,10 +273,10 @@ program
     const cfg = loadConfig();
     if (!existsSync(dir)) fail(`No such folder: ${dir}`);
 
-    const all = await walkProject(dir);
-    if (!all.length) fail(`No files found in ${dir}`);
     const giPath = join(dir, ".gitignore");
     const gitignore = existsSync(giPath) ? await readFile(giPath, "utf8") : undefined;
+    const all = await walkProject(dir, makeGitignoreMatcher(gitignore));
+    if (!all.length) fail(`No files found in ${dir}`);
     const plan = planRepoUpload(all, { gitignore });
     if (!plan.include.length) fail("Every file was filtered out (check .gitignore and size limits).");
 
@@ -290,6 +307,7 @@ program
         commitMessage: opts.message,
         allowSecrets: !!opts.yes,
         token: opts.token,
+        source: "cli",
         files,
       }),
     });

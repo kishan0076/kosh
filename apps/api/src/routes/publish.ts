@@ -1,13 +1,16 @@
+import { createHash } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
-import { PUBLISH_LIMITS, isValidRepoName, scanSecrets } from "@kosh/shared";
+import { PUBLISH_LIMITS, isValidRepoName, normalizeUrl, scanSecrets } from "@kosh/shared";
 import { getStore, type ServerItem } from "../db/index.js";
 import { AppError, ah, badRequest, unauthorized } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { decryptSecret, encryptSecret } from "../auth/crypto.js";
 import { toClientItem } from "../modules/ingest.js";
 import { publish as publishEvent } from "../events.js";
-import { GithubAuthError, RepoNameTakenError, createRepoWithFiles, validateGithubToken } from "../integrations/github.js";
+import { GithubAuthError, RepoNameTakenError, createRepoWithFiles, deleteRepoWithToken, validateGithubToken } from "../integrations/github.js";
+
+const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
 
 export const publishRouter: Router = Router();
 const nowIso = () => new Date().toISOString();
@@ -26,6 +29,7 @@ const publishSchema = z.object({
   files: z.array(fileSchema).min(1).max(PUBLISH_LIMITS.maxFiles),
   token: z.string().min(1).max(500).optional(),
   allowSecrets: z.boolean().default(false),
+  source: z.enum(["web", "cli"]).default("web"),
 });
 
 /** Decoded byte length of a file's content (base64 → ~3/4 of its char length). */
@@ -54,10 +58,19 @@ publishRouter.post(
       throw badRequest("TOO_LARGE", `This project is larger than the ${PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB publish limit. Remove large files and try again.`);
     }
 
-    // Secret scan — block unless the caller explicitly confirmed.
+    // Secret scan — block unless the caller explicitly confirmed. Don't trust the client's
+    // encoding flag: decode base64 files and scan any that are actually text (e.g. ASCII-armored
+    // PEM/credential files), so a client can't hide a secret by mislabeling it binary.
     if (!body.allowSecrets) {
       const texts = new Map<string, string>();
-      for (const f of body.files) if (f.encoding !== "base64") texts.set(f.path, f.content);
+      for (const f of body.files) {
+        if (f.encoding !== "base64") {
+          texts.set(f.path, f.content);
+          continue;
+        }
+        const buf = Buffer.from(f.content, "base64");
+        if (!buf.includes(0)) texts.set(f.path, buf.toString("utf8"));
+      }
       const scan = scanSecrets(texts);
       if (scan.risky) {
         throw new AppError("SECRETS_FOUND", "Possible secrets found in these files. Review them, then publish again to confirm.", 422, { findings: scan.findings });
@@ -87,31 +100,42 @@ publishRouter.post(
     }
 
     // Record the new repo in the vault so it shows up like any saved GitHub repo.
+    // Set urlHash the same way ingest does, so a later save of the same URL dedupes to this item.
     const now = nowIso();
-    const item = await getStore().items.create({
-      userId: uid,
-      kind: "link",
-      url: result.htmlUrl,
-      originalUrl: result.htmlUrl,
-      linkType: "repo",
-      title: `${result.owner}/${result.repo}`,
-      description: body.description ?? "Published to GitHub from Kosh.",
-      tags: ["published"],
-      collections: [],
-      stage: "to-try",
-      source: "web",
-      status: "ready",
-      github: {
-        owner: result.owner,
-        repo: result.repo,
-        defaultBranch: result.defaultBranch,
-        repoKind: "app",
-        install: { source: "none" },
-        snapshotPolicy: "manual",
-      },
-      createdAt: now,
-      updatedAt: now,
-    } as Omit<ServerItem, "id">);
+    const url = normalizeUrl(result.htmlUrl);
+    let item: ServerItem;
+    try {
+      item = await getStore().items.create({
+        userId: uid,
+        kind: "link",
+        url,
+        originalUrl: result.htmlUrl,
+        urlHash: sha1(url),
+        linkType: "repo",
+        title: `${result.owner}/${result.repo}`,
+        description: body.description ?? "Published to GitHub from Kosh.",
+        tags: ["published"],
+        collections: [],
+        stage: "to-try",
+        source: body.source,
+        status: "ready",
+        github: {
+          owner: result.owner,
+          repo: result.repo,
+          defaultBranch: result.defaultBranch,
+          repoKind: "app",
+          install: { source: "none" },
+          snapshotPolicy: "manual",
+        },
+        createdAt: now,
+        updatedAt: now,
+      } as Omit<ServerItem, "id">);
+    } catch (err) {
+      // The repo is fully published but we couldn't record it — roll the repo back so a retry
+      // with the same name works, rather than leaving an orphan behind.
+      await deleteRepoWithToken(token, result.owner, result.repo);
+      throw err;
+    }
 
     const clientItem = toClientItem(item);
     publishEvent(uid, { kind: "item.created", item: clientItem });
@@ -134,7 +158,7 @@ publishRouter.get(
 publishRouter.put(
   "/settings/github-token",
   ah(async (req, res) => {
-    const uid = requireUser(req);
+    const uid = requireWrite(req);
     const { token } = z.object({ token: z.string().min(10).max(500) }).parse(req.body);
     const info = await validateGithubToken(token);
     if (!info) throw badRequest("INVALID_TOKEN", "That token didn't work. Check it has repo access and hasn't expired.");
@@ -146,7 +170,7 @@ publishRouter.put(
 publishRouter.delete(
   "/settings/github-token",
   ah(async (req, res) => {
-    const uid = requireUser(req);
+    const uid = requireWrite(req);
     await getStore().users.updateById(uid, { githubToken: "" });
     res.json({ connected: false });
   }),

@@ -65,7 +65,6 @@ function globToRegExp(glob: string): string {
 
 interface IgnoreRule {
   re: RegExp;
-  dirOnly: boolean;
 }
 
 /**
@@ -87,8 +86,10 @@ export function makeGitignoreMatcher(text: string | undefined): (path: string) =
     // Rooted or path-bearing patterns anchor at the repo root; bare names match at any depth.
     const anchored = rooted || line.includes("/");
     const prefix = anchored ? "^" : "(^|/)";
-    // Match the entry itself and anything beneath it (so `dir` also ignores `dir/x`).
-    rules.push({ re: new RegExp(`${prefix}${body}(/|$)`), dirOnly });
+    // A dir-only rule (`build/`) matches only paths *under* that directory, never a file named
+    // `build`; a plain rule matches the entry itself and anything beneath it.
+    const suffix = dirOnly ? "/" : "(/|$)";
+    rules.push({ re: new RegExp(`${prefix}${body}${suffix}`) });
   }
   return (path: string) => rules.some((r) => r.re.test(path));
 }
@@ -193,7 +194,10 @@ const SECRET_RULES: SecretRule[] = [
 // A `key = "value"` assignment where the key name screams secret.
 const ASSIGNMENT_RE = /\b([A-Za-z0-9_]*(?:secret|token|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret)[A-Za-z0-9_]*)\b\s*[:=]\s*['"]([^'"]{6,})['"]/i;
 // Obvious placeholders we should NOT flag.
-const PLACEHOLDER_RE = /^(?:x{3,}|y{3,}|z{3,}|your[-_ ].*|my[-_ ].*|changeme|change[-_]me|placeholder|example|test|dummy|todo|xxx.*|\.{3}|<.*>|\{\{.*\}\}|\$\{.*\}|(?:ksh|sk|gh[pousr])_x+)$/i;
+// "your-api-key-here"/"my_token_here" are placeholders, but a real credential that merely starts
+// with those words (e.g. "my-Prod-P@ssw0rd-9x7") must still be flagged — so the tail may only be
+// lowercase-word characters, which real secrets (digits/uppercase/symbols) won't fully match.
+const PLACEHOLDER_RE = /^(?:x{3,}|y{3,}|z{3,}|your[-_ ][a-z][a-z_ -]*|my[-_ ][a-z][a-z_ -]*|changeme|change[-_]me|placeholder|example|test|dummy|todo|xxx.*|\.{3}|<.*>|\{\{.*\}\}|\$\{.*\}|(?:ksh|sk|gh[pousr])_x+)$/i;
 
 // Files whose very presence (with real values) is a leak.
 const ENV_FILE_RE = /(^|\/)\.env(\.[A-Za-z0-9_-]+)?$/;

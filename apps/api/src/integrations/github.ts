@@ -117,12 +117,28 @@ export async function createRepoWithFiles(
     await gh.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: commit.data.sha });
     return { owner, repo, htmlUrl: created.data.html_url, defaultBranch: branch, commitSha: commit.data.sha, private: created.data.private };
   } catch (err: unknown) {
+    // Roll back the just-created (empty) repo so a same-name retry doesn't hit "name already exists".
+    await deleteRepoQuietly(gh, owner, repo);
     const status = (err as { status?: number }).status;
     if (status === 401 || status === 403) {
-      throw new GithubAuthError("The repo was created but the token can't push files — it needs 'Contents: write' access.");
+      throw new GithubAuthError(`The repo "${owner}/${repo}" was created but the token can't push files — it needs 'Contents: write' access.`);
     }
     throw err;
   }
+}
+
+/** Best-effort repo delete for rollback. Needs the delete_repo scope; silently ignored if absent. */
+async function deleteRepoQuietly(gh: Octokit, owner: string, repo: string): Promise<void> {
+  try {
+    await gh.rest.repos.delete({ owner, repo });
+  } catch {
+    /* token may lack delete_repo — leave the (empty) repo rather than fail the rollback */
+  }
+}
+
+/** Delete a repo using a caller-supplied token (used to roll back after a post-push failure). */
+export async function deleteRepoWithToken(token: string, owner: string, repo: string): Promise<void> {
+  await deleteRepoQuietly(githubClient(token), owner, repo);
 }
 
 async function pool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
