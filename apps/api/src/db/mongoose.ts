@@ -121,6 +121,13 @@ export async function createMongoStore(uri: string): Promise<Store> {
     uploadSessions: mongoose.model("UploadSession", flexSchema((s) => s.index({ expiresAt: 1 }))),
   };
 
+  // Reconcile indexes on already-deployed collections. createIndex won't ALTER an existing index,
+  // so the sparse→partial change to {userId,urlHash} needs syncIndexes to drop+recreate it.
+  // Non-fatal: never block startup on an index migration.
+  await Promise.all(
+    Object.values(models).map((m) => m.syncIndexes().catch(() => undefined)),
+  );
+
   return {
     users: mongoColl(models.users),
     items: mongoColl(models.items),

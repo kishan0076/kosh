@@ -33,6 +33,16 @@ function notifyError(message: string, err: unknown) {
 
 // A single SSE subscription for the tab's lifetime (guards against StrictMode / retry double-subscribe).
 let sseUnsub: (() => void) | null = null;
+// Guards against overlapping hydrate attempts (StrictMode double-mount, rapid Retry clicks).
+let initInFlight = false;
+
+/** Bound a promise so a hung/slow API can't trap the app on the loading screen forever. */
+function withTimeout<T>(p: Promise<T>, ms = 10000): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("Timed out reaching the Kosh API.")), ms)),
+  ]);
+}
 
 export interface DraftSkill {
   kind: "skill";
@@ -168,20 +178,17 @@ export const useData = create<DataState>()(
       backendError: null,
 
       initBackend: async () => {
-        if (!backendEnabled || get().hydrated) return;
+        if (!backendEnabled || initInFlight) return;
+        initInFlight = true;
         try {
           try {
-            await api.me();
+            await withTimeout(api.me());
           } catch {
-            await api.devLogin("darshan", "Darshan");
+            await withTimeout(api.devLogin("darshan", "Darshan"));
           }
-          const [me, items, trash, skills, collections] = await Promise.all([
-            api.me(),
-            api.listItems(),
-            api.listTrash(),
-            api.listSkills(),
-            api.listCollections(),
-          ]);
+          const [me, items, trash, skills, collections] = await withTimeout(
+            Promise.all([api.me(), api.listItems(), api.listTrash(), api.listSkills(), api.listCollections()]),
+          );
           set({ user: me.user, items: [...items.items, ...trash.items], skills: skills.skills, collections: collections.collections, hydrated: true, backend: true, backendError: null });
           if (!sseUnsub) {
             sseUnsub = api.events((evt) => {
@@ -191,12 +198,17 @@ export const useData = create<DataState>()(
         } catch (err) {
           // Do NOT silently swap in demo data — that hides the outage and drops the user's writes.
           // Surface it; the app shows an offline banner with Retry and keeps the server as source of truth.
+          // Clear any stale (e.g. prior demo-session) rows so we don't present them as the live vault.
           console.error("Kosh: backend hydrate failed", err);
-          set({ hydrated: true, backendError: err instanceof Error ? err.message : "Can't reach the Kosh API." });
+          set({ hydrated: true, items: [], skills: [], collections: [], backendError: err instanceof Error ? err.message : "Can't reach the Kosh API." });
+        } finally {
+          initInFlight = false;
         }
       },
+      // Re-try WITHOUT re-arming the full-screen loading gate (which would hide the app and the only
+      // Retry button). The app stays mounted; the banner clears while trying and returns if it fails.
       retryBackend: () => {
-        set({ hydrated: false, backendError: null });
+        set({ backendError: null });
         void get().initBackend();
       },
 
@@ -277,8 +289,18 @@ export const useData = create<DataState>()(
           const body = apiItemPatch(patch);
           if (Object.keys(body).length)
             api.patchItem(id, body).catch((err) => {
-              // Revert so the UI matches the server rather than showing an unsaved change.
-              if (prev) set((s) => ({ items: s.items.map((i) => (i.id === id ? prev : i)) }));
+              // Revert only the keys this patch changed, onto the CURRENT row — so a concurrent
+              // edit or enrichment that landed meanwhile isn't clobbered.
+              if (prev)
+                set((s) => ({
+                  items: s.items.map((i) => {
+                    if (i.id !== id) return i;
+                    const reverted: Record<string, unknown> = { ...i };
+                    const prevRec = prev as unknown as Record<string, unknown>;
+                    for (const k of Object.keys(patch)) reverted[k] = prevRec[k];
+                    return reverted as unknown as Item;
+                  }),
+                }));
               notifyError("Couldn't save changes", err);
             });
         }
@@ -336,11 +358,14 @@ export const useData = create<DataState>()(
         const removedSkills = get().skills.filter((sk) => trashedSkillIds.includes(sk.id));
         set((s) => ({ items: s.items.filter((i) => !i.deletedAt), skills: s.skills.filter((sk) => !trashedSkillIds.includes(sk.id)) }));
         if (get().backend) {
-          Promise.allSettled(trashed.filter((i) => !isOptimistic(i.id)).map((i) => api.purgeItem(i.id))).then((results) => {
-            if (results.some((r) => r.status === "rejected")) {
-              // Restore what we removed so nothing silently vanishes; a refresh resyncs with the server.
-              set((s) => ({ items: [...trashed, ...s.items], skills: [...removedSkills, ...s.skills] }));
-              notifyError("Couldn't empty Trash", new Error("Some items could not be deleted."));
+          const purgeable = trashed.filter((i) => !isOptimistic(i.id));
+          Promise.allSettled(purgeable.map((i) => api.purgeItem(i.id))).then((results) => {
+            const failed = purgeable.filter((_, idx) => results[idx]!.status === "rejected");
+            if (failed.length) {
+              // Restore ONLY the rows that actually failed to purge — not the ones already gone server-side.
+              const failedSkillIds = failed.filter((i) => i.skillId).map((i) => i.skillId);
+              set((s) => ({ items: [...failed, ...s.items], skills: [...removedSkills.filter((sk) => failedSkillIds.includes(sk.id)), ...s.skills] }));
+              notifyError("Couldn't empty Trash", new Error(`${failed.length} item(s) could not be deleted.`));
             }
           });
         }
@@ -498,12 +523,11 @@ export const useData = create<DataState>()(
           api
             .createSkill({ name: skillName, tools, note, files: apiFiles })
             .then((r) => {
-              // Re-point the optimistic card at the server ids so it stays visible (and a later
-              // item.created SSE with the same id reconciles instead of duplicating).
-              set((s) => ({
-                items: s.items.map((i) => (i.id === itemId ? { ...i, id: r.itemId ?? i.id, skillId: r.skill.id } : i)),
-                skills: s.skills.filter((sk) => sk.id !== newSkillId),
-              }));
+              // Drop the optimistic rows, then upsert the real item BY ITS SERVER ID — upsertItem
+              // dedupes whether or not the item.created SSE frame already appended it (the SSE and
+              // the POST response race on separate connections).
+              set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== newSkillId) }));
+              if (r.itemId) get().upsertItem({ ...item, id: r.itemId, skillId: r.skill.id });
               get().upsertSkill(r.skill);
               if (r.itemId && useUi.getState().panel?.id === itemId) useUi.getState().openItem(r.itemId);
             })
@@ -597,10 +621,10 @@ export const useData = create<DataState>()(
                 : api.createSkill({ name: d.name, tools: skill.tools, files: d.files.map((f) => ({ path: f.path, mime: f.mime, content: f.content })) });
               finalize
                 .then((r) => {
-                  set((s) => ({
-                    items: s.items.map((i) => (i.id === itemId ? { ...i, id: r.itemId ?? i.id, skillId: r.skill.id } : i)),
-                    skills: s.skills.filter((sk) => sk.id !== skillId),
-                  }));
+                  // Same SSE-safe reconciliation as saveSkillEdit: remove the optimistic rows,
+                  // then upsert the real item by its server id (dedupes any SSE-delivered copy).
+                  set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== skillId) }));
+                  if (r.itemId) get().upsertItem({ ...item, id: r.itemId, skillId: r.skill.id });
                   get().upsertSkill(r.skill);
                 })
                 .catch((err) => {
