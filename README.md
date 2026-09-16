@@ -76,7 +76,8 @@ npm run web
 
 The web app then authenticates (dev-login), hydrates from the API, and streams live enrichment over SSE.
 To use real MongoDB and Cloudflare R2, set `MONGODB_URI` and the `R2_*` vars (see `.env.example`); the code
-paths are the same.
+paths are the same. For a step-by-step MongoDB Atlas walkthrough (cluster, user, connection string) and an
+explanation of how Kosh does CRUD against MongoDB, see [`docs/MONGODB_ATLAS_SETUP.md`](docs/MONGODB_ATLAS_SETUP.md).
 
 Other scripts:
 
