@@ -302,4 +302,6 @@ export interface User {
   aiSpendCap: number;
   /** Opaque, unguessable token for the user's inbound email address (inbox+<token>@…). */
   emailToken?: string;
+  /** GitHub connection status (a write-capable token is stored) — never the token itself. */
+  github?: { connected?: boolean };
 }
