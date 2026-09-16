@@ -50,5 +50,6 @@ export function publicUser(u: ServerUser) {
     aiSpendToday: u.aiSpendToday,
     aiSpendCap: u.aiSpendCap,
     emailToken: u.emailToken,
+    github: { connected: !!u.githubToken },
   };
 }

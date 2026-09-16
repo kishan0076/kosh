@@ -48,7 +48,8 @@ authRouter.get("/auth/github", (_req, res) => {
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", config.github.clientId);
   url.searchParams.set("redirect_uri", redirect);
-  url.searchParams.set("scope", "read:user");
+  // read:user for the profile; repo so users can create + push repos from Kosh (§publish).
+  url.searchParams.set("scope", "read:user repo");
   res.redirect(url.toString());
 });
 

@@ -10,6 +10,121 @@ export function githubClient(token?: string | null): Octokit {
   return new Octokit({ auth: token ?? config.github.token ?? undefined });
 }
 
+/* ── Publish a folder to a new repo (create → tree → commit → ref) ─── */
+
+/** A repository name that's already taken on the account. */
+export class RepoNameTakenError extends Error {
+  constructor(public repoName: string) {
+    super(`A repository named "${repoName}" already exists on this account.`);
+    this.name = "RepoNameTakenError";
+  }
+}
+/** The token is missing, invalid, or lacks the scope needed to create/push. */
+export class GithubAuthError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GithubAuthError";
+  }
+}
+
+export interface PublishInputFile {
+  /** Repo-root-relative POSIX path. */
+  path: string;
+  content: string;
+  encoding?: "utf-8" | "base64";
+}
+export interface PublishRepoResult {
+  owner: string;
+  repo: string;
+  htmlUrl: string;
+  defaultBranch: string;
+  commitSha: string;
+  private: boolean;
+}
+
+/** Verify a token and report which OAuth scopes it carries (empty for fine-grained tokens). */
+export async function validateGithubToken(token: string): Promise<{ login: string; scopes: string[] } | null> {
+  try {
+    const gh = githubClient(token);
+    const me = await gh.rest.users.getAuthenticated();
+    const raw = (me.headers as Record<string, string>)["x-oauth-scopes"] ?? "";
+    const scopes = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    return { login: me.data.login, scopes };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Create a brand-new GitHub repo and push all files as a single initial commit.
+ * Text files are inlined into the tree; binary files go up as base64 blobs first.
+ * Throws RepoNameTakenError / GithubAuthError for the two expected failures.
+ */
+export async function createRepoWithFiles(
+  token: string,
+  opts: { name: string; description?: string; private?: boolean; files: PublishInputFile[]; commitMessage?: string; branch?: string },
+): Promise<PublishRepoResult> {
+  if (!opts.files.length) throw new Error("Refusing to publish an empty file list.");
+  const gh = githubClient(token);
+  const branch = opts.branch || "main";
+
+  let login: string;
+  try {
+    login = (await gh.rest.users.getAuthenticated()).data.login;
+  } catch {
+    throw new GithubAuthError("GitHub token is invalid or expired. Reconnect GitHub or paste a token with repo access.");
+  }
+
+  let created;
+  try {
+    created = await gh.rest.repos.createForAuthenticatedUser({
+      name: opts.name,
+      description: opts.description,
+      private: opts.private ?? true,
+      auto_init: false,
+    });
+  } catch (err: unknown) {
+    const status = (err as { status?: number }).status;
+    if (status === 422) throw new RepoNameTakenError(opts.name);
+    if (status === 401 || status === 403) {
+      throw new GithubAuthError("This GitHub token can't create repositories — it needs the 'repo' scope (or Administration: write for fine-grained tokens).");
+    }
+    throw err;
+  }
+
+  const owner = created.data.owner?.login ?? login;
+  const repo = created.data.name;
+
+  try {
+    const tree: { path: string; mode: "100644"; type: "blob"; sha?: string; content?: string }[] = [];
+    for (const f of opts.files) {
+      const path = f.path.replace(/^\/+/, "");
+      if (f.encoding === "base64") {
+        const blob = await gh.rest.git.createBlob({ owner, repo, content: f.content, encoding: "base64" });
+        tree.push({ path, mode: "100644", type: "blob", sha: blob.data.sha });
+      } else {
+        tree.push({ path, mode: "100644", type: "blob", content: f.content });
+      }
+    }
+    const treeRes = await gh.rest.git.createTree({ owner, repo, tree });
+    const commit = await gh.rest.git.createCommit({
+      owner,
+      repo,
+      message: opts.commitMessage || "Initial commit from Kosh",
+      tree: treeRes.data.sha,
+      parents: [],
+    });
+    await gh.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: commit.data.sha });
+    return { owner, repo, htmlUrl: created.data.html_url, defaultBranch: branch, commitSha: commit.data.sha, private: created.data.private };
+  } catch (err: unknown) {
+    const status = (err as { status?: number }).status;
+    if (status === 401 || status === 403) {
+      throw new GithubAuthError("The repo was created but the token can't push files — it needs 'Contents: write' access.");
+    }
+    throw err;
+  }
+}
+
 async function pool<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = [];
   let i = 0;
