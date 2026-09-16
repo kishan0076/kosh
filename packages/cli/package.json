@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@kosh/shared": "*",
     "commander": "^13.1.0"
   },
   "devDependencies": {

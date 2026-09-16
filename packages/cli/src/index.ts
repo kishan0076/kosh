@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { Command } from "commander";
+import { DEFAULT_IGNORES, isValidRepoName, planRepoUpload, sanitizeRepoName, scanSecrets } from "@kosh/shared";
 
 interface Config {
   apiUrl: string;
@@ -55,6 +56,26 @@ function resolveTarget(to: string, name: string): string {
   if (to === "project") return join(process.cwd(), ".claude", "skills", name);
   if (to === "agents") return join(process.cwd(), ".agents", "skills", name);
   return join(to.startsWith("~") ? to.replace("~", homedir()) : to, name);
+}
+
+/** Walk every file under a folder (skipping heavy/ignored dirs early), with posix paths + sizes. */
+async function walkProject(root: string): Promise<{ path: string; size: number }[]> {
+  const out: { path: string; size: number }[] = [];
+  async function walk(d: string) {
+    for (const e of await readdir(d, { withFileTypes: true })) {
+      if (DEFAULT_IGNORES.includes(e.name)) continue;
+      const full = join(d, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (e.isFile()) out.push({ path: relative(root, full).replace(/\\/g, "/"), size: (await stat(full)).size });
+    }
+  }
+  await walk(root);
+  return out;
+}
+
+/** utf-8 for text, base64 for binary (a NUL byte is a reliable binary tell). */
+function encodeFile(buf: Buffer): { content: string; encoding: "utf-8" | "base64" } {
+  return buf.includes(0) ? { content: buf.toString("base64"), encoding: "base64" } : { content: buf.toString("utf8"), encoding: "utf-8" };
 }
 
 async function readSkillDir(dir: string): Promise<{ path: string; mime: string; content: string }[]> {
@@ -220,6 +241,60 @@ program
       }
     }
     console.log(count ? `Imported ${count} skill(s).` : "No local skills found.");
+  });
+
+program
+  .command("publish <dir>")
+  .description("Create a new GitHub repo from a folder and push it in one commit")
+  .option("--name <name>", "Repo name (defaults to the folder name)")
+  .option("--description <desc>", "Repo description")
+  .option("--public", "Create a public repo (default: private)")
+  .option("--message <msg>", "Commit message")
+  .option("--token <token>", "GitHub token override (else uses your connected token)")
+  .option("--yes", "Publish even if possible secrets are found")
+  .action(async (dir, opts) => {
+    const cfg = loadConfig();
+    if (!existsSync(dir)) fail(`No such folder: ${dir}`);
+
+    const all = await walkProject(dir);
+    if (!all.length) fail(`No files found in ${dir}`);
+    const giPath = join(dir, ".gitignore");
+    const gitignore = existsSync(giPath) ? await readFile(giPath, "utf8") : undefined;
+    const plan = planRepoUpload(all, { gitignore });
+    if (!plan.include.length) fail("Every file was filtered out (check .gitignore and size limits).");
+
+    const files: { path: string; content: string; encoding: "utf-8" | "base64" }[] = [];
+    const texts = new Map<string, string>();
+    for (const f of plan.include) {
+      const enc = encodeFile(await readFile(join(dir, f.path)));
+      files.push({ path: f.path, ...enc });
+      if (enc.encoding === "utf-8") texts.set(f.path, enc.content);
+    }
+
+    const scan = scanSecrets(texts);
+    if (scan.risky && !opts.yes) {
+      console.error("✗ Possible secrets found — review, then re-run with --yes:");
+      for (const s of scan.findings.slice(0, 20)) console.error(`  ${s.path}:${s.line} — ${s.text}`);
+      process.exit(1);
+    }
+
+    const name = sanitizeRepoName(opts.name || basename(resolve(dir)));
+    if (!isValidRepoName(name)) fail(`Invalid repo name: ${name}`);
+
+    const { repo } = await api<{ repo: { htmlUrl: string; owner: string; repo: string } }>("/repos/publish", cfg, {
+      method: "POST",
+      body: JSON.stringify({
+        name,
+        description: opts.description,
+        private: !opts.public,
+        commitMessage: opts.message,
+        allowSecrets: !!opts.yes,
+        token: opts.token,
+        files,
+      }),
+    });
+    console.log(`✓ Published ${repo.owner}/${repo.repo} (${plan.include.length} file${plan.include.length === 1 ? "" : "s"}${plan.skipped.length ? `, ${plan.skipped.length} skipped` : ""})`);
+    console.log(`  ${repo.htmlUrl}`);
   });
 
 program.parseAsync().catch((err) => fail(err instanceof Error ? err.message : String(err)));
