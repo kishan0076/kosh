@@ -20,7 +20,7 @@ import {
   type User,
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
-import { api, backendEnabled, uploadObjects } from "./api";
+import { api, backendEnabled, uploadObjects, type PublishRepoInput, type PublishedRepo } from "./api";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
 
 export interface DraftSkill {
@@ -95,6 +95,8 @@ interface DataState {
 
   createCollection: (name: string) => Collection;
   toggleItemCollection: (itemId: string, collectionId: string) => void;
+
+  publishRepo: (input: PublishRepoInput) => Promise<PublishedRepo>;
 
   renameTag: (from: string, to: string) => void;
   deleteTag: (tag: string) => void;
@@ -540,6 +542,38 @@ export const useData = create<DataState>()(
         const has = cur.collections.includes(collectionId);
         const next = has ? cur.collections.filter((c) => c !== collectionId) : [...cur.collections, collectionId];
         get().patchItem(itemId, { collections: next });
+      },
+
+      publishRepo: async (input) => {
+        if (get().backend) {
+          const { item, repo } = await api.publishRepo(input);
+          get().upsertItem(item);
+          return repo;
+        }
+        // Mock mode: no server/token — simulate a successful publish and record the repo locally.
+        const owner = get().user.login && get().user.login !== "…" ? get().user.login : "you";
+        const now = nowIso();
+        const htmlUrl = `https://github.com/${owner}/${input.name}`;
+        const item: Item = {
+          id: uid("item"),
+          kind: "link",
+          url: htmlUrl,
+          originalUrl: htmlUrl,
+          linkType: "repo",
+          title: `${owner}/${input.name}`,
+          description: input.description ?? "Published to GitHub from Kosh.",
+          tags: ["published"],
+          collections: [],
+          stage: "to-try",
+          source: "web",
+          status: "ready",
+          github: { owner, repo: input.name, defaultBranch: "main", repoKind: "app", stars: 0, forks: 0, install: { source: "none" }, snapshotPolicy: "manual" },
+          createdAt: now,
+          updatedAt: now,
+        };
+        set((s) => ({ items: [item, ...s.items] }));
+        await new Promise((r) => window.setTimeout(r, 700));
+        return { owner, repo: input.name, htmlUrl, defaultBranch: "main", commitSha: "0".repeat(40), private: input.private ?? true };
       },
 
       renameTag: (from, to) => {

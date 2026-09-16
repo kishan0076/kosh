@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Blocks,
   Bookmark,
   Check,
   Copy,
   Download,
+  Github,
   GitMerge,
   KeyRound,
   Mail,
@@ -54,6 +56,7 @@ export function Settings() {
   const resetVault = useData((s) => s.resetVault);
   const toast = useUi((s) => s.toast);
   const openConfirm = useUi((s) => s.openConfirm);
+  const navigate = useNavigate();
 
   const tags = allTags(items);
   const [mergeMode, setMergeMode] = useState(false);
@@ -83,6 +86,11 @@ export function Settings() {
   ]);
   // The freshly-created key's plaintext, shown once in a reveal dialog.
   const [newKey, setNewKey] = useState<{ name: string; key: string } | null>(null);
+
+  // GitHub connection (for publishing project folders to new repos).
+  const ghConnected = user.github?.connected ?? false;
+  const [ghToken, setGhToken] = useState("");
+  const [ghConnecting, setGhConnecting] = useState(false);
 
   // In backend mode the server is the source of truth — replace the demo rows with the real ones.
   useEffect(() => {
@@ -141,6 +149,39 @@ export function Settings() {
         setApiKeys((keys) => keys.filter((x) => x.id !== k.id));
         if (backend) api.revokeApiKey(k.id).catch(() => {});
         toast({ message: "API key revoked", tone: "warn" });
+      },
+    });
+
+  const connectGithub = async () => {
+    if (ghToken.trim().length < 10) return;
+    setGhConnecting(true);
+    try {
+      const res = await api.setGithubToken(ghToken.trim());
+      const me = await api.me();
+      useData.setState({ user: me.user });
+      setGhToken("");
+      toast({ message: `GitHub connected as @${res.login}`, tone: "ok" });
+    } catch (err) {
+      toast({ message: "Couldn't connect GitHub", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setGhConnecting(false);
+    }
+  };
+
+  const disconnectGithub = () =>
+    openConfirm({
+      title: "Disconnect GitHub?",
+      message: "Kosh will forget your GitHub token. You can reconnect any time to publish again.",
+      confirmLabel: "Disconnect",
+      onConfirm: async () => {
+        try {
+          await api.clearGithubToken();
+          const me = await api.me();
+          useData.setState({ user: me.user });
+          toast({ message: "GitHub disconnected", tone: "warn" });
+        } catch {
+          /* ignore */
+        }
       },
     });
 
@@ -241,6 +282,56 @@ export function Settings() {
               </div>
             ))}
           </div>
+        </SectionCard>
+
+        {/* github connection */}
+        <SectionCard
+          title="GitHub connection"
+          subtitle="Publish project folders to new GitHub repos"
+          className="lg:col-span-2"
+          action={
+            <Button variant="outline" size="sm" onClick={() => navigate("/publish")}>
+              <Github size={15} /> Publish a project
+            </Button>
+          }
+        >
+          {!backend ? (
+            <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5 text-[13px] text-muted">
+              <Github size={16} className="shrink-0" />
+              Demo mode — publishing is simulated. Connect the API to push to real GitHub.
+            </div>
+          ) : ghConnected ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok">
+                <Check size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13.5px] font-medium">Connected</div>
+                <div className="text-[12px] text-faint">A token with repo access is stored (encrypted).</div>
+              </div>
+              <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={disconnectGithub}>
+                Disconnect
+              </Button>
+            </div>
+          ) : (
+            <div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  type="password"
+                  value={ghToken}
+                  onChange={(e) => setGhToken(e.target.value)}
+                  placeholder="ghp_… or github_pat_…"
+                  className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
+                />
+                <Button variant="primary" onClick={connectGithub} disabled={ghConnecting || ghToken.trim().length < 10}>
+                  {ghConnecting ? <RefreshCw size={15} className="animate-spin" /> : <Github size={15} />} Connect
+                </Button>
+              </div>
+              <p className="mt-2 text-[12px] text-faint">
+                Create a token at github.com/settings/tokens with the <span className="font-mono">repo</span> scope. Stored encrypted; never shown again.
+              </p>
+            </div>
+          )}
         </SectionCard>
 
         {/* tags */}

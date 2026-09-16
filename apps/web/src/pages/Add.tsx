@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowRight, Blocks, Bookmark, FolderPlus, Mail, MessageCircle, PlusCircle, Quote, Terminal } from "lucide-react";
+import { ArrowRight, Blocks, Bookmark, FolderPlus, Github, Mail, MessageCircle, PlusCircle, Quote, Terminal } from "lucide-react";
 import { formatNumber } from "@kosh/shared";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
@@ -25,6 +25,7 @@ export function Add() {
     { icon: Quote, title: "New prompt", desc: "A reusable prompt with {{variables}} and fill-and-copy.", accent: "var(--primary)", onClick: () => navigate("/prompts?new=1") },
     { icon: Blocks, title: "New skill", desc: "Author a SKILL.md with live lint, scan and preview.", accent: "var(--tool-claude)", onClick: () => navigate("/skills/new") },
     { icon: FolderPlus, title: "New collection", desc: "Group links, skills and prompts together.", accent: "var(--gold)", onClick: () => navigate("/collections?new=1") },
+    { icon: Github, title: "Publish to GitHub", desc: "Turn a project folder into a new GitHub repo.", accent: "var(--foreground)", onClick: () => navigate("/publish") },
   ];
 
   const waysIn = [

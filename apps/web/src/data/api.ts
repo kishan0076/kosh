@@ -4,6 +4,14 @@ import type { Collection, Item, Skill, User } from "@kosh/shared";
 export const API_BASE: string = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 export const backendEnabled = API_BASE.length > 0;
 
+/** An API error that keeps the server's machine-readable code + details (e.g. secret findings). */
+export class ApiError extends Error {
+  constructor(message: string, public code?: string, public details?: unknown, public status?: number) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
@@ -12,13 +20,17 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
+    let code: string | undefined;
+    let details: unknown;
     try {
       const body = await res.json();
       message = body?.error?.message ?? message;
+      code = body?.error?.code;
+      details = body?.error?.details;
     } catch {
       /* ignore */
     }
-    throw new Error(message);
+    throw new ApiError(message, code, details, res.status);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -40,6 +52,29 @@ export interface ApiKeyPublic {
   scopes: string[];
   lastUsedAt?: string;
   createdAt: string;
+}
+
+export interface PublishFileInput {
+  path: string;
+  content: string;
+  encoding?: "utf-8" | "base64";
+}
+export interface PublishedRepo {
+  owner: string;
+  repo: string;
+  htmlUrl: string;
+  defaultBranch: string;
+  commitSha: string;
+  private: boolean;
+}
+export interface PublishRepoInput {
+  name: string;
+  description?: string;
+  private?: boolean;
+  commitMessage?: string;
+  files: PublishFileInput[];
+  allowSecrets?: boolean;
+  token?: string;
 }
 
 export interface UploadInput {
@@ -123,6 +158,11 @@ export const api = {
   patchSkill: (id: string, patch: Record<string, unknown>) => req<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   createCollection: (name: string) => req<{ collection: Collection }>("/collections", { method: "POST", body: JSON.stringify({ name }) }),
+
+  publishRepo: (input: PublishRepoInput) => req<{ item: Item; repo: PublishedRepo }>("/repos/publish", { method: "POST", body: JSON.stringify(input) }),
+  githubStatus: () => req<{ connected: boolean }>("/settings/github-token"),
+  setGithubToken: (token: string) => req<{ connected: boolean; login: string; scopes: string[] }>("/settings/github-token", { method: "PUT", body: JSON.stringify({ token }) }),
+  clearGithubToken: () => req<{ connected: boolean }>("/settings/github-token", { method: "DELETE" }),
 
   listApiKeys: () => req<{ apiKeys: ApiKeyPublic[] }>("/settings/api-keys"),
   // Returns the full plaintext key ONCE — the server only stores its hash, so it can never be shown again.
