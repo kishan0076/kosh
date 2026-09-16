@@ -75,6 +75,55 @@ export interface PublishRepoInput {
   files: PublishFileInput[];
   allowSecrets?: boolean;
   token?: string;
+  source?: "web" | "cli";
+}
+
+export type PublishPhase = "reading" | "uploading" | "creating" | "done";
+export interface PublishProgress {
+  phase: PublishPhase;
+  /** 0–100; meaningful for reading/uploading, held at 100 while the server works. */
+  pct: number;
+}
+
+/** Publish via XHR so we get real request-upload progress (fetch() can't report it). */
+export function publishRepoWithProgress(
+  input: PublishRepoInput,
+  onUploadProgress: (pct: number) => void,
+): Promise<{ item: Item; repo: PublishedRepo }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/repos/publish`);
+    xhr.withCredentials = true;
+    xhr.setRequestHeader("Content-Type", "application/json");
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onUploadProgress(Math.min(100, Math.round((e.loaded / e.total) * 100)));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as { item: Item; repo: PublishedRepo });
+        } catch {
+          reject(new ApiError("Malformed response from the server."));
+        }
+        return;
+      }
+      let message = `Request failed (${xhr.status})`;
+      let code: string | undefined;
+      let details: unknown;
+      try {
+        const body = JSON.parse(xhr.responseText);
+        message = body?.error?.message ?? message;
+        code = body?.error?.code;
+        details = body?.error?.details;
+      } catch {
+        /* ignore */
+      }
+      reject(new ApiError(message, code, details, xhr.status));
+    };
+    xhr.onerror = () => reject(new ApiError("Network error — check your connection and try again."));
+    xhr.ontimeout = () => reject(new ApiError("The request timed out."));
+    xhr.send(JSON.stringify(input));
+  });
 }
 
 export interface UploadInput {

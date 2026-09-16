@@ -1,6 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, ExternalLink, FolderUp, Github, Globe, Lock, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ExternalLink,
+  FileCode2,
+  FolderUp,
+  Github,
+  Globe,
+  Lock,
+  Plug,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  X,
+} from "lucide-react";
 import {
   PUBLISH_LIMITS,
   planRepoUpload,
@@ -13,14 +28,40 @@ import {
   type SkippedFile,
 } from "@kosh/shared";
 import { cn } from "@/lib/cn";
+import { ago } from "@/lib/time";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
-import { api, ApiError } from "@/data/api";
+import { api, ApiError, type PublishProgress } from "@/data/api";
 import { GitHubMark } from "@/lib/icons";
-import { PageHeader, SectionCard } from "@/components/common";
 import { Button, Spinner } from "@/components/ui";
 
-/* ── file reading helpers ────────────────────────────────────── */
+/* ── helpers ─────────────────────────────────────────────────── */
+
+/** A sensible starter .gitignore offered when a project has none. */
+const STARTER_GITIGNORE = `# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Logs & caches
+*.log
+.cache/
+.turbo/
+
+# OS & editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+`;
 
 /** Detect binary by content (a NUL byte is a reliable tell), matching the CLI — reading a binary
  *  file as UTF-8 would silently corrupt it, so extension guessing isn't safe. */
@@ -50,8 +91,10 @@ interface LoadedFile extends RepoFileMeta {
 export function PublishRepo() {
   const user = useData((s) => s.user);
   const backend = useData((s) => s.backend);
+  const items = useData((s) => s.items);
   const publishRepo = useData((s) => s.publishRepo);
   const toast = useUi((s) => s.toast);
+  const openConfirm = useUi((s) => s.openConfirm);
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const nameEdited = useRef(false); // did the user hand-edit the repo name?
@@ -60,6 +103,8 @@ export function PublishRepo() {
   const [files, setFiles] = useState<LoadedFile[]>([]);
   const [skipped, setSkipped] = useState<SkippedFile[]>([]);
   const [findings, setFindings] = useState<ScanFinding[]>([]);
+  const [hasGitignore, setHasGitignore] = useState(false);
+  const [addGitignore, setAddGitignore] = useState(true);
   const [reading, setReading] = useState(false);
 
   const [name, setName] = useState("");
@@ -68,14 +113,26 @@ export function PublishRepo() {
   const [confirmSecrets, setConfirmSecrets] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
 
-  const [publishing, setPublishing] = useState(false);
+  const [progress, setProgress] = useState<PublishProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ owner: string; repo: string; htmlUrl: string } | null>(null);
+  const [result, setResult] = useState<{ owner: string; repo: string; htmlUrl: string; private: boolean } | null>(null);
 
   // GitHub connection (backend mode only).
   const connected = !backend || !!user.github?.connected;
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
+
+  const publishing = progress !== null && progress.phase !== "done";
+
+  // Repos previously published from Kosh (gives the module its "management" surface).
+  const published = useMemo(
+    () =>
+      items
+        .filter((i) => i.linkType === "repo" && i.tags.includes("published") && !i.deletedAt)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 8),
+    [items],
+  );
 
   // Enable folder selection through the directory-picker attributes (not typed on <input>).
   useEffect(() => {
@@ -102,10 +159,8 @@ export function PublishRepo() {
       const first = repoPath(all[0]!);
       const topFolder = ((all[0] as File & { webkitRelativePath?: string }).webkitRelativePath || "").split("/")[0] || first.split("/")[0] || "project";
 
-      // Metadata for the plan, keeping each File handle to read included ones.
       const byPath = new Map<string, File>();
       const meta: RepoFileMeta[] = [];
-      let gitignore: string | undefined;
       for (const f of all) {
         const path = repoPath(f);
         if (!path) continue;
@@ -113,7 +168,7 @@ export function PublishRepo() {
         meta.push({ path, size: f.size });
       }
       const gi = byPath.get(".gitignore");
-      if (gi && gi.size < 100_000) gitignore = await gi.text();
+      const gitignore = gi && gi.size < 100_000 ? await gi.text() : undefined;
 
       const plan = planRepoUpload(meta, { gitignore });
 
@@ -132,8 +187,10 @@ export function PublishRepo() {
         }
       }
 
+      const foundGi = byPath.has(".gitignore");
+      setHasGitignore(foundGi);
+      setAddGitignore(!foundGi); // offer a starter only when there isn't one
       setFolderName(topFolder);
-      // Refresh the suggested name on every (re-)pick unless the user has hand-edited it.
       setName((prev) => (nameEdited.current ? prev : sanitizeRepoName(topFolder)));
       setFiles(loaded);
       setSkipped(plan.skipped);
@@ -153,7 +210,6 @@ export function PublishRepo() {
     setError(null);
     try {
       const res = await api.setGithubToken(token.trim());
-      // Refresh the user so `github.connected` flips on.
       const me = await api.me();
       useData.setState({ user: me.user });
       setToken("");
@@ -163,6 +219,36 @@ export function PublishRepo() {
     } finally {
       setConnecting(false);
     }
+  }
+
+  const disconnect = () =>
+    openConfirm({
+      title: "Disconnect GitHub?",
+      message: "Kosh will forget your GitHub token. You can reconnect any time to publish again.",
+      confirmLabel: "Disconnect",
+      onConfirm: async () => {
+        try {
+          await api.clearGithubToken();
+          const me = await api.me();
+          useData.setState({ user: me.user });
+          toast({ message: "GitHub disconnected", tone: "warn" });
+        } catch {
+          /* ignore */
+        }
+      },
+    });
+
+  function reset() {
+    setResult(null);
+    setFiles([]);
+    setSkipped([]);
+    setFindings([]);
+    setName("");
+    setFolderName("");
+    setDescription("");
+    setProgress(null);
+    setError(null);
+    nameEdited.current = false;
   }
 
   async function doPublish() {
@@ -175,19 +261,26 @@ export function PublishRepo() {
       setError("Pick a project folder first.");
       return;
     }
-    setPublishing(true);
     setError(null);
+    setProgress({ phase: "reading", pct: 0 });
     try {
-      const repo = await publishRepo({
-        name: repoName,
-        description: description.trim() || undefined,
-        private: isPrivate,
-        allowSecrets: confirmSecrets,
-        files: files.map((f) => ({ path: f.path, content: f.content, encoding: f.encoding })),
-      });
+      const outFiles = files.map((f) => ({ path: f.path, content: f.content, encoding: f.encoding }));
+      if (addGitignore && !hasGitignore) outFiles.unshift({ path: ".gitignore", content: STARTER_GITIGNORE, encoding: "utf-8" });
+
+      const repo = await publishRepo(
+        {
+          name: repoName,
+          description: description.trim() || undefined,
+          private: isPrivate,
+          allowSecrets: confirmSecrets,
+          files: outFiles,
+        },
+        (p) => setProgress(p),
+      );
       setResult(repo);
       toast({ message: "Published to GitHub", description: `${repo.owner}/${repo.repo}`, tone: "ok" });
     } catch (err) {
+      setProgress(null);
       if (err instanceof ApiError && err.code === "REPO_NAME_TAKEN") {
         setError(`You already have a repo named "${repoName}". Pick a different name.`);
       } else if (err instanceof ApiError && err.code === "SECRETS_FOUND") {
@@ -196,223 +289,371 @@ export function PublishRepo() {
       } else {
         setError(err instanceof Error ? err.message : "Publishing failed.");
       }
-    } finally {
-      setPublishing(false);
     }
-  }
-
-  /* success screen */
-  if (result) {
-    return (
-      <div className="mx-auto max-w-2xl">
-        <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-          <div className="flex items-start gap-3 border-b border-border px-5 py-4">
-            <span className="mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-full bg-ok-soft text-ok">
-              <CheckCircle2 size={20} />
-            </span>
-            <div className="min-w-0">
-              <h2 className="text-lg font-semibold">Published to GitHub</h2>
-              <p className="mt-0.5 text-[13px] text-muted">Your project is now a repository with its first commit.</p>
-            </div>
-          </div>
-          <div className="px-5 py-4">
-            <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5 font-mono text-[13px] hover:border-border-strong">
-              <GitHubMark size={16} />
-              <span className="min-w-0 flex-1 truncate">{result.owner}/{result.repo}</span>
-              <ExternalLink size={14} className="text-muted" />
-            </a>
-          </div>
-          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3.5">
-            <Button variant="ghost" onClick={() => { setResult(null); setFiles([]); setSkipped([]); setFindings([]); setName(""); setFolderName(""); nameEdited.current = false; }}>
-              Publish another
-            </Button>
-            <Button variant="outline" onClick={() => navigate("/library")}>View in vault</Button>
-            <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener">
-              <Button variant="primary"><ExternalLink size={15} /> Open on GitHub</Button>
-            </a>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   const needsConnect = backend && !connected;
   const canPublish = files.length > 0 && !reading && !publishing && !needsConnect && (findings.length === 0 || confirmSecrets);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <PageHeader title="Publish to GitHub" subtitle="Pick a project folder — Kosh creates a new repository and pushes the files in one commit." icon={Github} />
+    <div className="w-full space-y-5">
+      {/* ── header ─────────────────────────────────────────── */}
+      <header className="flex flex-wrap items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary">
+          <Github size={22} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h1 className="text-xl font-semibold leading-tight">GitHub Repository Manager</h1>
+          <p className="mt-0.5 text-[13px] text-muted">Turn any project folder into a new GitHub repository — created and pushed in one commit.</p>
+        </div>
+        <ConnectionPill backend={backend} connected={connected} login={user.login} onDisconnect={disconnect} />
+      </header>
 
-      {/* folder picker */}
-      <input ref={inputRef} type="file" multiple hidden onChange={(e) => onPick(e.target.files)} />
-      <button
-        type="button"
-        onClick={() => inputRef.current?.click()}
-        disabled={reading || publishing}
-        className={cn(
-          "flex w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-card)] border-2 border-dashed border-border bg-surface px-6 py-10 text-center transition-colors hover:border-primary hover:bg-primary-soft/40 disabled:opacity-60",
-        )}
-      >
-        {reading ? <Spinner size={22} className="text-primary" /> : <FolderUp size={26} className="text-muted" />}
-        <span className="text-[14px] font-medium">{reading ? "Reading folder…" : files.length ? "Choose a different folder" : "Choose a project folder"}</span>
-        <span className="text-[12px] text-muted">Build files and secrets are filtered out automatically. Up to {PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB.</span>
-      </button>
-
-      {/* nothing publishable — everything got filtered out */}
-      {files.length === 0 && skipped.length > 0 && !reading && (
-        <SectionCard title="Nothing to publish" subtitle={`Every file in ${folderName ? `“${folderName}”` : "that folder"} was filtered out`}>
-          <div className="max-h-60 overflow-y-auto rounded-[var(--radius-control)] border border-border">
-            {skipped.map((s) => (
-              <div key={s.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] last:border-0">
-                <span className="min-w-0 flex-1 truncate font-mono text-faint">{s.path}</span>
-                <span className="shrink-0 text-faint">{s.reason}</span>
-              </div>
-            ))}
+      {/* ── connect gate ───────────────────────────────────── */}
+      {needsConnect && (
+        <div className="rounded-[var(--radius-card)] border border-primary/30 bg-primary-soft/50 px-5 py-4">
+          <div className="mb-2 flex items-center gap-2 text-[14px] font-semibold">
+            <Plug size={17} className="text-primary" /> Connect GitHub to publish
           </div>
-          <p className="mt-2 text-[12px] text-muted">Pick a folder with source files, or check your .gitignore and the size limits.</p>
-        </SectionCard>
+          <p className="mb-3 text-[12.5px] text-muted">Paste a token with the <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">repo</code> scope. It's stored encrypted and shown to no one.</p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              type="password"
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && connectToken()}
+              placeholder="ghp_… or github_pat_…"
+              className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
+            />
+            <Button variant="primary" onClick={connectToken} disabled={connecting || token.trim().length < 10}>
+              {connecting ? <Spinner size={15} /> : <ShieldCheck size={15} />} Connect
+            </Button>
+          </div>
+        </div>
       )}
 
-      {files.length > 0 && (
-        <>
-          {/* file summary */}
-          <SectionCard
-            title={folderName ? `“${folderName}”` : "Files"}
-            subtitle={`${files.length} file${files.length === 1 ? "" : "s"} · ${formatBytes(totalBytes)}${skipped.length ? ` · ${skipped.length} skipped` : ""}`}
-          >
-            <div className="max-h-52 overflow-y-auto rounded-[var(--radius-control)] border border-border bg-surface-2">
-              {files.map((f) => (
-                <div key={f.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 font-mono text-[12px] last:border-0">
-                  <span className="min-w-0 flex-1 truncate">{f.path}</span>
-                  <span className="shrink-0 text-faint">{formatBytes(f.size)}</span>
-                </div>
-              ))}
+      {/* ── success ────────────────────────────────────────── */}
+      {result ? (
+        <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+          <div className="flex items-start gap-3 border-b border-border bg-ok-soft/40 px-5 py-4">
+            <span className="mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-full bg-ok-soft text-ok">
+              <CheckCircle2 size={22} />
+            </span>
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold">Repository published 🎉</h2>
+              <p className="mt-0.5 text-[13px] text-muted">{result.private ? "Private" : "Public"} repository created with its first commit.</p>
             </div>
-            {skipped.length > 0 && (
-              <div className="mt-2">
-                <button onClick={() => setShowSkipped((v) => !v)} className="text-[12px] font-medium text-muted hover:text-foreground">
-                  {showSkipped ? "Hide" : "Show"} {skipped.length} skipped file{skipped.length === 1 ? "" : "s"}
-                </button>
-                {showSkipped && (
-                  <div className="mt-1.5 max-h-40 overflow-y-auto rounded-[var(--radius-control)] border border-border">
-                    {skipped.map((s) => (
-                      <div key={s.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] last:border-0">
-                        <span className="min-w-0 flex-1 truncate font-mono text-faint">{s.path}</span>
-                        <span className="shrink-0 text-faint">{s.reason}</span>
+          </div>
+          <div className="px-5 py-4">
+            <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3.5 py-3 font-mono text-[13.5px] transition-colors hover:border-border-strong">
+              <GitHubMark size={17} />
+              <span className="min-w-0 flex-1 truncate font-semibold">{result.owner}/{result.repo}</span>
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-surface-3 px-2 py-0.5 font-sans text-[11px] text-muted">
+                {result.private ? <Lock size={11} /> : <Globe size={11} />} {result.private ? "Private" : "Public"}
+              </span>
+              <ExternalLink size={15} className="shrink-0 text-muted" />
+            </a>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3.5">
+            <Button variant="ghost" onClick={reset}>Publish another</Button>
+            <Button variant="outline" onClick={() => navigate("/library")}>View in vault</Button>
+            <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener">
+              <Button variant="primary"><ExternalLink size={15} /> Open on GitHub</Button>
+            </a>
+          </div>
+        </div>
+      ) : (
+        /* ── workflow ─────────────────────────────────────── */
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
+          {/* left: source + review */}
+          <div className="space-y-5">
+            <input ref={inputRef} type="file" multiple hidden onChange={(e) => onPick(e.target.files)} />
+
+            {files.length === 0 ? (
+              <button
+                type="button"
+                onClick={() => inputRef.current?.click()}
+                disabled={reading || publishing}
+                className="flex min-h-[220px] w-full flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border-2 border-dashed border-border bg-surface px-6 py-12 text-center transition-colors hover:border-primary hover:bg-primary-soft/30 disabled:opacity-60"
+              >
+                <span className="grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary">
+                  {reading ? <Spinner size={26} /> : <FolderUp size={28} />}
+                </span>
+                <span className="text-[15px] font-semibold">{reading ? "Reading folder…" : "Choose a project folder"}</span>
+                <span className="max-w-sm text-[12.5px] text-muted">Everything is prepared in your browser. Build files, dependencies and secrets are filtered out automatically — up to {PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB.</span>
+              </button>
+            ) : (
+              <>
+                {/* project files */}
+                <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-3">
+                    <FileCode2 size={17} className="shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[14px] font-semibold">{folderName || "Project files"}</div>
+                      <div className="text-[12px] text-muted">{files.length} file{files.length === 1 ? "" : "s"} · {formatBytes(totalBytes)}{skipped.length ? ` · ${skipped.length} skipped` : ""}</div>
+                    </div>
+                    <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()} disabled={publishing}>
+                      <RefreshCw size={14} /> Change
+                    </Button>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto">
+                    {files.map((f) => (
+                      <div key={f.path} className="flex items-center gap-2 border-b border-border px-4 py-1.5 font-mono text-[12px] last:border-0">
+                        <span className="min-w-0 flex-1 truncate">{f.path}</span>
+                        {f.encoding === "base64" && <span className="shrink-0 rounded bg-surface-3 px-1.5 text-[10px] text-muted">binary</span>}
+                        <span className="shrink-0 text-faint">{formatBytes(f.size)}</span>
                       </div>
                     ))}
                   </div>
+                  {skipped.length > 0 && (
+                    <div className="border-t border-border px-4 py-2.5">
+                      <button onClick={() => setShowSkipped((v) => !v)} className="text-[12px] font-medium text-muted hover:text-foreground">
+                        {showSkipped ? "Hide" : "Show"} {skipped.length} skipped file{skipped.length === 1 ? "" : "s"}
+                      </button>
+                      {showSkipped && (
+                        <div className="mt-2 max-h-40 overflow-y-auto rounded-[var(--radius-control)] border border-border">
+                          {skipped.map((s) => (
+                            <div key={s.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] last:border-0">
+                              <span className="min-w-0 flex-1 truncate font-mono text-faint">{s.path}</span>
+                              <span className="shrink-0 text-faint">{s.reason}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </section>
+
+                {/* secret warnings */}
+                {findings.length > 0 && (
+                  <section className="rounded-[var(--radius-card)] border border-warn/40 bg-warn-soft px-4 py-3.5">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle size={18} className="mt-0.5 shrink-0 text-warn" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[14px] font-semibold">Possible secrets found</div>
+                        <p className="mt-0.5 text-[12.5px] text-muted">Review these before publishing — a public repo is visible to everyone.</p>
+                        <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+                          {findings.slice(0, 40).map((f, i) => (
+                            <li key={i} className="font-mono text-[12px]">
+                              <span className="text-foreground">{f.path}</span>:<span className="text-muted">{f.line}</span> — {f.text}
+                            </li>
+                          ))}
+                        </ul>
+                        <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[13px]">
+                          <input type="checkbox" checked={confirmSecrets} onChange={(e) => setConfirmSecrets(e.target.checked)} className="h-4 w-4 accent-[var(--primary)]" />
+                          I&apos;ve reviewed these and want to publish anyway
+                        </label>
+                      </div>
+                    </div>
+                  </section>
+                )}
+              </>
+            )}
+
+            {/* nothing publishable */}
+            {files.length === 0 && skipped.length > 0 && !reading && (
+              <section className="rounded-[var(--radius-card)] border border-border bg-surface px-4 py-4">
+                <div className="mb-1 text-[14px] font-semibold">Nothing to publish</div>
+                <p className="mb-2 text-[12.5px] text-muted">Every file in {folderName ? `“${folderName}”` : "that folder"} was filtered out. Check your .gitignore and the size limits.</p>
+                <div className="max-h-48 overflow-y-auto rounded-[var(--radius-control)] border border-border">
+                  {skipped.map((s) => (
+                    <div key={s.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] last:border-0">
+                      <span className="min-w-0 flex-1 truncate font-mono text-faint">{s.path}</span>
+                      <span className="shrink-0 text-faint">{s.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+
+          {/* right: settings (sticky) */}
+          <aside className="space-y-4 lg:sticky lg:top-4">
+            <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+              <div className="border-b border-border px-4 py-3 text-[13px] font-semibold uppercase tracking-wide text-faint">Repository settings</div>
+              <div className="space-y-4 px-4 py-4">
+                {/* name */}
+                <div>
+                  <label htmlFor="repo-name" className="mb-1.5 block text-[12px] font-medium text-muted">Repository name</label>
+                  <div className="flex items-center overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface focus-within:border-primary focus-within:ring-focus">
+                    <span className="shrink-0 border-r border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-faint">{connected && backend ? `${user.login}/` : "github.com/…/"}</span>
+                    <input
+                      id="repo-name"
+                      value={name}
+                      onChange={(e) => { nameEdited.current = true; setName(e.target.value); }}
+                      placeholder="my-project"
+                      disabled={publishing}
+                      className="min-w-0 flex-1 bg-transparent px-3 py-2 font-mono text-[14px] outline-none"
+                    />
+                  </div>
+                  {name.trim() && !isValidRepoName(name.trim()) && <p className="mt-1 text-[11.5px] text-danger">Only letters, numbers, '.', '_' and '-' are allowed.</p>}
+                </div>
+
+                {/* description */}
+                <div>
+                  <label htmlFor="repo-desc" className="mb-1.5 block text-[12px] font-medium text-muted">Description <span className="text-faint">(optional)</span></label>
+                  <input
+                    id="repo-desc"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    placeholder="What is this project?"
+                    disabled={publishing}
+                    className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus"
+                  />
+                </div>
+
+                {/* visibility */}
+                <div>
+                  <span className="mb-1.5 block text-[12px] font-medium text-muted">Visibility</span>
+                  <div className="space-y-2">
+                    <VisibilityCard icon={Lock} title="Private" desc="Only you can see this repository" selected={isPrivate} onClick={() => setIsPrivate(true)} disabled={publishing} />
+                    <VisibilityCard icon={Globe} title="Public" desc="Anyone on the internet can see this" selected={!isPrivate} onClick={() => setIsPrivate(false)} disabled={publishing} />
+                  </div>
+                </div>
+
+                {/* .gitignore status */}
+                {files.length > 0 && (
+                  <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+                    {hasGitignore ? (
+                      <div className="flex items-center gap-2 text-[12.5px]">
+                        <Check size={15} className="shrink-0 text-ok" />
+                        <span><span className="font-medium">.gitignore</span> found in this project</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2 text-[12.5px]">
+                          <AlertTriangle size={15} className="shrink-0 text-warn" />
+                          <span>No <span className="font-medium">.gitignore</span> in this project</span>
+                        </div>
+                        <label className="mt-2 flex cursor-pointer items-center gap-2 text-[12.5px]">
+                          <input type="checkbox" checked={addGitignore} onChange={(e) => setAddGitignore(e.target.checked)} disabled={publishing} className="h-4 w-4 accent-[var(--primary)]" />
+                          <span className="inline-flex items-center gap-1"><Sparkles size={13} className="text-primary" /> Add a starter .gitignore</span>
+                        </label>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* progress / error / publish */}
+                {progress ? (
+                  <PublishProgressBar progress={progress} />
+                ) : (
+                  <>
+                    {error && <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
+                    <Button variant="primary" className="w-full" onClick={doPublish} disabled={!canPublish}>
+                      <GitHubMark size={16} /> Create repository &amp; push
+                    </Button>
+                    {files.length === 0 && <p className="text-center text-[11.5px] text-faint">Choose a folder to get started.</p>}
+                  </>
                 )}
               </div>
-            )}
-          </SectionCard>
-
-          {/* secret warnings */}
-          {findings.length > 0 && (
-            <div className="rounded-[var(--radius-card)] border border-warn/40 bg-warn-soft px-4 py-3.5">
-              <div className="flex items-start gap-2.5">
-                <AlertTriangle size={18} className="mt-0.5 shrink-0 text-warn" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[14px] font-semibold">Possible secrets found</div>
-                  <p className="mt-0.5 text-[12.5px] text-muted">Review these before publishing — a public repo is visible to everyone.</p>
-                  <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">
-                    {findings.slice(0, 30).map((f, i) => (
-                      <li key={i} className="font-mono text-[12px]">
-                        <span className="text-foreground">{f.path}</span>:<span className="text-muted">{f.line}</span> — {f.text}
-                      </li>
-                    ))}
-                  </ul>
-                  <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[13px]">
-                    <input type="checkbox" checked={confirmSecrets} onChange={(e) => setConfirmSecrets(e.target.checked)} className="h-4 w-4 accent-[var(--primary)]" />
-                    I&apos;ve reviewed these and want to publish anyway
-                  </label>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* repo details */}
-          <SectionCard title="Repository details">
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="repo-name" className="mb-1.5 block text-[12px] font-medium text-muted">Repository name</label>
-                <input
-                  id="repo-name"
-                  value={name}
-                  onChange={(e) => { nameEdited.current = true; setName(e.target.value); }}
-                  placeholder="my-project"
-                  className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[14px] outline-none focus:border-primary focus:ring-focus"
-                />
-              </div>
-              <div>
-                <label htmlFor="repo-desc" className="mb-1.5 block text-[12px] font-medium text-muted">Description <span className="text-faint">(optional)</span></label>
-                <input
-                  id="repo-desc"
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="What is this project?"
-                  className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus"
-                />
-              </div>
-              <div>
-                <span className="mb-1.5 block text-[12px] font-medium text-muted">Visibility</span>
-                <div className="grid grid-cols-2 gap-2 sm:max-w-sm">
-                  <button
-                    type="button"
-                    onClick={() => setIsPrivate(true)}
-                    className={cn("flex items-center gap-2 rounded-[var(--radius-control)] border px-3 py-2 text-left transition-colors", isPrivate ? "border-primary bg-primary-soft" : "border-border bg-surface-2 hover:border-border-strong")}
-                    aria-pressed={isPrivate}
-                  >
-                    <Lock size={15} className={isPrivate ? "text-primary" : "text-muted"} />
-                    <span className="text-[13px] font-medium">Private</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsPrivate(false)}
-                    className={cn("flex items-center gap-2 rounded-[var(--radius-control)] border px-3 py-2 text-left transition-colors", !isPrivate ? "border-primary bg-primary-soft" : "border-border bg-surface-2 hover:border-border-strong")}
-                    aria-pressed={!isPrivate}
-                  >
-                    <Globe size={15} className={!isPrivate ? "text-primary" : "text-muted"} />
-                    <span className="text-[13px] font-medium">Public</span>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </SectionCard>
-
-          {/* connect GitHub (backend mode, no token yet) */}
-          {needsConnect && (
-            <SectionCard title="Connect GitHub" subtitle="Paste a token with repo access — stored encrypted, shown to no one.">
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <input
-                  type="password"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="ghp_… or github_pat_…"
-                  className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
-                />
-                <Button variant="primary" onClick={connectToken} disabled={connecting || token.trim().length < 10}>
-                  {connecting ? <Spinner size={15} /> : <ShieldCheck size={15} />} Connect
-                </Button>
-              </div>
-              <p className="mt-2 text-[12px] text-faint">
-                Create one at github.com/settings/tokens with the <span className="font-mono">repo</span> scope.
-              </p>
-            </SectionCard>
-          )}
-
-          {error && (
-            <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3.5 py-2.5 text-[13px] text-danger">{error}</div>
-          )}
-
-          <div className="flex items-center justify-end gap-2">
-            <Button variant="ghost" onClick={() => navigate("/add")}>Cancel</Button>
-            <Button variant="primary" onClick={doPublish} disabled={!canPublish}>
-              {publishing ? <><Spinner size={15} /> Publishing…</> : <><GitHubMark size={15} /> Create repo &amp; push</>}
-            </Button>
-          </div>
-        </>
+            </section>
+          </aside>
+        </div>
       )}
+
+      {/* ── recently published ─────────────────────────────── */}
+      {published.length > 0 && (
+        <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+          <div className="border-b border-border px-4 py-3 text-[13px] font-semibold uppercase tracking-wide text-faint">Recently published</div>
+          <div>
+            {published.map((i) => (
+              <div key={i.id} className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0">
+                <GitHubMark size={16} className="shrink-0 text-muted" />
+                <a href={i.url} target="_blank" rel="noreferrer noopener" className="min-w-0 flex-1 truncate font-mono text-[13px] font-medium hover:text-primary">
+                  {i.github ? `${i.github.owner}/${i.github.repo}` : i.title}
+                </a>
+                <span className="shrink-0 text-[11.5px] text-faint">{ago(i.createdAt)}</span>
+                <a href={i.url} target="_blank" rel="noreferrer noopener" className="shrink-0 rounded-md p-1.5 text-faint hover:bg-surface-2 hover:text-foreground" aria-label="Open on GitHub">
+                  <ExternalLink size={14} />
+                </a>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+/* ── sub-components ───────────────────────────────────────────── */
+
+function ConnectionPill({ backend, connected, login, onDisconnect }: { backend: boolean; connected: boolean; login: string; onDisconnect: () => void }) {
+  if (!backend) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-3 py-1.5 text-[12px] text-muted">
+        <Sparkles size={13} className="text-primary" /> Demo mode
+      </span>
+    );
+  }
+  if (connected) {
+    return (
+      <div className="inline-flex items-center gap-2 rounded-full border border-ok/30 bg-ok-soft px-3 py-1.5 text-[12px]">
+        <span className="grid h-4 w-4 place-items-center rounded-full bg-ok text-white"><Check size={11} /></span>
+        <span className="font-medium">Connected{login && login !== "…" ? ` · @${login}` : ""}</span>
+        <button onClick={onDisconnect} className="ml-0.5 rounded-full p-0.5 text-muted hover:bg-surface-2 hover:text-danger" aria-label="Disconnect GitHub">
+          <X size={13} />
+        </button>
+      </div>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-warn/40 bg-warn-soft px-3 py-1.5 text-[12px] text-warn">
+      <Plug size={13} /> Not connected
+    </span>
+  );
+}
+
+function VisibilityCard({ icon: Icon, title, desc, selected, onClick, disabled }: { icon: typeof Lock; title: string; desc: string; selected: boolean; onClick: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={selected}
+      className={cn(
+        "flex w-full items-center gap-3 rounded-[var(--radius-control)] border px-3 py-2.5 text-left transition-colors disabled:opacity-60",
+        selected ? "border-primary bg-primary-soft" : "border-border bg-surface-2 hover:border-border-strong",
+      )}
+    >
+      <span className={cn("grid h-8 w-8 shrink-0 place-items-center rounded-lg", selected ? "bg-primary text-primary-foreground" : "bg-surface-3 text-muted")}>
+        <Icon size={15} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13.5px] font-medium">{title}</span>
+        <span className="block text-[11.5px] leading-snug text-muted">{desc}</span>
+      </span>
+      <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full border", selected ? "border-primary bg-primary text-primary-foreground" : "border-border")}>
+        {selected && <Check size={11} />}
+      </span>
+    </button>
+  );
+}
+
+function PublishProgressBar({ progress }: { progress: PublishProgress }) {
+  const labels: Record<PublishProgress["phase"], string> = {
+    reading: "Preparing files…",
+    uploading: "Uploading files…",
+    creating: "Creating repository & pushing…",
+    done: "Done",
+  };
+  const indeterminate = progress.phase === "creating";
+  const value = progress.phase === "uploading" ? progress.pct : 100;
+  return (
+    <div aria-live="polite">
+      <div className="mb-1.5 flex items-center justify-between text-[12px]">
+        <span className="inline-flex items-center gap-1.5 font-medium">
+          {progress.phase === "done" ? <Check size={14} className="text-ok" /> : <Spinner size={13} className="text-primary" />}
+          {labels[progress.phase]}
+        </span>
+        {progress.phase === "uploading" && <span className="tabular text-muted">{progress.pct}%</span>}
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-surface-3">
+        <div
+          className={cn("h-full rounded-full bg-primary transition-[width] duration-200 ease-out", indeterminate && "motion-safe:animate-pulse")}
+          style={{ width: `${value}%` }}
+        />
+      </div>
     </div>
   );
 }

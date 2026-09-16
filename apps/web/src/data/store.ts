@@ -20,7 +20,7 @@ import {
   type User,
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
-import { api, backendEnabled, uploadObjects, type PublishRepoInput, type PublishedRepo } from "./api";
+import { api, backendEnabled, publishRepoWithProgress, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
 
 export interface DraftSkill {
@@ -96,7 +96,7 @@ interface DataState {
   createCollection: (name: string) => Collection;
   toggleItemCollection: (itemId: string, collectionId: string) => void;
 
-  publishRepo: (input: PublishRepoInput) => Promise<PublishedRepo>;
+  publishRepo: (input: PublishRepoInput, onProgress?: (p: PublishProgress) => void) => Promise<PublishedRepo>;
 
   renameTag: (from: string, to: string) => void;
   deleteTag: (tag: string) => void;
@@ -544,13 +544,24 @@ export const useData = create<DataState>()(
         get().patchItem(itemId, { collections: next });
       },
 
-      publishRepo: async (input) => {
+      publishRepo: async (input, onProgress) => {
         if (get().backend) {
-          const { item, repo } = await api.publishRepo(input);
+          onProgress?.({ phase: "uploading", pct: 0 });
+          const { item, repo } = await publishRepoWithProgress(input, (pct) => {
+            onProgress?.(pct < 100 ? { phase: "uploading", pct } : { phase: "creating", pct: 100 });
+          });
           get().upsertItem(item);
+          onProgress?.({ phase: "done", pct: 100 });
           return repo;
         }
-        // Mock mode: no server/token — simulate a successful publish and record the repo locally.
+        // Mock mode: no server/token — simulate the upload → create phases, then record locally.
+        const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+        for (let p = 0; p <= 100; p += 25) {
+          onProgress?.({ phase: "uploading", pct: p });
+          await sleep(90);
+        }
+        onProgress?.({ phase: "creating", pct: 100 });
+        await sleep(650);
         const owner = get().user.login && get().user.login !== "…" ? get().user.login : "you";
         const now = nowIso();
         const htmlUrl = `https://github.com/${owner}/${input.name}`;
@@ -572,7 +583,7 @@ export const useData = create<DataState>()(
           updatedAt: now,
         };
         set((s) => ({ items: [item, ...s.items] }));
-        await new Promise((r) => window.setTimeout(r, 700));
+        onProgress?.({ phase: "done", pct: 100 });
         return { owner, repo: input.name, htmlUrl, defaultBranch: "main", commitSha: "0".repeat(40), private: input.private ?? true };
       },
 
