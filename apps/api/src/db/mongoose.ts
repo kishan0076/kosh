@@ -119,6 +119,8 @@ export async function createMongoStore(uri: string): Promise<Store> {
     apiKeys: mongoose.model("ApiKey", flexSchema((s) => s.index({ keyHash: 1 }, { unique: true }))),
     storageObjects: mongoose.model("StorageObject", flexSchema((s) => s.index({ userId: 1, sha256: 1 }, { unique: true }))),
     uploadSessions: mongoose.model("UploadSession", flexSchema((s) => s.index({ expiresAt: 1 }))),
+    driveAccounts: mongoose.model("DriveAccount", flexSchema((s) => s.index({ userId: 1, googleSub: 1 }, { unique: true }))),
+    driveUploads: mongoose.model("DriveUpload", flexSchema((s) => s.index({ userId: 1, createdAt: -1 }))),
   };
 
   // Reconcile indexes on already-deployed collections. createIndex won't ALTER an existing index,
@@ -136,6 +138,8 @@ export async function createMongoStore(uri: string): Promise<Store> {
     apiKeys: mongoColl(models.apiKeys),
     storageObjects: mongoColl(models.storageObjects),
     uploadSessions: mongoColl(models.uploadSessions),
+    driveAccounts: mongoColl(models.driveAccounts),
+    driveUploads: mongoColl(models.driveUploads),
     async ping() {
       await mongoose.connection.db?.admin().ping();
       return true;

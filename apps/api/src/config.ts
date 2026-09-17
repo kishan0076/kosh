@@ -46,6 +46,19 @@ export const config = {
     token: env.KOSH_GITHUB_TOKEN || null,
   },
 
+  // Google Drive integration (OAuth 2.0). Unset creds → the feature runs in demo mode and the
+  // web app shows a "connect Google" gate that explains the setup. Least-privilege by default:
+  // `drive.file` only touches files this app creates (no Google verification needed). Set
+  // GOOGLE_DRIVE_FULL_ACCESS=1 to request the RESTRICTED `drive` scope (browse ALL existing
+  // folders) — that requires Google app verification before real users can consent.
+  google: {
+    clientId: env.GOOGLE_CLIENT_ID || null,
+    clientSecret: env.GOOGLE_CLIENT_SECRET || null,
+    // The OAuth redirect must exactly match one registered in the Google Cloud console.
+    redirectUri: env.GOOGLE_REDIRECT_URI || `${env.API_URL ?? `http://localhost:${env.PORT ?? 8787}`}/api/drive/auth/callback`,
+    fullAccess: bool(env.GOOGLE_DRIVE_FULL_ACCESS, false),
+  },
+
   anthropic: {
     apiKey: env.ANTHROPIC_API_KEY || null,
     model: env.ANTHROPIC_MODEL || "claude-haiku-4-5", // cheap bulk summaries/tags

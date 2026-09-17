@@ -40,6 +40,38 @@ export interface UploadSessionDoc {
   createdAt: string;
 }
 
+/** A connected Google account for the Drive integration. The refresh token is encrypted at rest;
+ *  the plaintext access token is never stored — it's minted on demand and lives only in the browser. */
+export interface DriveAccountDoc {
+  id: string;
+  userId: string;
+  googleSub: string; // stable Google user id (the OpenID `sub` claim)
+  email: string;
+  name?: string;
+  picture?: string;
+  refreshToken: string; // encrypted at rest
+  scope: string;
+  createdAt: string;
+  lastUsedAt?: string;
+}
+
+/** One row of Drive upload history (metadata only — never the file bytes). */
+export interface DriveUploadDoc {
+  id: string;
+  userId: string;
+  accountId: string;
+  fileName: string;
+  mimeType: string;
+  size: number;
+  driveFileId?: string;
+  folderId?: string;
+  folderPath?: string;
+  webViewLink?: string;
+  status: "completed" | "failed";
+  error?: string;
+  createdAt: string;
+}
+
 export type Filter = Record<string, unknown>;
 export interface FindOpts {
   sort?: Record<string, 1 | -1>;
@@ -67,6 +99,8 @@ export interface Store {
   apiKeys: Coll<ServerApiKey>;
   storageObjects: Coll<StorageObjectDoc>;
   uploadSessions: Coll<UploadSessionDoc>;
+  driveAccounts: Coll<DriveAccountDoc>;
+  driveUploads: Coll<DriveUploadDoc>;
   ping(): Promise<boolean>;
   close(): Promise<void>;
 }
