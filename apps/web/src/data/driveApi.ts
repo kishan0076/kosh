@@ -197,18 +197,36 @@ async function queryOffset(sessionUri: string, total: number, control: Resumable
  * pause/cancel between chunks. Retries transient failures (5xx/429/network) with backoff.
  */
 export async function resumableUpload(opts: ResumableOpts): Promise<ResumableResult> {
-  let accessToken = opts.accessToken;
   const total = opts.file.size;
+
+  // Chunk PUTs authenticate via the (pre-authorized) session URI, so the access token is used ONLY to
+  // create the session. If it expired between minting and now, re-mint once and retry the session.
+  async function startSession(): Promise<string> {
+    try {
+      return await createSession(opts, opts.accessToken);
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "TOKEN_EXPIRED" && opts.getFreshToken) {
+        return createSession(opts, await opts.getFreshToken());
+      }
+      throw e;
+    }
+  }
 
   let sessionUri: string;
   let uploaded: number;
   if (opts.resumeFrom) {
     sessionUri = opts.resumeFrom.sessionUri;
-    const q = await queryOffset(sessionUri, total, opts.control);
-    if (q.done && q.result) return q.result;
-    uploaded = q.uploaded;
+    try {
+      const q = await queryOffset(sessionUri, total, opts.control);
+      if (q.done && q.result) return q.result;
+      uploaded = q.uploaded;
+    } catch (err) {
+      // A pause during the resume-offset query must resolve as paused, not failed.
+      if (err instanceof ApiError && err.code === "PAUSED_ABORT") throw new PausedError(sessionUri, opts.resumeFrom.uploaded);
+      throw err;
+    }
   } else {
-    sessionUri = await createSession(opts, accessToken);
+    sessionUri = await startSession();
     uploaded = 0;
   }
   opts.onProgress(uploaded);
@@ -235,16 +253,17 @@ export async function resumableUpload(opts: ResumableOpts): Promise<ResumableRes
         const out = await putChunk(sessionUri, chunk, range, (loaded) => opts.onProgress(chunkStart + loaded), opts.control);
         if (out.status === 200 || out.status === 201) return JSON.parse(out.responseText) as ResumableResult;
         if (out.status === 308) {
-          uploaded = out.rangeEnd != null ? out.rangeEnd + 1 : end;
+          if (out.rangeEnd != null) {
+            uploaded = out.rangeEnd + 1; // server acknowledged bytes up to rangeEnd
+          } else {
+            // 308 with no Range header ⇒ the server persisted an unknown amount (possibly zero, or the
+            // header wasn't exposed by CORS). Never assume the whole chunk landed — ask explicitly.
+            const q = await queryOffset(sessionUri, total, opts.control);
+            if (q.done && q.result) return q.result;
+            uploaded = q.uploaded;
+          }
           opts.onProgress(uploaded);
           break; // chunk accepted; move to the next one
-        }
-        if (out.status === 401 && opts.getFreshToken) {
-          accessToken = await opts.getFreshToken(); // token expired mid-upload; refresh and re-query offset
-          const q = await queryOffset(sessionUri, total, opts.control);
-          if (q.done && q.result) return q.result;
-          uploaded = q.uploaded;
-          break;
         }
         if ((out.status === 429 || out.status >= 500) && attempt < MAX_CHUNK_RETRIES) {
           attempt++;
@@ -274,7 +293,12 @@ export async function resumableUpload(opts: ResumableOpts): Promise<ResumableRes
     }
   }
   // Loop exited because uploaded === total but no 200 body was seen — confirm completion.
-  const final = await queryOffset(sessionUri, total, opts.control);
-  if (final.done && final.result) return final.result;
+  try {
+    const final = await queryOffset(sessionUri, total, opts.control);
+    if (final.done && final.result) return final.result;
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "PAUSED_ABORT") throw new PausedError(sessionUri, total);
+    throw err;
+  }
   throw new ApiError("Upload didn't finalize.", "UPLOAD_FAILED");
 }

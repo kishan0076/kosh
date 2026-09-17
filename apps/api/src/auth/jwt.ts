@@ -5,7 +5,7 @@ const secret = new TextEncoder().encode(config.jwtSecret);
 const ALG = "HS256";
 
 export async function signSession(userId: string): Promise<string> {
-  return new SignJWT({ uid: userId })
+  return new SignJWT({ uid: userId, typ: "session" })
     .setProtectedHeader({ alg: ALG })
     .setIssuedAt()
     .setExpirationTime("30d")
@@ -15,6 +15,9 @@ export async function signSession(userId: string): Promise<string> {
 export async function verifySession(token: string): Promise<string | null> {
   try {
     const { payload } = await jwtVerify(token, secret, { algorithms: [ALG] });
+    // Token-type isolation: a purpose-scoped token (e.g. an OAuth `state`, which is deliberately
+    // placed in a URL) must NEVER be promotable to a session credential. Only accept session tokens.
+    if (payload.purpose !== undefined) return null;
     return typeof payload.uid === "string" ? payload.uid : null;
   } catch {
     return null;

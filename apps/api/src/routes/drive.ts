@@ -1,13 +1,14 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
-import { ah, badRequest, notFound } from "../errors.js";
+import { AppError, ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { decryptSecret, encryptSecret } from "../auth/crypto.js";
 import { signState, verifyState } from "../auth/jwt.js";
 import { config } from "../config.js";
 import {
   GoogleAuthError,
+  GoogleTransientError,
   createFolder,
   driveAuthUrl,
   driveScopes,
@@ -37,6 +38,22 @@ async function ownedAccount(uid: string, id: string): Promise<DriveAccountDoc> {
   return acc;
 }
 
+/** Map a Google integration error to a typed API error: dead token → 400 reconnect; transient → 502. */
+function mapGoogleError(err: unknown): never {
+  if (err instanceof GoogleAuthError) throw badRequest("NEEDS_RECONNECT", err.message);
+  if (err instanceof GoogleTransientError) throw new AppError("UPSTREAM", err.message, 502);
+  throw err;
+}
+
+/** Run a post-mint Drive helper, mapping its errors to typed envelopes instead of a generic 500. */
+async function driveCall<T>(p: Promise<T>): Promise<T> {
+  try {
+    return await p;
+  } catch (err) {
+    mapGoogleError(err);
+  }
+}
+
 /** Refresh a short-lived access token for direct browser uploads / server-side management calls. */
 async function mintAccess(acc: DriveAccountDoc): Promise<{ accessToken: string; expiresIn: number }> {
   const refresh = decryptSecret(acc.refreshToken);
@@ -46,8 +63,7 @@ async function mintAccess(acc: DriveAccountDoc): Promise<{ accessToken: string; 
     await getStore().driveAccounts.updateById(acc.id, { lastUsedAt: nowIso() });
     return t;
   } catch (err) {
-    if (err instanceof GoogleAuthError) throw badRequest("NEEDS_RECONNECT", err.message);
-    throw err;
+    mapGoogleError(err);
   }
 }
 
@@ -168,7 +184,7 @@ driveRouter.get(
     const uid = requireWrite(req);
     const acc = await ownedAccount(uid, String(req.params.id));
     const { accessToken } = await mintAccess(acc);
-    res.json({ quota: await getStorageQuota(accessToken) });
+    res.json({ quota: await driveCall(getStorageQuota(accessToken)) });
   }),
 );
 
@@ -181,7 +197,7 @@ driveRouter.get(
     const acc = await ownedAccount(uid, String(req.params.id));
     const parent = typeof req.query.parent === "string" && req.query.parent ? req.query.parent : "root";
     const { accessToken } = await mintAccess(acc);
-    res.json({ folders: await listFolders(accessToken, parent) });
+    res.json({ folders: await driveCall(listFolders(accessToken, parent)) });
   }),
 );
 
@@ -192,7 +208,7 @@ driveRouter.post(
     const acc = await ownedAccount(uid, String(req.params.id));
     const { name, parentId } = z.object({ name: z.string().min(1).max(255), parentId: z.string().min(1).default("root") }).parse(req.body);
     const { accessToken } = await mintAccess(acc);
-    res.status(201).json({ folder: await createFolder(accessToken, name, parentId) });
+    res.status(201).json({ folder: await driveCall(createFolder(accessToken, name, parentId)) });
   }),
 );
 
@@ -204,10 +220,10 @@ driveRouter.post(
     const uid = requireWrite(req);
     const acc = await ownedAccount(uid, String(req.params.id));
     const { folderId, names } = z
-      .object({ folderId: z.string().min(1).default("root"), names: z.array(z.string().min(1).max(255)).max(1000) })
+      .object({ folderId: z.string().min(1).default("root"), names: z.array(z.string().min(1).max(255)).max(500) })
       .parse(req.body);
     const { accessToken } = await mintAccess(acc);
-    res.json({ duplicates: await findDuplicates(accessToken, folderId, names) });
+    res.json({ duplicates: await driveCall(findDuplicates(accessToken, folderId, names)) });
   }),
 );
 

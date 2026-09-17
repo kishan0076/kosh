@@ -76,6 +76,10 @@ interface DriveState {
 const controls = new Map<string, ResumableControl>(); // per-item pause/cancel flags
 const resumes = new Map<string, { sessionUri: string; uploaded: number }>(); // resume points
 const lastEmit = new Map<string, number>(); // progress-throttle timestamps
+// Folder-creation memo for the active batch, keyed by full path. Caches the IN-FLIGHT promise (not the
+// resolved id) so concurrent uploads into the same new sub-folder share ONE createFolder call instead
+// of racing and creating duplicate Drive folders. Reset when the queue fully drains.
+let folderCache: Map<string, Promise<string>> | null = null;
 let tokenCache: { accountId: string; token: string; exp: number } | null = null;
 let activeCount = 0;
 const CONCURRENCY = 3;
@@ -106,29 +110,32 @@ export const useDrive = create<DriveState>((set, get) => {
     patchItem(id, { uploaded });
   }
 
-  /** Recreate a nested folder path under baseId, memoized within one upload batch. */
-  async function ensureFolderPath(accountId: string, baseId: string, parts: string[], cache: Map<string, string>): Promise<string> {
+  /** Recreate a nested folder path under baseId, memoized (by in-flight promise) within one batch. */
+  async function ensureFolderPath(accountId: string, baseId: string, parts: string[]): Promise<string> {
+    const cache = (folderCache ??= new Map());
     let parentId = baseId;
     let key = baseId;
     for (const part of parts) {
       key += "/" + part;
-      let id = cache.get(key);
-      if (!id) {
-        const { folder } = await driveApi.createFolder(accountId, part, parentId);
-        id = folder.id;
-        cache.set(key, id);
+      let p = cache.get(key);
+      if (!p) {
+        p = driveApi.createFolder(accountId, part, parentId).then((r) => r.folder.id);
+        p.catch(() => cache.delete(key)); // don't let a transient failure poison the memo
+        cache.set(key, p);
       }
-      parentId = id;
+      parentId = await p;
     }
     return parentId;
   }
 
-  async function runItem(item: DriveQueueItem, accountId: string, folderCache: Map<string, string>) {
+  async function runItem(item: DriveQueueItem, accountId: string) {
     activeCount++;
     try {
-      // Resolve the destination folder (create sub-folders for bulk uploads).
+      // Resolve the destination folder (create sub-folders for bulk uploads). On resume the session
+      // URI already points at the right folder, so skip folder creation to avoid an orphan duplicate.
+      const resuming = resumes.has(item.id);
       const dirParts = item.relPath.split("/").slice(0, -1);
-      const targetFolderId = dirParts.length ? await ensureFolderPath(accountId, item.destFolderId, dirParts, folderCache) : item.destFolderId;
+      const targetFolderId = !resuming && dirParts.length ? await ensureFolderPath(accountId, item.destFolderId, dirParts) : item.destFolderId;
 
       const control = controls.get(item.id)!;
       const token = await ensureToken(accountId);
@@ -175,12 +182,12 @@ export const useDrive = create<DriveState>((set, get) => {
       }
     } finally {
       activeCount--;
-      pump(folderCache);
+      pump();
     }
   }
 
   /** Start queued items up to the concurrency cap. */
-  function pump(folderCache: Map<string, string>) {
+  function pump() {
     const accountId = get().accountId;
     if (!accountId) return;
     while (activeCount < CONCURRENCY) {
@@ -189,10 +196,11 @@ export const useDrive = create<DriveState>((set, get) => {
       const control: ResumableControl = { paused: false, canceled: false };
       controls.set(next.id, control);
       patchItem(next.id, { status: "uploading" });
-      void runItem(next, accountId, folderCache);
+      void runItem(next, accountId);
     }
-    // Refresh usage + history once the batch drains.
+    // Refresh usage + history once the batch drains, and reset the per-batch folder memo.
     if (activeCount === 0 && !get().queue.some((it) => it.status === "queued" || it.status === "uploading")) {
+      folderCache = null;
       void get().loadQuota();
       void get().loadHistory();
     }
@@ -345,7 +353,7 @@ export const useDrive = create<DriveState>((set, get) => {
 
     startUploads: async () => {
       if (!get().accountId) return;
-      pump(new Map<string, string>());
+      pump();
     },
 
     pauseItem: (id) => {
@@ -361,7 +369,7 @@ export const useDrive = create<DriveState>((set, get) => {
         c.canceled = false;
       }
       patchItem(id, { status: "queued", error: undefined });
-      pump(new Map<string, string>());
+      pump();
     },
     cancelItem: (id) => {
       const c = controls.get(id);
@@ -380,7 +388,7 @@ export const useDrive = create<DriveState>((set, get) => {
         c.canceled = false;
       }
       patchItem(id, { status: "queued", uploaded: 0, error: undefined });
-      pump(new Map<string, string>());
+      pump();
     },
     retryFailed: () => {
       for (const it of get().queue) if (it.status === "failed") get().retryItem(it.id);
@@ -388,9 +396,18 @@ export const useDrive = create<DriveState>((set, get) => {
     removeItem: (id) => {
       controls.delete(id);
       resumes.delete(id);
+      lastEmit.delete(id);
       set((s) => ({ queue: s.queue.filter((it) => it.id !== id) }));
     },
     clearFinished: () => {
+      // Free the module-level maps for every row we drop, so they don't grow unbounded over a session.
+      for (const it of get().queue) {
+        if (it.status === "completed" || it.status === "canceled") {
+          controls.delete(it.id);
+          resumes.delete(it.id);
+          lastEmit.delete(it.id);
+        }
+      }
       set((s) => ({ queue: s.queue.filter((it) => it.status !== "completed" && it.status !== "canceled") }));
     },
     skipDuplicates: () => {
