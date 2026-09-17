@@ -50,6 +50,16 @@ vaultRouter.put(
     const body = manifestSchema.parse(req.body);
     const buf = Buffer.from(JSON.stringify(body), "utf8");
     if (buf.length > config.vault.maxManifestBytes) throw badRequest("TOO_LARGE", "Vault manifest is too large.");
+    // Optimistic concurrency: the version must strictly increase, so a stale tab can't silently
+    // clobber a newer save (and a fresh PUT can't overwrite an existing vault).
+    const existing = await getVaultBlob(uid, "manifest.json");
+    if (existing) {
+      const prev = JSON.parse(existing.toString("utf8")) as { version?: number };
+      if (typeof prev.version === "number" && body.version <= prev.version) {
+        res.status(409).json({ error: { code: "VERSION_CONFLICT", message: "The vault changed elsewhere. Reload and try again.", details: { current: prev.version } } });
+        return;
+      }
+    }
     await putVaultBlob(uid, "manifest.json", buf, "application/json");
     res.json({ ok: true });
   }),

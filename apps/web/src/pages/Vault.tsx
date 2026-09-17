@@ -420,21 +420,42 @@ function EntryDetail({ entry, onClose, onEdit }: { entry: VaultEntry; onClose: (
 
   // Decrypt image files to a temporary object URL for preview; revoke on close.
   useEffect(() => {
+    let cancelled = false;
     let url: string | null = null;
     if (entry.file && entry.file.mime.startsWith("image/")) {
       readFile(entry.file)
-        .then((blob) => { url = URL.createObjectURL(blob); setImgUrl(url); })
+        .then((blob) => {
+          if (cancelled) return; // unmounted / locked mid-decrypt — don't mint a lingering plaintext URL
+          url = URL.createObjectURL(blob);
+          setImgUrl(url);
+        })
         .catch(() => {});
     }
-    return () => { if (url) URL.revokeObjectURL(url); };
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
   }, [entry, readFile]);
 
-  const copySecret = () => {
+  const copySecret = async () => {
     if (!entry.secret) return;
-    navigator.clipboard?.writeText(entry.secret).catch(() => {});
-    toast({ message: "Copied — clipboard clears in 20s", tone: "ok" });
-    // Best-effort auto-clear so secrets don't linger on the clipboard.
-    window.setTimeout(() => navigator.clipboard?.writeText("").catch(() => {}), 20000);
+    const secret = entry.secret;
+    try {
+      await navigator.clipboard.writeText(secret);
+    } catch {
+      toast({ message: "Couldn't access the clipboard", tone: "warn" });
+      return;
+    }
+    toast({ message: "Secret copied to clipboard", tone: "ok" });
+    // Best-effort clear after 20s — only if the clipboard still holds OUR secret, so we never
+    // clobber something the user copied afterwards (and never throws if clipboard-read is denied).
+    window.setTimeout(async () => {
+      try {
+        if ((await navigator.clipboard.readText()) === secret) await navigator.clipboard.writeText("");
+      } catch {
+        /* clipboard-read not permitted — leave it rather than wipe unrelated content */
+      }
+    }, 20000);
   };
 
   const download = async () => {

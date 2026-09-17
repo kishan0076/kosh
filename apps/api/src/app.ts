@@ -36,9 +36,12 @@ export function createApp(): Express {
   // Publishing inlines all project file bytes in the JSON body, so it needs a larger cap than the
   // 2 MB default (10 MB decoded → ~13.3 MB base64 + JSON overhead → 15 MB).
   const publishJsonParser = express.json({ limit: "15mb" });
+  // Vault file/manifest bodies are base64 ciphertext (25 MB file → ~34 MB), well over the 2 MB default.
+  const vaultJsonParser = express.json({ limit: "40mb" });
   app.use((req, res, next) => {
     if (req.path.startsWith("/api/uploads/local/")) return next(); // raw byte upload reads a Buffer
     if (req.path === "/api/repos/publish") return publishJsonParser(req, res, next);
+    if (req.path.startsWith("/api/vault/")) return vaultJsonParser(req, res, next);
     return jsonParser(req, res, next);
   });
   app.use(cookieParser());

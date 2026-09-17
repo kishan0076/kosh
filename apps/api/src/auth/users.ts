@@ -2,12 +2,14 @@ import { randomBytes } from "node:crypto";
 import { config } from "../config.js";
 import { getStore, type ServerUser } from "../db/index.js";
 
-/** Is this user the vault admin? Configured login wins; in dev-login mode with none set, any
- *  authenticated user qualifies (single-user local dev). Production MUST set KOSH_ADMIN_LOGIN. */
+/** Is this user the vault admin? A configured admin login is the only thing that grants access in a
+ *  real deployment. The "any dev-login user is admin" convenience is fail-CLOSED: it applies ONLY in
+ *  non-production local dev, so forgetting KOSH_ADMIN_LOGIN (or NODE_ENV) never opens the vault to
+ *  every authenticated user. */
 export function isAdmin(user: ServerUser | null | undefined): boolean {
   if (!user) return false;
   if (config.vault.adminLogin) return user.login === config.vault.adminLogin;
-  return config.devLogin;
+  return !config.isProd && config.devLogin;
 }
 
 /** Unguessable per-user token for the inbound email address (inbox+<token>@…). */

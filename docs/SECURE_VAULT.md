@@ -71,10 +71,12 @@ Set the admin login (the GitHub login / dev-login username that may open the vau
 KOSH_ADMIN_LOGIN=your-github-login
 ```
 
-Resolution order: `KOSH_ADMIN_LOGIN` → the first entry of `ALLOWED_GITHUB_LOGINS` → in **dev-login**
-mode with neither set, any authenticated user is treated as admin (fine for single-user local dev).
-**In production, always set `KOSH_ADMIN_LOGIN`.** When you're the admin, a **Secure Vault** entry
-appears in your account menu (top-right); it's otherwise hidden and reachable only at `/vault`.
+Resolution order: `KOSH_ADMIN_LOGIN` → the first entry of `ALLOWED_GITHUB_LOGINS` → and, **only in
+non-production local dev**, any dev-login user (single-user convenience). The gate **fails closed**:
+if no admin login is configured in production, the vault is inaccessible rather than open to everyone,
+and the API **refuses to start in production with `DEV_LOGIN` enabled**. Still, **always set
+`KOSH_ADMIN_LOGIN` in production.** When you're the admin, a **Secure Vault** entry appears in your
+account menu (top-right); it's otherwise hidden and reachable only at `/vault`.
 
 ---
 

@@ -82,7 +82,8 @@ export const useVault = create<VaultState>((set, get) => {
     const { key, manifest, data } = get();
     if (!key || !manifest || !data) return;
     const index: Cipher = await encryptJSON(key, data);
-    const next: VaultManifest = { ...manifest, index };
+    // Monotonic version for optimistic concurrency — the server rejects a non-increasing PUT.
+    const next: VaultManifest = { ...manifest, version: (manifest.version ?? 1) + 1, index };
     await vaultApi.putManifest(next);
     set({ manifest: next });
   }

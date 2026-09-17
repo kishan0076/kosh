@@ -94,6 +94,8 @@ if (config.isProd) {
   const insecure: string[] = [];
   if (!env.SESSION_SECRET || env.SESSION_SECRET === "change-me" || config.jwtSecret.startsWith("dev-insecure")) insecure.push("SESSION_SECRET");
   if (!env.ENCRYPTION_KEY || env.ENCRYPTION_KEY.length < 16 || config.encryptionKey.startsWith("dev-insecure")) insecure.push("ENCRYPTION_KEY (>=16 chars)");
+  // DEV_LOGIN lets anyone mint a session without credentials — never allow it in production.
+  if (config.devLogin) insecure.push("DEV_LOGIN=0 (must be off in production)");
   if (insecure.length) {
     throw new Error(`Refusing to start in production without secure ${insecure.join(", ")}. Set these environment variables to strong random values.`);
   }
