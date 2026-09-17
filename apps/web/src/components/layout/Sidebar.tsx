@@ -12,6 +12,7 @@ import {
   Quote,
   Settings,
   Trash2,
+  UploadCloud,
   X,
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
@@ -58,6 +59,7 @@ export function Sidebar({
     { to: "/library", label: "Library", icon: LibraryBig },
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },
     { to: "/prompts", label: "Prompts", icon: Quote, badge: promptCount },
+    { to: "/drive", label: "Google Drive", icon: UploadCloud },
   ];
 
   const storagePct = Math.round((user.storageUsed / user.storageQuota) * 100);
