@@ -79,6 +79,10 @@ To use real MongoDB and Cloudflare R2, set `MONGODB_URI` and the `R2_*` vars (se
 paths are the same. For a step-by-step MongoDB Atlas walkthrough (cluster, user, connection string) and an
 explanation of how Kosh does CRUD against MongoDB, see [`docs/MONGODB_ATLAS_SETUP.md`](docs/MONGODB_ATLAS_SETUP.md).
 
+There's also an admin-only, **end-to-end-encrypted Secure Vault** for personal secrets, notes and
+files — encrypted in the browser, stored separately from the app data. See
+[`docs/SECURE_VAULT.md`](docs/SECURE_VAULT.md).
+
 Other scripts:
 
 ```bash

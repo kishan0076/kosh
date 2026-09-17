@@ -31,3 +31,7 @@ coverage/
 # api local data (in-memory/JSON store + local object store)
 .data/
 apps/api/.data/
+
+# secure vault local storage (encrypted blobs — kept separate from .data, never committed)
+.vault-data/
+apps/api/.vault-data/

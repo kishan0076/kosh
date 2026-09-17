@@ -56,6 +56,7 @@ export function createApp(): Express {
   api.use("/email", limiter(30));
   api.use("/uploads", limiter(120));
   api.use("/repos", limiter(20));
+  api.use("/vault", limiter(60));
 
   api.use(attachUser);
   mountRoutes(api);

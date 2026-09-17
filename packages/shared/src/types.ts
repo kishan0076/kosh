@@ -304,4 +304,6 @@ export interface User {
   emailToken?: string;
   /** GitHub connection status (a write-capable token is stored) — never the token itself. */
   github?: { connected?: boolean };
+  /** Whether this user may access the admin-only Secure Vault. */
+  isAdmin?: boolean;
 }

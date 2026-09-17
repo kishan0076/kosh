@@ -66,6 +66,20 @@ export const config = {
       .filter(Boolean),
   },
 
+  // Secure Vault: admin-only, end-to-end-encrypted. Stored SEPARATELY from the main app data
+  // (its own directory, or its own R2 bucket) and never in MongoDB.
+  vault: {
+    // Which login may access the vault. Falls back to the first allowlisted login; in dev-login
+    // mode with neither set, any authenticated user is treated as admin (document this!).
+    adminLogin: env.KOSH_ADMIN_LOGIN || (env.ALLOWED_GITHUB_LOGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean)[0] || null,
+    // A directory dedicated to the vault, separate from DATA_DIR — only ever holds ciphertext.
+    dir: env.VAULT_DIR ?? ".vault-data",
+    // Optional: route vault ciphertext to its own R2/S3 bucket instead of the local dir.
+    r2Bucket: env.VAULT_R2_BUCKET || null,
+    maxFileBytes: 25 * 1024 * 1024,
+    maxManifestBytes: 8 * 1024 * 1024,
+  },
+
   jobs: bool(env.ENABLE_JOBS, false),
 
   limits: {

@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { Bell, LogOut, Menu as MenuIcon, Plus, RefreshCw, Search, SlidersHorizontal, User } from "lucide-react";
+import { Bell, FolderLock, LogOut, Menu as MenuIcon, Plus, RefreshCw, Search, SlidersHorizontal, User } from "lucide-react";
 import { useData } from "@/data/store";
 import { watchedChanges } from "@/data/selectors";
 import { useUi } from "@/data/ui";
@@ -104,6 +104,11 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           <MenuItem icon={SlidersHorizontal} onClick={() => navigate("/settings")}>
             Preferences
           </MenuItem>
+          {user.isAdmin && (
+            <MenuItem icon={FolderLock} onClick={() => navigate("/vault")}>
+              Secure Vault
+            </MenuItem>
+          )}
           <MenuSeparator />
           <MenuItem
             icon={RefreshCw}

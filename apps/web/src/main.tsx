@@ -10,6 +10,7 @@ import { Skills } from "@/pages/Skills";
 import { SkillEditor } from "@/components/skills/SkillEditor";
 import { ItemPage } from "@/pages/ItemPage";
 import { PublishRepo } from "@/pages/PublishRepo";
+import { Vault } from "@/pages/Vault";
 import { Prompts } from "@/pages/Prompts";
 import { Inbox } from "@/pages/Inbox";
 import { Trash } from "@/pages/Trash";
@@ -37,6 +38,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="add" element={<Add />} />
           <Route path="items/:id" element={<ItemPage />} />
           <Route path="publish" element={<PublishRepo />} />
+          <Route path="vault" element={<Vault />} />
           <Route path="inbox" element={<Inbox />} />
           <Route path="library" element={<Library />} />
           <Route path="skills" element={<Skills />} />

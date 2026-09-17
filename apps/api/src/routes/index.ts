@@ -9,6 +9,7 @@ import { tagsRouter } from "./tags.js";
 import { filesRouter } from "./files.js";
 import { uploadsRouter } from "./uploads.js";
 import { publishRouter } from "./publish.js";
+import { vaultRouter } from "./vault.js";
 import { emailRouter } from "./email.js";
 import { imgRouter } from "./img.js";
 import { mcpRouter } from "../mcp/server.js";
@@ -26,6 +27,7 @@ export function mountRoutes(api: Router): void {
   api.use(filesRouter);
   api.use(uploadsRouter);
   api.use(publishRouter);
+  api.use(vaultRouter);
   api.use(emailRouter);
   api.use(imgRouter);
   api.use(mcpRouter);

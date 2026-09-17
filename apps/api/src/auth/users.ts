@@ -1,5 +1,14 @@
 import { randomBytes } from "node:crypto";
+import { config } from "../config.js";
 import { getStore, type ServerUser } from "../db/index.js";
+
+/** Is this user the vault admin? Configured login wins; in dev-login mode with none set, any
+ *  authenticated user qualifies (single-user local dev). Production MUST set KOSH_ADMIN_LOGIN. */
+export function isAdmin(user: ServerUser | null | undefined): boolean {
+  if (!user) return false;
+  if (config.vault.adminLogin) return user.login === config.vault.adminLogin;
+  return config.devLogin;
+}
 
 /** Unguessable per-user token for the inbound email address (inbox+<token>@…). */
 export const newEmailToken = () => randomBytes(9).toString("base64url");
@@ -51,5 +60,6 @@ export function publicUser(u: ServerUser) {
     aiSpendCap: u.aiSpendCap,
     emailToken: u.emailToken,
     github: { connected: !!u.githubToken },
+    isAdmin: isAdmin(u),
   };
 }

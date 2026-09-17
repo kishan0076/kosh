@@ -35,7 +35,7 @@ async function localExists(key: string): Promise<boolean> {
 type S3Mod = typeof import("@aws-sdk/client-s3");
 let s3Client: InstanceType<S3Mod["S3Client"]> | null = null;
 let s3Mod: S3Mod | null = null;
-async function s3(): Promise<{ mod: S3Mod; client: InstanceType<S3Mod["S3Client"]> }> {
+export async function s3(): Promise<{ mod: S3Mod; client: InstanceType<S3Mod["S3Client"]> }> {
   if (!s3Mod) s3Mod = await import("@aws-sdk/client-s3");
   if (!s3Client) {
     s3Client = new s3Mod.S3Client({
