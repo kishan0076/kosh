@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import {
   ArrowUpDown,
   Check,
@@ -31,10 +31,13 @@ import { Menu, MenuItem, MenuLabel, MenuSeparator } from "@/components/overlays"
 import { driveApi } from "@/data/driveApi";
 import { filterBucket, kindOf, type DriveNode, type FilterKind } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, type ItemHandlers } from "@/components/drive-v2/items";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
 import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components/drive-v2/modals";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
+import { CommandPalette } from "@/components/drive-v2/CommandPalette";
+import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
 
 /* ── sorting / filtering (client-side over loaded pages) ── */
 function sortNodes(nodes: DriveNode[], key: SortKey, dir: "asc" | "desc"): DriveNode[] {
@@ -125,7 +128,17 @@ function Shell() {
 
   const [menu, setMenu] = useState<{ ids: string[]; node: DriveNode; x: number; y: number } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Global ⌘K / Ctrl+K opens the command palette.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((v) => !v); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
 
   const visible = useMemo(() => {
     const filtered = prefs.filterKind ? nodes.filter((n) => filterBucket(n) === prefs.filterKind) : nodes;
@@ -160,6 +173,8 @@ function Shell() {
     },
     onRenameSubmit: (node, name) => { void store.getState().rename(node.id, name); setRenamingId(null); },
     onRenameCancel: () => setRenamingId(null),
+    onDragStart: (node, e) => setDragIds(e, targetsFor(node)),
+    onFolderDrop: (folder, ids) => void store.getState().move(ids, folder.id),
   };
 
   // Keyboard shortcuts scoped to the content region.
@@ -227,6 +242,7 @@ function Shell() {
 
       {uploads.length > 0 && <UploadTray />}
 
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onUpload={() => fileInputRef.current?.click()} />
       {menu && <ContextMenu x={menu.x} y={menu.y} actions={menuActions} onClose={() => setMenu(null)} />}
       {dialog?.kind === "newFolder" && <CreateFolderModal parentId={dialog.parentId} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "delete" && <DeleteConfirmModal ids={dialog.ids} permanent={dialog.permanent} onClose={() => store.getState().closeDialog()} />}
@@ -364,14 +380,14 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
       <div className="mr-auto flex min-w-0 items-center gap-1 text-[13px]">
         {view === "myDrive" ? (
           <>
-            <button onClick={() => useDriveV2.getState().goRoot()} className="rounded px-1.5 py-0.5 font-medium hover:bg-surface-2">My Drive</button>
+            <CrumbButton folderId="root" onClick={() => useDriveV2.getState().goRoot()} className="font-medium">My Drive</CrumbButton>
             {path.map((f, i) => (
               <span key={f.id} className="flex min-w-0 items-center gap-0.5">
                 <ChevronRight size={13} className="shrink-0 text-faint" />
                 {i === path.length - 1 ? (
                   <span className="max-w-[180px] truncate px-1.5 py-0.5 font-semibold">{f.name}</span>
                 ) : (
-                  <button onClick={() => useDriveV2.getState().breadcrumbTo(i)} className="max-w-[140px] truncate rounded px-1.5 py-0.5 hover:bg-surface-2">{f.name}</button>
+                  <CrumbButton folderId={f.id} onClick={() => useDriveV2.getState().breadcrumbTo(i)} className="max-w-[140px] truncate">{f.name}</CrumbButton>
                 )}
               </span>
             ))}
@@ -424,6 +440,22 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
   );
 }
 
+/** A breadcrumb segment that also accepts an internal drag to move items into that folder. */
+function CrumbButton({ folderId, onClick, className, children }: { folderId: string; onClick: () => void; className?: string; children: ReactNode }) {
+  const [over, setOver] = useState(false);
+  return (
+    <button
+      onClick={onClick}
+      onDragOver={(e) => { if (hasDriveDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOver(true); } }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => { if (!hasDriveDrag(e)) return; e.preventDefault(); setOver(false); const ids = getDragIds(e); if (ids?.length) void useDriveV2.getState().move(ids, folderId); }}
+      className={cn("rounded px-1.5 py-0.5 hover:bg-surface-2", over && "bg-primary-soft ring-1 ring-primary", className)}
+    >
+      {children}
+    </button>
+  );
+}
+
 /* ── selection action bar ── */
 function SelectionBar() {
   const selection = useDriveV2((s) => s.selection);
@@ -470,16 +502,19 @@ function DriveContentArea({
   onDropFiles: (files: File[]) => void;
 }) {
   const [drag, setDrag] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const canDrop = view === "myDrive";
-  const rowProps = (node: DriveNode) => ({ node, selected: selection.has(node.id), busy: busyIds.has(node.id), renaming: renamingId === node.id, ...handlers });
+  const rowProps = (node: DriveNode): ItemRowProps => ({ node, selected: selection.has(node.id), busy: busyIds.has(node.id), renaming: renamingId === node.id, ...handlers });
 
-  // The drop target wraps ALL states (incl. skeleton/empty), so drag-and-drop upload works even in an
-  // empty folder. onDragLeave ignores transitions onto descendants to avoid overlay flicker.
+  // The drop target wraps ALL states so external-file drag-and-drop upload works even in an empty
+  // folder. It reacts ONLY to external files — internal node drags are handled by folder/breadcrumb
+  // drop targets, so dragging within the grid never shows "Drop to upload".
   return (
     <div
-      onDragOver={canDrop ? (e) => { e.preventDefault(); setDrag(true); } : undefined}
+      ref={scrollRef}
+      onDragOver={canDrop ? (e) => { if (hasExternalFiles(e) && !hasDriveDrag(e)) { e.preventDefault(); setDrag(true); } } : undefined}
       onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
-      onDrop={canDrop ? (e) => { e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
+      onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
       className={cn("relative max-h-[calc(100dvh-14rem)] min-h-[320px] overflow-y-auto", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
     >
       {drag && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-primary-soft/40 text-[14px] font-semibold text-primary">Drop to upload here</div>}
@@ -490,15 +525,68 @@ function DriveContentArea({
       ) : !visible.length ? (
         <DriveEmptyState view={view} onUpload={onUpload} />
       ) : layout === "list" ? (
-        <div>
-          <ListHeader />
-          {visible.map((n) => <FileRow key={n.id} {...rowProps(n)} />)}
-        </div>
+        <VirtualList scrollRef={scrollRef} visible={visible} rowProps={rowProps} />
       ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3 p-3">
-          {visible.map((n) => <FileCard key={n.id} {...rowProps(n)} />)}
-        </div>
+        <VirtualGrid scrollRef={scrollRef} visible={visible} rowProps={rowProps} />
       )}
+    </div>
+  );
+}
+
+type ItemRowProps = { node: DriveNode; selected: boolean; busy: boolean; renaming: boolean } & ItemHandlers;
+
+/** Virtualized list — only the visible rows are mounted, so 10k-item folders stay smooth. */
+function VirtualList({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HTMLDivElement | null>; visible: DriveNode[]; rowProps: (n: DriveNode) => ItemRowProps }) {
+  const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => 41, overscan: 12 });
+  return (
+    <div>
+      <ListHeader />
+      <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+        {virt.getVirtualItems().map((vi) => {
+          const n = visible[vi.index]!;
+          return (
+            <div key={n.id} data-index={vi.index} ref={virt.measureElement} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}>
+              <FileRow {...rowProps(n)} />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Virtualized responsive grid — columns from container width, rows virtualized. */
+function VirtualGrid({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HTMLDivElement | null>; visible: DriveNode[]; rowProps: (n: DriveNode) => ItemRowProps }) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [cols, setCols] = useState(4);
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const compute = () => { const w = el.clientWidth; const min = 150, gap = 12; setCols(Math.max(1, Math.floor((w + gap) / (min + gap)))); };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const rows = Math.ceil(visible.length / cols);
+  const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => 174, overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
+  return (
+    <div ref={gridRef} className="p-3">
+      <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+        {virt.getVirtualItems().map((vr) => {
+          const items = visible.slice(vr.index * cols, vr.index * cols + cols);
+          return (
+            <div
+              key={vr.key}
+              data-index={vr.index}
+              ref={virt.measureElement}
+              style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "12px", paddingBottom: "12px" }}
+            >
+              {items.map((n) => <FileCard key={n.id} {...rowProps(n)} />)}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

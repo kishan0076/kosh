@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
@@ -6,6 +6,28 @@ import { ago } from "@/lib/time";
 import { Spinner } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
 import type { DriveView } from "@/data/driveV2";
+import { getDragIds, hasDriveDrag } from "./dnd";
+
+/** Shared internal-drag drop handlers for a folder node (move onto folder). */
+function useFolderDrop(node: DriveNode, onFolderDrop: (folder: DriveNode, ids: string[]) => void) {
+  const [over, setOver] = useState(false);
+  if (!node.isFolder) return { over: false, dropProps: {} };
+  return {
+    over,
+    dropProps: {
+      onDragOver: (e: ReactDragEvent) => { if (hasDriveDrag(e)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"; setOver(true); } },
+      onDragLeave: () => setOver(false),
+      onDrop: (e: ReactDragEvent) => {
+        if (!hasDriveDrag(e)) return; // external file drop bubbles to the content upload zone
+        e.preventDefault();
+        e.stopPropagation();
+        setOver(false);
+        const ids = getDragIds(e)?.filter((id) => id !== node.id); // never drop a folder onto itself
+        if (ids && ids.length) onFolderDrop(node, ids);
+      },
+    },
+  };
+}
 
 const KIND_ICON: Record<DriveKind, typeof File> = {
   folder: Folder,
@@ -59,6 +81,8 @@ export interface ItemHandlers {
   onMore: (node: DriveNode, e: ReactMouseEvent) => void;
   onRenameSubmit: (node: DriveNode, name: string) => void;
   onRenameCancel: () => void;
+  onDragStart: (node: DriveNode, e: ReactDragEvent) => void;
+  onFolderDrop: (folder: DriveNode, ids: string[]) => void;
 }
 interface ItemProps extends ItemHandlers {
   node: DriveNode;
@@ -99,18 +123,22 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
 }
 
 /* ── list row ── */
-export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onContext, onMore, onRenameSubmit, onRenameCancel }: ItemProps) {
+export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onContext, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+  const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   return (
     <div
       role="row"
       tabIndex={-1}
       data-node-id={node.id}
+      draggable={!renaming}
+      onDragStart={(e) => onDragStart(node, e)}
+      {...dropProps}
       onClick={(e) => onClick(node, e)}
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
         "group grid grid-cols-[minmax(0,1fr)_140px_120px_36px] items-center gap-3 border-b border-border px-3 py-2 text-[13px] transition-colors sm:grid-cols-[minmax(0,1fr)_150px_130px_36px]",
-        selected ? "bg-primary-soft" : "hover:bg-surface-2",
+        over ? "bg-primary-soft ring-1 ring-inset ring-primary" : selected ? "bg-primary-soft" : "hover:bg-surface-2",
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
@@ -144,18 +172,22 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
 }
 
 /* ── grid card ── */
-export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onMore, onRenameSubmit, onRenameCancel }: ItemProps) {
+export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+  const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   return (
     <div
       role="gridcell"
       tabIndex={-1}
       data-node-id={node.id}
+      draggable={!renaming}
+      onDragStart={(e) => onDragStart(node, e)}
+      {...dropProps}
       onClick={(e) => onClick(node, e)}
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
         "group relative flex flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-colors",
-        selected ? "border-primary ring-1 ring-primary" : "border-border hover:border-border-strong hover:bg-surface-2",
+        over ? "border-primary ring-2 ring-primary" : selected ? "border-primary ring-1 ring-primary" : "border-border hover:border-border-strong hover:bg-surface-2",
       )}
     >
       <div className="relative flex h-28 items-center justify-center overflow-hidden bg-surface-2">

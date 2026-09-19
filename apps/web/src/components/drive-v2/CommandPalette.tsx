@@ -1,0 +1,164 @@
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { Clock, CornerDownLeft, FolderPlus, HardDrive, LayoutGrid, List as ListIcon, Search, Star, Trash2, Upload } from "lucide-react";
+import { cn } from "@/lib/cn";
+import { Spinner } from "@/components/ui";
+import { driveV2Api, type DriveNode } from "@/data/driveV2Api";
+import { useDriveV2 } from "@/data/driveV2";
+import { NodeIcon } from "./items";
+
+interface Command {
+  id: string;
+  label: string;
+  hint?: string;
+  icon: ComponentType<{ size?: number; className?: string }>;
+  keywords?: string;
+  run: () => void;
+}
+
+/** ⌘K command palette: jump between views, run actions, and search-and-open any file. */
+export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onClose: () => void; onUpload: () => void }) {
+  const accountId = useDriveV2((s) => s.accountId);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<DriveNode[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [active, setActive] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setQuery("");
+      setResults([]);
+      setActive(0);
+      // focus after paint
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [open]);
+
+  // Debounced file search (only when there's a query).
+  useEffect(() => {
+    if (!open || !accountId || query.trim().length < 2) { setResults([]); setSearching(false); return; }
+    let live = true;
+    setSearching(true);
+    const t = window.setTimeout(async () => {
+      try {
+        const r = await driveV2Api.search(accountId, { text: query.trim() });
+        if (live) setResults(r.files.slice(0, 8));
+      } catch {
+        if (live) setResults([]);
+      } finally {
+        if (live) setSearching(false);
+      }
+    }, 220);
+    return () => { live = false; window.clearTimeout(t); };
+  }, [open, accountId, query]);
+
+  const s = useDriveV2.getState;
+  const commands = useMemo<Command[]>(() => {
+    const list: Command[] = [
+      { id: "v-my", label: "Go to My Drive", icon: HardDrive, keywords: "home root", run: () => s().setView("myDrive") },
+      { id: "v-recent", label: "Go to Recent", icon: Clock, run: () => s().setView("recent") },
+      { id: "v-starred", label: "Go to Starred", icon: Star, run: () => s().setView("starred") },
+      { id: "v-trash", label: "Go to Trash", icon: Trash2, run: () => s().setView("trash") },
+      { id: "a-newfolder", label: "New folder", icon: FolderPlus, keywords: "create", run: () => s().openDialog({ kind: "newFolder", parentId: s().path.at(-1)?.id ?? "root" }) },
+      { id: "a-upload", label: "Upload files", icon: Upload, run: onUpload },
+      { id: "a-grid", label: "Switch to grid view", icon: LayoutGrid, run: () => s().setLayout("grid") },
+      { id: "a-list", label: "Switch to list view", icon: ListIcon, run: () => s().setLayout("list") },
+    ];
+    const q = query.trim().toLowerCase();
+    return q ? list.filter((c) => (c.label + " " + (c.keywords ?? "")).toLowerCase().includes(q)) : list;
+  }, [query, onUpload, s]);
+
+  // Combined, index-addressable rows: commands first, then file results.
+  const fileRows = results.map((node) => ({
+    id: "f-" + node.id,
+    node,
+    run: () => { if (node.isFolder) s().openFolder(node); else s().setPreview(node.id); },
+  }));
+  const total = commands.length + fileRows.length;
+
+  useEffect(() => { setActive(0); }, [query, results.length]);
+
+  function runAt(index: number) {
+    if (index < commands.length) commands[index]?.run();
+    else fileRows[index - commands.length]?.run();
+    onClose();
+  }
+
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-start justify-center p-4 pt-[12vh]" onClick={onClose}>
+      <div className="fixed inset-0 bg-black/45 backdrop-blur-[2px]" />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(a + 1, total - 1)); }
+          else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+          else if (e.key === "Enter") { e.preventDefault(); if (total) runAt(active); }
+          else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+        }}
+        className="relative z-10 w-full max-w-xl overflow-hidden rounded-[var(--radius-panel)] border border-border bg-elevated shadow-[var(--shadow-pop)]"
+      >
+        <div className="flex items-center gap-2.5 border-b border-border px-4">
+          <Search size={17} className="shrink-0 text-muted" />
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search files or run a command…"
+            className="w-full bg-transparent py-3.5 text-[14px] outline-none placeholder:text-faint"
+          />
+          {searching && <Spinner size={15} className="text-muted" />}
+        </div>
+        <div ref={listRef} className="max-h-[52vh] overflow-y-auto p-1.5">
+          {total === 0 ? (
+            <div className="px-3 py-8 text-center text-[13px] text-muted">No matches.</div>
+          ) : (
+            <>
+              {commands.length > 0 && <div className="px-2.5 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-faint">Actions</div>}
+              {commands.map((c, i) => (
+                <Row key={c.id} active={active === i} onMouseEnter={() => setActive(i)} onClick={() => runAt(i)}>
+                  <c.icon size={16} className="shrink-0 text-muted" />
+                  <span className="flex-1 truncate">{c.label}</span>
+                </Row>
+              ))}
+              {fileRows.length > 0 && <div className="px-2.5 pb-1 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-faint">Files</div>}
+              {fileRows.map((f, i) => {
+                const index = commands.length + i;
+                return (
+                  <Row key={f.id} active={active === index} onMouseEnter={() => setActive(index)} onClick={() => runAt(index)}>
+                    <span className="grid h-5 w-5 shrink-0 place-items-center overflow-hidden rounded"><NodeIcon node={f.node} size={15} /></span>
+                    <span className="flex-1 truncate">{f.node.name}</span>
+                    {f.node.isFolder && <span className="shrink-0 text-[11px] text-faint">Folder</span>}
+                  </Row>
+                );
+              })}
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-3 border-t border-border px-3 py-2 text-[11px] text-faint">
+          <span className="inline-flex items-center gap-1"><CornerDownLeft size={12} /> open</span>
+          <span>↑↓ navigate</span>
+          <span>esc close</span>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function Row({ active, onClick, onMouseEnter, children }: { active: boolean; onClick: () => void; onMouseEnter: () => void; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={onMouseEnter}
+      className={cn("flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13.5px] transition-colors", active ? "bg-primary-soft text-foreground" : "hover:bg-surface-2")}
+    >
+      {children}
+    </button>
+  );
+}
