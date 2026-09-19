@@ -11,6 +11,7 @@ import { SkillEditor } from "@/components/skills/SkillEditor";
 import { ItemPage } from "@/pages/ItemPage";
 import { PublishRepo } from "@/pages/PublishRepo";
 import { Drive } from "@/pages/Drive";
+import { DriveV2 } from "@/pages/DriveV2";
 import { Vault } from "@/pages/Vault";
 import { Prompts } from "@/pages/Prompts";
 import { Inbox } from "@/pages/Inbox";
@@ -40,6 +41,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="items/:id" element={<ItemPage />} />
           <Route path="publish" element={<PublishRepo />} />
           <Route path="drive" element={<Drive />} />
+          <Route path="drive-v2" element={<DriveV2 />} />
           <Route path="vault" element={<Vault />} />
           <Route path="inbox" element={<Inbox />} />
           <Route path="library" element={<Library />} />

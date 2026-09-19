@@ -3,6 +3,7 @@ import {
   Blocks,
   ChevronLeft,
   FolderOpen,
+  HardDrive,
   HelpCircle,
   Home,
   Inbox,
@@ -60,6 +61,7 @@ export function Sidebar({
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },
     { to: "/prompts", label: "Prompts", icon: Quote, badge: promptCount },
     { to: "/drive", label: "Google Drive", icon: UploadCloud },
+    { to: "/drive-v2", label: "Drive", icon: HardDrive },
   ];
 
   const storagePct = Math.round((user.storageUsed / user.storageQuota) * 100);
