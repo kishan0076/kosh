@@ -68,7 +68,7 @@ export interface DriveUploadRecord {
 export const driveApi = {
   /** A full-page redirect to this URL starts the Google consent flow. */
   connectUrl: () => `${API_BASE}/drive/auth`,
-  config: () => dreq<{ configured: boolean; scope: string; fullAccess: boolean }>("/drive/config"),
+  config: () => dreq<{ configured: boolean; scope: string; fullAccess: boolean; pushSync?: boolean }>("/drive/config"),
   listAccounts: () => dreq<{ accounts: DriveAccount[]; configured: boolean }>("/drive/accounts"),
   deleteAccount: (id: string) => dreq<{ ok: boolean }>(`/drive/accounts/${id}`, { method: "DELETE" }),
   mintToken: (id: string) => dreq<{ accessToken: string; expiresIn: number }>(`/drive/accounts/${id}/token`, { method: "POST" }),

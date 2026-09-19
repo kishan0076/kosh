@@ -46,6 +46,23 @@ account's granted scope (exact-token match on `…/auth/drive`).
 > test users can grant it, Google requires OAuth verification + a CASA security assessment. Plan for
 > this early; in **Testing** mode your own test-user account works immediately.
 
+### Optional: near-instant push sync (`changes.watch`)
+
+Sync works out of the box via polling. To upgrade it to **push** (Google notifies the server the instant
+anything changes), set on the API:
+
+```dotenv
+DRIVE_WEBHOOK_URL=https://<your-public-api-host>/api/drive-v2/webhook/changes
+```
+
+- The URL must be **publicly reachable over HTTPS** (Google POSTs to it) and its domain **verified** for
+  your app (Google Search Console / the Cloud console domain-verification list) — Google refuses to
+  register a channel on an unverified domain.
+- Leave it unset (e.g. localhost, or a host Google can't reach) and V2 silently uses the polling sync —
+  no degraded UI, no errors.
+- Push is **single-instance**: the channel registry and SSE sockets live in the API process. A
+  multi-instance deployment needs a shared registry + pub/sub (documented in §6, not built).
+
 ---
 
 ## 3. Architecture
@@ -57,6 +74,13 @@ account's granted scope (exact-token match on `…/auth/drive`).
 - **Optimistic + rollback:** every action updates the UI instantly, then reconciles with Drive's
   authoritative response — or rolls back and shows a retry toast on failure. A sequence guard prevents a
   slow response from clobbering newer navigation.
+- **Push sync path (when enabled):** the server opens one `changes.watch` channel per active account
+  (user corpus, `includeItemsFromAllDrives` → also covers Shared Drives). Google POSTs a headers-only
+  ping → the server validates the per-channel token, polls `changes.list`, and fans the changes out to
+  that account's open browser tabs over **Server-Sent Events**. Channels auto-renew before their ~6h TTL
+  and are stopped (`channels.stop`) when the last tab leaves. The browser's poller idles while the SSE
+  stream is healthy and takes over instantly if it drops. A generation guard discards any in-flight poll
+  or SSE frame after an account/space switch.
 - **New files only (V1 untouched):** `integrations/googleDriveV2.ts`, `routes/driveV2.ts`,
   `data/driveV2Api.ts`, `data/driveV2.ts`, `pages/DriveV2.tsx`, `components/drive-v2/*`. The only shared
   edits are additive: the router mount, a `/drive-v2` rate limit, the route, and the sidebar entry.
@@ -84,9 +108,11 @@ account's granted scope (exact-token match on `…/auth/drive`).
 - **Embedded preview** — PDFs, videos, and Google Docs/Sheets/Slides open **inline** in a full-screen
   viewer (Drive's own embed via a scoped CSP `frame-src`); images render directly; anything else offers
   "Open in Drive".
-- **Live two-way sync** — a background poller (`changes.list` from a `startPageToken`) keeps the open
-  view in step with Drive: external edits, new files and deletions appear automatically. A toolbar
-  **sync pill** shows live / syncing / error + "synced N ago"; polling pauses when the tab is hidden.
+- **Live two-way sync** — external edits, new files and deletions appear automatically. When the server
+  is configured with a public webhook URL it uses **`changes.watch` push** (Google pings the server →
+  the server relays over **SSE** → near-instant); otherwise it falls back to a **`changes.list` poller**
+  (every ~12s, paused when the tab is hidden). A toolbar **sync pill** shows live / syncing / error and,
+  for polling, "synced N ago"; if the push stream drops, the poller seamlessly covers the gap.
 - **Activity timeline** — every change (created / edited / trashed / removed), in Kosh or elsewhere in
   Drive, streams into an Activity panel while the tab is open, with **CSV export** (a lightweight audit
   log).
@@ -122,9 +148,6 @@ account's granted scope (exact-token match on `…/auth/drive`).
 
 Realistic with the current scope; not built yet:
 
-- **`changes.watch` push webhooks** — today sync is *polling* (`changes.list` every ~12s while the tab
-  is visible), which is simple and reliable. Push notifications would cut latency to near-instant but
-  need a public, verifiable callback endpoint + channel lifecycle management on the server.
 - **Drag-drop upload into a specific folder** — drop external files directly onto a folder row (today
   they upload into the current folder).
 - **In-place revision restore** — promote an old revision to "current" without the download-then-reupload
@@ -159,8 +182,10 @@ not shipping — so they're documented here with exactly what each one needs, an
 Reads: `GET /list?parent=`, `/search` (text/mimeType/mimeContains/owner/before/after/starred),
 `/recent`, `/starred`, `/trash`, `/shared`, `/scan?orderBy=&cap=`, `/files/:fileId`, `/path?folder=`,
 `/files/:fileId/permissions`, `/files/:fileId/revisions`, `/drives` (Shared Drives),
-`/changes/start` + `/changes?pageToken=` (live sync). All list/search/view reads accept an optional
-`?driveId=` to scope to a Shared Drive. Writes: `POST /folders`,
+`/changes/start` + `/changes?pageToken=` (poll sync), `/events` (SSE push stream). All list/search/view
+reads accept an optional `?driveId=` to scope to a Shared Drive. **Unauthenticated:**
+`POST /drive-v2/webhook/changes` is Google's `changes.watch` callback (validated by the per-channel
+`X-Goog-Channel-Token`, never a session). Writes: `POST /folders`,
 `PATCH /files/:fileId/rename|star|trash|meta`, `POST /files/:fileId/move|copy`, `DELETE /files/:fileId`,
 `POST /empty-trash`, `POST|PATCH|DELETE /files/:fileId/permissions[/:permId]`,
 `PATCH /files/:fileId/revisions/:revId` (keep-forever) + `DELETE /files/:fileId/revisions/:revId`.
@@ -177,8 +202,10 @@ browser→Google directly with a short-lived token (never proxied). Errors use K
   "—" and offers "Open in Drive".
 - **File copy** is atomic; **folder copy** is a bounded (500-op) client-side walk.
 - **Insights** scans up to 20k files and flags when the result was sampled.
-- **Live sync** polls every ~12s while the tab is visible and pauses when hidden (to save quota); it
-  re-anchors its page token when you switch account or Shared Drive. The Activity timeline lives only in
+- **Live sync** is push (`changes.watch` → SSE) when `DRIVE_WEBHOOK_URL` is set, else a ~12s poll that
+  pauses when the tab is hidden; either way it re-anchors its page token when you switch account or
+  Shared Drive, and the poller catches up automatically if the push stream drops. Push channels are
+  in-memory (single-instance) and auto-renew before their ~6h TTL. The Activity timeline lives only in
   the open tab (it is not persisted server-side) and is capped at 200 recent entries.
 - **Embedded preview** requires `frame-src https://drive.google.com https://docs.google.com` in the web
   CSP (`apps/web/public/_headers`); the iframe is sandboxed. It reflects Drive's own sharing — a file you

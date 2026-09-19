@@ -38,6 +38,7 @@ import {
   updateRevision,
   type ViewOpts,
 } from "../integrations/googleDriveV2.js";
+import { addSubscriber, ensureWatch, handleNotification, pushEnabled, removeSubscriber } from "../integrations/driveV2Push.js";
 
 /**
  * Google Drive V2 router — full-CRUD "control center". SEPARATE from routes/drive.ts (V1), which is
@@ -197,6 +198,53 @@ driveV2Router.get(
     res.json(await driveCall(listChanges(token, pageToken, driveIdOf(req))));
   }),
 );
+
+/* ── push sync (changes.watch → SSE) ── */
+
+// Server-Sent Events: the browser opens this once and receives change batches pushed from the webhook.
+driveV2Router.get(
+  "/drive-v2/accounts/:id/events",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const acc = await ownedAccount(uid, String(req.params.id)); // 404s if not the caller's account
+    if (!pushEnabled()) throw new AppError("PUSH_DISABLED", "Push sync isn't configured on this server.", 501);
+    res.status(200);
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // don't let a reverse proxy buffer the stream
+    res.flushHeaders?.();
+    res.write("retry: 10000\n\n");
+    res.write(`data: ${JSON.stringify({ type: "ready" })}\n\n`);
+    addSubscriber(acc.id, res);
+    await ensureWatch(acc.id, uid).catch(() => {}); // best-effort; polling still covers gaps
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(": ping\n\n"); // comment frame keeps the connection alive through proxies
+      } catch {
+        /* closed */
+      }
+    }, 25_000);
+    heartbeat.unref?.();
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      removeSubscriber(acc.id, res);
+    });
+  }),
+);
+
+// Google's webhook target: a headers-only ping. Unauthenticated (Google can't send a cookie) — it is
+// validated by the per-channel X-Goog-Channel-Token inside handleNotification. Respond 200 fast, then
+// poll + fan out asynchronously so Google doesn't time out and retry.
+driveV2Router.post("/drive-v2/webhook/changes", (req, res) => {
+  const h = {
+    channelId: req.header("x-goog-channel-id"),
+    token: req.header("x-goog-channel-token"),
+    state: req.header("x-goog-resource-state"),
+  };
+  res.status(200).end();
+  void handleNotification(h).catch(() => {});
+});
 
 driveV2Router.get(
   "/drive-v2/accounts/:id/files/:fileId",

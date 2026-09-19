@@ -77,7 +77,7 @@ driveRouter.get(
   "/drive/config",
   ah(async (req, res) => {
     requireUser(req);
-    res.json({ configured: googleConfigured(), scope: driveScopes(), fullAccess: config.google.fullAccess });
+    res.json({ configured: googleConfigured(), scope: driveScopes(), fullAccess: config.google.fullAccess, pushSync: !!config.google.webhookUrl });
   }),
 );
 

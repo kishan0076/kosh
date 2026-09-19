@@ -247,6 +247,40 @@ export async function listChanges(
   return { changes, newStartPageToken: json.newStartPageToken, nextPageToken: json.nextPageToken };
 }
 
+/* ── push notifications (changes.watch) — near-instant sync ── */
+
+export interface WatchResult {
+  resourceId: string;
+  expiration?: number; // ms epoch when the channel stops delivering (Drive caps ≈24h)
+}
+
+/**
+ * Open a `changes.watch` channel so Google POSTs a (headers-only) ping to `address` on every change.
+ * `token` is echoed back in the `X-Goog-Channel-Token` header and MUST be validated on each ping.
+ * The user-corpus watch (no driveId) also surfaces Shared-Drive changes via includeItemsFromAllDrives.
+ */
+export async function watchChanges(
+  accessToken: string,
+  pageToken: string,
+  opts: { channelId: string; address: string; token: string; ttlMs?: number },
+): Promise<WatchResult> {
+  const u = new URL(`${DRIVE_API}/changes/watch`);
+  u.searchParams.set("pageToken", pageToken);
+  u.searchParams.set("supportsAllDrives", "true");
+  u.searchParams.set("includeItemsFromAllDrives", "true");
+  const body: Record<string, unknown> = { id: opts.channelId, type: "web_hook", address: opts.address, token: opts.token };
+  if (opts.ttlMs) body.expiration = String(Date.now() + opts.ttlMs);
+  const res = await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Couldn't start push sync");
+  const json = (await res.json()) as { resourceId?: string; expiration?: string };
+  return { resourceId: String(json.resourceId), expiration: json.expiration ? Number(json.expiration) : undefined };
+}
+
+/** Close a previously-opened watch channel (best-effort; expired channels 404 harmlessly). */
+export async function stopChannel(accessToken: string, channelId: string, resourceId: string): Promise<void> {
+  const u = new URL(`${DRIVE_API}/channels/stop`);
+  await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: channelId, resourceId }) }, "Couldn't stop push sync");
+}
+
 /* ── analytics scan (duplicates / largest / stale / storage breakdown) ── */
 
 export interface DriveScanFile {

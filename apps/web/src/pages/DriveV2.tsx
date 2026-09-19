@@ -412,6 +412,7 @@ function SyncPill() {
     sync.status === "syncing" ? "Syncing…" :
     sync.status === "error" ? "Sync error" :
     sync.status === "off" ? "Sync off" :
+    sync.via === "push" ? "Live" :
     sync.lastAt ? `Synced ${ago(new Date(sync.lastAt).toISOString())}` : "Live";
   const dot =
     sync.status === "error" ? "bg-danger" :
@@ -421,7 +422,7 @@ function SyncPill() {
   return (
     <button
       onClick={() => setActivity(true)}
-      title="Live two-way sync with Google Drive — open activity"
+      title={sync.via === "push" ? "Live push sync with Google Drive — open activity" : "Live two-way sync with Google Drive — open activity"}
       className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[12px] text-muted hover:bg-surface-2"
     >
       {sync.status === "syncing" ? <RefreshCw size={13} className="animate-spin text-primary" /> : <span className={cn("h-1.5 w-1.5 rounded-full", dot)} />}

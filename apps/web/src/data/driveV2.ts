@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { uid } from "@/lib/ids";
+import { API_BASE, ApiError } from "./api";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
 import { driveV2Api, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
@@ -47,8 +48,9 @@ interface ViewPrefs {
 export type SyncStatus = "off" | "live" | "syncing" | "error";
 export interface SyncState {
   status: SyncStatus;
-  lastAt: number | null; // ms epoch of the last successful poll
+  lastAt: number | null; // ms epoch of the last successful poll/push
   applied: number; // running count of changes applied this session
+  via: "push" | "poll" | null; // how live sync is currently delivered
 }
 
 /** One entry in the activity/changes timeline (exportable as an audit log). */
@@ -65,6 +67,7 @@ interface DriveV2State {
   error: string | null;
   configured: boolean;
   fullAccess: boolean;
+  pushSync: boolean; // server supports changes.watch push (SSE); else the poller is the only sync
 
   accounts: DriveAccount[];
   accountId: string | null;
@@ -174,6 +177,9 @@ let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncToken: string | null = null; // changes.list page token ("where we are")
 let syncGen = 0; // bumped on account/space switch + stop; a stale in-flight poll must not write state
 let syncInFlight = false; // re-entrancy guard so a refocus can't run two concurrent polls
+let eventSource: EventSource | null = null; // push channel (changes.watch → SSE); null when polling
+let sseConnected = false; // true while the SSE stream is healthy — the poller idles then
+const SSE_IDLE_INTERVAL = 60_000; // safety-net poll cadence while push is delivering
 
 const PREFS_KEY = "kosh.driveV2.prefs";
 const DEFAULT_PREFS: ViewPrefs = { layout: "grid", sortKey: "name", sortDir: "asc", filterKind: null };
@@ -377,7 +383,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const { accountId, scopeOk, spaceId } = get();
     const visible = typeof document === "undefined" || document.visibilityState === "visible";
     let nextDelay = SYNC_INTERVAL;
-    if (syncActive && accountId && scopeOk && visible) {
+    // While the SSE push channel is healthy it delivers changes; the poller idles as a safety net.
+    if (syncActive && accountId && scopeOk && visible && !sseConnected) {
       syncInFlight = true;
       try {
         if (!syncToken) {
@@ -385,7 +392,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
           const { startPageToken } = await driveV2Api.changesStart(accountId, spaceId ?? undefined);
           if (gen === syncGen) {
             syncToken = startPageToken;
-            set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied } }));
+            set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied, via: "poll" } }));
           }
         } else {
           set((s) => ({ sync: { ...s.sync, status: "syncing" } }));
@@ -394,17 +401,64 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
           if (gen === syncGen) {
             applyChanges(changes);
             syncToken = nextPageToken ?? newStartPageToken ?? syncToken;
-            set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + changes.length } }));
+            set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + changes.length, via: "poll" } }));
             if (nextPageToken) nextDelay = 300; // more pages queued — drain promptly
           }
         }
-      } catch {
+      } catch (err) {
+        // A stale/invalid page token (Google 400/404/410) can't be reused — re-anchor next tick.
+        if (err instanceof ApiError && (err.status === 400 || err.status === 404 || err.status === 410)) syncToken = null;
         if (gen === syncGen) set((s) => ({ sync: { ...s.sync, status: "error" } }));
       } finally {
         syncInFlight = false;
       }
     }
-    scheduleSync(nextDelay);
+    scheduleSync(sseConnected ? SSE_IDLE_INTERVAL : nextDelay);
+  }
+
+  /** Open the SSE push channel for the current account; SSE delivers changes, the poller idles. */
+  function openEventSource(): void {
+    if (typeof EventSource === "undefined") return; // SSR / unsupported
+    const { accountId, pushSync, scopeOk } = get();
+    if (!pushSync || !accountId || !scopeOk) return;
+    closeEventSource();
+    const esAccount = accountId;
+    const es = new EventSource(`${API_BASE}/drive-v2/accounts/${accountId}/events`, { withCredentials: true });
+    let openedOnce = false;
+    es.onopen = () => {
+      if (get().accountId !== esAccount) return;
+      sseConnected = true;
+      if (openedOnce) void load(true); // a RECONNECT may have missed pushes while down — refresh the view
+      openedOnce = true;
+      set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied, via: "push" } }));
+    };
+    es.onmessage = (ev) => {
+      if (get().accountId !== esAccount) return;
+      try {
+        const msg = JSON.parse(ev.data) as { type?: string; changes?: DriveChange[] };
+        if (msg?.type === "changes" && Array.isArray(msg.changes)) {
+          applyChanges(msg.changes);
+          set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + msg.changes!.length, via: "push" } }));
+        }
+      } catch {
+        /* ignore a malformed frame */
+      }
+    };
+    es.onerror = () => {
+      // The browser auto-reconnects; until it does, drop to polling (re-anchored) so nothing is missed.
+      if (sseConnected) {
+        sseConnected = false;
+        syncToken = null;
+        set((s) => ({ sync: { ...s.sync, status: "syncing", via: "poll" } }));
+        scheduleSync(0);
+      }
+    };
+    eventSource = es;
+  }
+
+  function closeEventSource(): void {
+    if (eventSource) { eventSource.close(); eventSource = null; }
+    sseConnected = false;
   }
 
   function scheduleSync(delay: number): void {
@@ -418,6 +472,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     error: null,
     configured: false,
     fullAccess: false,
+    pushSync: false,
     accounts: [],
     accountId: null,
     scopeOk: false,
@@ -447,7 +502,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     spaces: [],
     spaceId: null,
     spaceName: null,
-    sync: { status: "off", lastAt: null, applied: 0 },
+    sync: { status: "off", lastAt: null, applied: 0, via: null },
     activity: [],
     activityOpen: false,
     setActivity: (v) => set(v ? { activityOpen: true, insightsOpen: false } : { activityOpen: false }),
@@ -457,7 +512,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       set({ status: "loading", error: null });
       try {
         const [cfg, acc] = await Promise.all([driveApi.config(), driveApi.listAccounts()]);
-        set({ configured: cfg.configured, fullAccess: cfg.fullAccess, accounts: acc.accounts, status: "ready" });
+        set({ configured: cfg.configured, fullAccess: cfg.fullAccess, pushSync: !!cfg.pushSync, accounts: acc.accounts, status: "ready" });
         const first = acc.accounts[0];
         if (first) {
           set({ accountId: first.id });
@@ -474,6 +529,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       syncToken = null; syncGen++; // new corpus → re-anchor sync; invalidate any in-flight poll
       set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [] });
       set({ scopeOk: computeScopeOk() });
+      if (syncActive) openEventSource(); // re-point the push channel at the new account
       if (get().scopeOk) await Promise.all([load(true), get().loadQuota(), loadSpaces()]);
     },
 
@@ -485,14 +541,16 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
 
     startSync: () => {
-      if (!get().accountId || !get().scopeOk) { set({ sync: { status: "off", lastAt: null, applied: 0 } }); return; }
+      if (!get().accountId || !get().scopeOk) { set({ sync: { status: "off", lastAt: null, applied: 0, via: null } }); return; }
       syncActive = true;
       set((s) => ({ sync: { ...s.sync, status: s.sync.status === "off" ? "syncing" : s.sync.status } }));
-      scheduleSync(0); // kick immediately (first tick anchors the page token)
+      openEventSource(); // near-instant push when the server supports it; no-op otherwise
+      scheduleSync(0); // poller: first tick anchors the token (and covers any SSE gaps)
     },
     stopSync: () => {
       syncActive = false;
       syncGen++; // any in-flight poll must discard its writes
+      closeEventSource();
       if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
       set((s) => ({ sync: { ...s.sync, status: "off" } }));
     },

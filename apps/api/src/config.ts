@@ -57,6 +57,10 @@ export const config = {
     // The OAuth redirect must exactly match one registered in the Google Cloud console.
     redirectUri: env.GOOGLE_REDIRECT_URI || `${env.API_URL ?? `http://localhost:${env.PORT ?? 8787}`}/api/drive/auth/callback`,
     fullAccess: bool(env.GOOGLE_DRIVE_FULL_ACCESS, false),
+    // Drive V2 `changes.watch` PUSH webhooks (near-instant sync). Must be a PUBLIC https URL Google
+    // can POST to — e.g. https://<public-api-host>/api/drive-v2/webhook/changes — and that domain
+    // verified for the OAuth app. Unset → clients fall back to the built-in polling sync.
+    webhookUrl: env.DRIVE_WEBHOOK_URL || null,
   },
 
   anthropic: {
