@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Clock, CornerDownLeft, FolderPlus, HardDrive, LayoutGrid, List as ListIcon, Search, Star, Trash2, Upload } from "lucide-react";
+import { Clock, CornerDownLeft, FolderPlus, HardDrive, LayoutGrid, List as ListIcon, Search, Sparkles, Star, Trash2, Upload } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/ui";
 import { driveV2Api, type DriveNode } from "@/data/driveV2Api";
@@ -61,6 +61,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
       { id: "v-recent", label: "Go to Recent", icon: Clock, run: () => s().setView("recent") },
       { id: "v-starred", label: "Go to Starred", icon: Star, run: () => s().setView("starred") },
       { id: "v-trash", label: "Go to Trash", icon: Trash2, run: () => s().setView("trash") },
+      { id: "v-insights", label: "Open Insights", icon: Sparkles, keywords: "duplicates largest stale storage", run: () => s().setInsights(true) },
       { id: "a-newfolder", label: "New folder", icon: FolderPlus, keywords: "create", run: () => s().openDialog({ kind: "newFolder", parentId: s().path.at(-1)?.id ?? "root" }) },
       { id: "a-upload", label: "Upload files", icon: Upload, run: onUpload },
       { id: "a-grid", label: "Switch to grid view", icon: LayoutGrid, run: () => s().setLayout("grid") },

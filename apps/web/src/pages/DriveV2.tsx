@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import {
   ArrowUpDown,
+  Bookmark,
+  BookmarkPlus,
   Check,
   ChevronRight,
   Clock,
@@ -19,8 +21,10 @@ import {
   RotateCcw,
   Search,
   Share2,
+  Sparkles,
   Star,
   Trash2,
+  Type,
   Upload,
   X,
 } from "lucide-react";
@@ -37,9 +41,13 @@ import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileR
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
 import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components/drive-v2/modals";
 import { ShareModal } from "@/components/drive-v2/ShareModal";
+import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
+import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
+
+const SAVED_KEY = "kosh.driveV2.savedSearches";
 
 /* ── sorting / filtering (client-side over loaded pages) ── */
 function sortNodes(nodes: DriveNode[], key: SortKey, dir: "asc" | "desc"): DriveNode[] {
@@ -124,6 +132,7 @@ function Shell() {
   const previewNode = useDriveV2((s) => s.previewNode);
   const dialog = useDriveV2((s) => s.dialog);
   const uploads = useDriveV2((s) => s.uploads);
+  const insightsOpen = useDriveV2((s) => s.insightsOpen);
 
   const store = useDriveV2;
   const currentFolderId = useDriveV2((s) => s.path.at(-1)?.id ?? "root");
@@ -195,6 +204,9 @@ function Shell() {
       <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
         <DriveNav />
         <div className="min-w-0">
+          {insightsOpen ? (
+            <InsightsPanel onClose={() => store.getState().setInsights(false)} />
+          ) : (
           <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
             <DriveToolbar onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })} onUpload={() => fileInputRef.current?.click()} />
             {selection.size > 0 && <SelectionBar />}
@@ -220,6 +232,7 @@ function Shell() {
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
 
@@ -250,6 +263,7 @@ function Shell() {
       {dialog?.kind === "delete" && <DeleteConfirmModal ids={dialog.ids} permanent={dialog.permanent} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "move" && <MoveToModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "share" && <ShareModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
+      {dialog?.kind === "rename-bulk" && <BulkRenameModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} onClose={() => store.getState().setPreview(null)} />}
     </div>
   );
@@ -276,6 +290,7 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
     if (!node.isFolder && node.capabilities?.canCopy !== false) a.push({ label: "Make a copy", icon: Copy, onClick: () => void s.copy(node.id) });
   }
   a.push({ label: many ? `Star ${ids.length}` : node.starred ? "Unstar" : "Star", icon: Star, onClick: () => ids.forEach((id) => void s.toggleStar(id)) });
+  if (many) a.push({ label: `Bulk rename ${ids.length}`, icon: Type, onClick: () => s.openDialog({ kind: "rename-bulk", ids }) });
   a.push({ label: "Move to…", icon: CornerUpRight, onClick: () => s.openDialog({ kind: "move", ids }) });
   a.push({ label: many ? `Move ${ids.length} to trash` : "Move to trash", icon: Trash2, danger: true, separatorBefore: true, onClick: () => s.openDialog({ kind: "delete", ids, permanent: false }) });
   return a;
@@ -286,6 +301,7 @@ function DriveNav() {
   const accounts = useDriveV2((s) => s.accounts);
   const accountId = useDriveV2((s) => s.accountId);
   const view = useDriveV2((s) => s.view);
+  const insightsOpen = useDriveV2((s) => s.insightsOpen);
   const quota = useDriveV2((s) => s.quota);
   const account = accounts.find((a) => a.id === accountId);
 
@@ -326,15 +342,25 @@ function DriveNav() {
       </div>
 
       <nav className="rounded-[var(--radius-card)] border border-border bg-surface p-2">
-        {NAV.map(({ v, label, icon: Icon, tone }) => (
-          <button
-            key={v}
-            onClick={() => useDriveV2.getState().setView(v)}
-            className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors", view === v ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
-          >
-            <Icon size={16} className={cn(view !== v && tone)} /> {label}
-          </button>
-        ))}
+        {NAV.map(({ v, label, icon: Icon, tone }) => {
+          const active = !insightsOpen && view === v;
+          return (
+            <button
+              key={v}
+              onClick={() => useDriveV2.getState().setView(v)}
+              className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors", active ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
+            >
+              <Icon size={16} className={cn(!active && tone)} /> {label}
+            </button>
+          );
+        })}
+        <div className="my-1 h-px bg-border" />
+        <button
+          onClick={() => useDriveV2.getState().setInsights(true)}
+          className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors", insightsOpen ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
+        >
+          <Sparkles size={16} /> Insights
+        </button>
       </nav>
 
       {quota && (
@@ -362,6 +388,9 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
   const searchQuery = useDriveV2((s) => s.searchQuery);
   const emptyTrash = useDriveV2((s) => s.emptyTrash);
   const [q, setQ] = useState(searchQuery);
+  const [saved, setSaved] = useState<{ query: string }[]>(() => { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; } });
+  const persistSaved = (next: { query: string }[]) => { setSaved(next); try { localStorage.setItem(SAVED_KEY, JSON.stringify(next)); } catch { /* private mode */ } };
+  const saveCurrent = () => { const query = q.trim(); if (!query || saved.some((s) => s.query === query)) return; persistSaved([{ query }, ...saved].slice(0, 20)); };
 
   useEffect(() => setQ(searchQuery), [searchQuery]);
   // Debounced search.
@@ -406,6 +435,21 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search Drive…" className="min-w-0 w-40 bg-transparent text-[13px] outline-none sm:w-52" />
         {q && <button onClick={() => setQ("")} aria-label="Clear search"><X size={14} className="text-faint hover:text-foreground" /></button>}
       </label>
+
+      <Menu align="end" width={240} trigger={({ toggle, ref }) => (
+        <button ref={ref} onClick={toggle} className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted hover:bg-surface-2" aria-label="Saved searches"><Bookmark size={15} /></button>
+      )}>
+        <MenuLabel>Saved searches</MenuLabel>
+        {saved.length === 0 && <div className="px-2.5 py-2 text-[12.5px] text-muted">No saved searches yet.</div>}
+        {saved.map((sv) => (
+          <div key={sv.query} className="flex items-center gap-1 pr-1">
+            <button onClick={() => setQ(sv.query)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-surface-2"><Search size={13} className="shrink-0 text-muted" /><span className="min-w-0 flex-1 truncate">{sv.query}</span></button>
+            <button onClick={() => persistSaved(saved.filter((x) => x.query !== sv.query))} className="shrink-0 rounded p-1 text-faint hover:text-danger" aria-label="Remove"><X size={13} /></button>
+          </div>
+        ))}
+        <MenuSeparator />
+        <MenuItem icon={BookmarkPlus} disabled={!q.trim()} onClick={saveCurrent}>Save current search</MenuItem>
+      </Menu>
 
       <Menu align="end" width={200} trigger={({ toggle, ref }) => (
         <button ref={ref} onClick={toggle} className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[13px] text-muted hover:bg-surface-2"><ArrowUpDown size={15} /> Sort</button>
@@ -479,6 +523,7 @@ function SelectionBar() {
         ) : (
           <>
             <Button variant="ghost" size="sm" onClick={() => ids.forEach((id) => void s().toggleStar(id))}><Star size={14} /> Star</Button>
+            {ids.length > 1 && <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "rename-bulk", ids })}><Type size={14} /> Rename</Button>}
             <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "move", ids })}><CornerUpRight size={14} /> Move</Button>
             <Button variant="ghost" size="sm" className="text-danger" onClick={() => s().openDialog({ kind: "delete", ids, permanent: false })}><Trash2 size={14} /> Trash</Button>
           </>

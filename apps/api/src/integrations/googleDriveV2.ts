@@ -101,10 +101,10 @@ export function listChildren(accessToken: string, parentId = "root", opts: { pag
   return listByQuery(accessToken, `'${qval(parentId)}' in parents and trashed = false`, opts);
 }
 
-/** Search by free text and/or filters. */
+/** Search by free text and/or advanced filters (type/owner/date/starred). */
 export function searchFiles(
   accessToken: string,
-  params: { text?: string; mimeType?: string; starred?: boolean; pageToken?: string },
+  params: { text?: string; mimeType?: string; mimeContains?: string; owner?: string; before?: string; after?: string; starred?: boolean; pageToken?: string },
 ): Promise<ListResult> {
   const clauses = ["trashed = false"];
   if (params.text) {
@@ -112,8 +112,70 @@ export function searchFiles(
     clauses.push(`(name contains '${t}' or fullText contains '${t}')`);
   }
   if (params.mimeType) clauses.push(`mimeType = '${qval(params.mimeType)}'`);
+  if (params.mimeContains) clauses.push(`mimeType contains '${qval(params.mimeContains)}'`);
+  if (params.owner) clauses.push(`'${qval(params.owner)}' in owners`);
+  if (params.before) clauses.push(`modifiedTime < '${qval(params.before)}'`);
+  if (params.after) clauses.push(`modifiedTime > '${qval(params.after)}'`);
   if (params.starred) clauses.push("starred = true");
   return listByQuery(accessToken, clauses.join(" and "), { pageToken: params.pageToken });
+}
+
+/* ── analytics scan (duplicates / largest / stale / storage breakdown) ── */
+
+export interface DriveScanFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: number;
+  md5Checksum?: string;
+  quotaBytesUsed?: number;
+  viewedByMeTime?: string;
+  modifiedTime?: string;
+  iconLink?: string;
+  thumbnailLink?: string;
+  webViewLink?: string;
+  parents?: string[];
+}
+
+/** Scan up to `pageCap` pages of non-folder files with the fields analytics panels need. */
+export async function scanFiles(accessToken: string, opts: { orderBy?: string; pageCap?: number } = {}): Promise<{ files: DriveScanFile[]; truncated: boolean }> {
+  const q = `trashed = false and mimeType != '${FOLDER_MIME}'`;
+  const cap = Math.min(opts.pageCap ?? 10, 20); // 20 pages × 1000 = 20k files hard ceiling
+  const out: DriveScanFile[] = [];
+  let pageToken: string | undefined;
+  let pages = 0;
+  for (;;) {
+    const u = new URL(`${DRIVE_API}/files`);
+    u.searchParams.set("q", q);
+    u.searchParams.set("fields", "nextPageToken,files(id,name,mimeType,size,md5Checksum,quotaBytesUsed,viewedByMeTime,modifiedTime,iconLink,thumbnailLink,webViewLink,parents)");
+    if (opts.orderBy) u.searchParams.set("orderBy", opts.orderBy);
+    u.searchParams.set("pageSize", "1000");
+    u.searchParams.set("spaces", "drive");
+    u.searchParams.set("supportsAllDrives", "true");
+    if (pageToken) u.searchParams.set("pageToken", pageToken);
+    const res = await driveFetch(accessToken, u, {}, "Couldn't scan Drive");
+    const json = (await res.json()) as { files?: Record<string, unknown>[]; nextPageToken?: string };
+    for (const f of json.files ?? []) {
+      out.push({
+        id: String(f.id),
+        name: String(f.name),
+        mimeType: String(f.mimeType),
+        size: f.size != null ? Number(f.size) : undefined,
+        md5Checksum: f.md5Checksum as string | undefined,
+        quotaBytesUsed: f.quotaBytesUsed != null ? Number(f.quotaBytesUsed) : undefined,
+        viewedByMeTime: f.viewedByMeTime as string | undefined,
+        modifiedTime: f.modifiedTime as string | undefined,
+        iconLink: f.iconLink as string | undefined,
+        thumbnailLink: f.thumbnailLink as string | undefined,
+        webViewLink: f.webViewLink as string | undefined,
+        parents: f.parents as string[] | undefined,
+      });
+    }
+    pageToken = json.nextPageToken;
+    pages++;
+    if (!pageToken) return { files: out, truncated: false };
+    if (pages >= cap) return { files: out, truncated: true };
+  }
 }
 
 export function listRecent(accessToken: string, pageToken?: string): Promise<ListResult> {

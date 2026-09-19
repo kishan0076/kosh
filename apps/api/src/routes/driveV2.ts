@@ -21,6 +21,7 @@ import {
   listTrash,
   moveNode,
   renameNode,
+  scanFiles,
   searchFiles,
   setStarred,
   setTrashed,
@@ -101,11 +102,32 @@ driveV2Router.get(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    const text = typeof req.query.text === "string" ? req.query.text.slice(0, 200) : undefined;
-    const mimeType = typeof req.query.mimeType === "string" ? req.query.mimeType.slice(0, 120) : undefined;
-    const starred = req.query.starred === "true";
-    const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
-    res.json(await driveCall(searchFiles(token, { text, mimeType, starred, pageToken })));
+    const str = (v: unknown, n: number) => (typeof v === "string" && v ? v.slice(0, n) : undefined);
+    res.json(
+      await driveCall(
+        searchFiles(token, {
+          text: str(req.query.text, 200),
+          mimeType: str(req.query.mimeType, 120),
+          mimeContains: str(req.query.mimeContains, 60),
+          owner: str(req.query.owner, 320),
+          before: str(req.query.before, 40),
+          after: str(req.query.after, 40),
+          starred: req.query.starred === "true",
+          pageToken: str(req.query.pageToken, 4096),
+        }),
+      ),
+    );
+  }),
+);
+
+driveV2Router.get(
+  "/drive-v2/accounts/:id/scan",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const orderBy = typeof req.query.orderBy === "string" ? req.query.orderBy.slice(0, 60) : undefined;
+    const pageCap = Math.min(Math.max(Number(req.query.cap) || 10, 1), 20);
+    res.json(await driveCall(scanFiles(token, { orderBy, pageCap })));
   }),
 );
 

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { uid } from "@/lib/ids";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
-import { driveV2Api, hasFullDrive, type DriveNode } from "./driveV2Api";
+import { driveV2Api, hasFullDrive, type DriveNode, type SearchParams } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
 
 /** Push a toast without a React hook (store actions run outside components). */
@@ -77,6 +77,8 @@ interface DriveV2State {
   busyIds: Set<string>;
   dialog: Dialog;
   uploads: UploadTask[];
+  insightsOpen: boolean;
+  setInsights: (v: boolean) => void;
 
   init: () => Promise<void>;
   selectAccount: (id: string) => Promise<void>;
@@ -147,6 +149,45 @@ function savePrefs(p: ViewPrefs) {
 
 const currentFolderId = (path: { id: string }[]) => path.at(-1)?.id ?? "root";
 
+/** Map `type:` operator values to a Drive mime filter. */
+const TYPE_MAP: Record<string, { exact?: string; contains?: string }> = {
+  pdf: { exact: "application/pdf" },
+  image: { contains: "image/" },
+  video: { contains: "video/" },
+  audio: { contains: "audio/" },
+  doc: { contains: "document" },
+  sheet: { contains: "spreadsheet" },
+  slide: { contains: "presentation" },
+  zip: { contains: "zip" },
+  folder: { exact: "application/vnd.google-apps.folder" },
+};
+
+/** Parse a search box query with operators (type: owner: before: after: is:starred) into API params. */
+export function parseSearch(query: string, ownerMe?: string): SearchParams {
+  const params: SearchParams = {};
+  const free: string[] = [];
+  const toDate = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00` : v);
+  for (const tok of query.trim().split(/\s+/).filter(Boolean)) {
+    const m = tok.match(/^(\w+):(.+)$/);
+    if (!m) { free.push(tok); continue; }
+    const key = m[1]!.toLowerCase();
+    const val = m[2]!;
+    if (key === "type") {
+      const mt = TYPE_MAP[val.toLowerCase()];
+      if (mt?.exact) params.mimeType = mt.exact;
+      else if (mt?.contains) params.mimeContains = mt.contains;
+      else free.push(tok);
+    } else if (key === "owner") params.owner = val.toLowerCase() === "me" ? ownerMe ?? val : val;
+    else if (key === "before") params.before = toDate(val);
+    else if (key === "after") params.after = toDate(val);
+    else if (key === "is" && val.toLowerCase() === "starred") params.starred = true;
+    else if (key === "starred") params.starred = val === "true";
+    else free.push(tok);
+  }
+  if (free.length) params.text = free.join(" ");
+  return params;
+}
+
 export const useDriveV2 = create<DriveV2State>((set, get) => {
   async function ensureToken(accountId: string): Promise<string> {
     if (tokenCache && tokenCache.accountId === accountId && tokenCache.exp > Date.now() + 60_000) return tokenCache.token;
@@ -189,7 +230,11 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       else if (view === "recent") result = await driveV2Api.recent(accountId);
       else if (view === "starred") result = await driveV2Api.starred(accountId);
       else if (view === "trash") result = await driveV2Api.trash(accountId);
-      else result = await driveV2Api.search(accountId, { text: searchQuery, starred: searchStarredOnly });
+      else {
+        const p = parseSearch(searchQuery, selectedAccount()?.email);
+        if (searchStarredOnly) p.starred = true;
+        result = await driveV2Api.search(accountId, p);
+      }
       if (myseq !== loadSeq) return; // superseded by a newer navigation
       set({ nodes: result.files, nextPageToken: result.nextPageToken, listLoading: false });
       if (view === "myDrive") folderCache.set(key, { nodes: result.files, nextPageToken: result.nextPageToken, ts: Date.now() });
@@ -259,6 +304,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     busyIds: new Set(),
     dialog: null,
     uploads: [],
+    insightsOpen: false,
+    setInsights: (v) => set({ insightsOpen: v }),
 
     init: async () => {
       set({ status: "loading", error: null });
@@ -278,7 +325,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
     selectAccount: async (id) => {
       tokenCache = null;
-      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null });
+      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false });
       set({ scopeOk: computeScopeOk() });
       if (get().scopeOk) await Promise.all([load(true), get().loadQuota()]);
     },
@@ -286,6 +333,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     reconnectUrl: () => driveApi.connectUrl(),
 
     setView: (v) => {
+      set({ insightsOpen: false });
       if (v === get().view && v !== "search") return;
       // path is preserved across views so returning to My Drive restores the last folder.
       set({ view: v, selection: new Set(), detailsId: null, detailsNode: null });
@@ -294,6 +342,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
 
     openFolder: (node) => {
+      set({ insightsOpen: false });
       // In-hierarchy (My Drive) navigation just pushes; opening a folder from another view
       // (Recent/Search/Starred) hydrates the breadcrumb from the server so it's correct.
       if (get().view === "myDrive") {
@@ -339,7 +388,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         else if (view === "recent") result = await driveV2Api.recent(accountId, nextPageToken);
         else if (view === "starred") result = await driveV2Api.starred(accountId, nextPageToken);
         else if (view === "trash") result = await driveV2Api.trash(accountId, nextPageToken);
-        else result = await driveV2Api.search(accountId, { text: searchQuery, starred: searchStarredOnly, pageToken: nextPageToken });
+        else {
+          const p = parseSearch(searchQuery, selectedAccount()?.email);
+          if (searchStarredOnly) p.starred = true;
+          p.pageToken = nextPageToken;
+          result = await driveV2Api.search(accountId, p);
+        }
         if (seq !== loadSeq) { set({ loadingMore: false }); return; } // superseded — still clear the flag
         set((s) => ({ nodes: [...s.nodes, ...result.files], nextPageToken: result.nextPageToken, loadingMore: false }));
       } catch {

@@ -78,6 +78,32 @@ export interface ListResult {
   nextPageToken?: string;
 }
 
+export interface SearchParams {
+  text?: string;
+  mimeType?: string;
+  mimeContains?: string;
+  owner?: string;
+  before?: string;
+  after?: string;
+  starred?: boolean;
+  pageToken?: string;
+}
+
+export interface DriveScanFile {
+  id: string;
+  name: string;
+  mimeType: string;
+  size?: number;
+  md5Checksum?: string;
+  quotaBytesUsed?: number;
+  viewedByMeTime?: string;
+  modifiedTime?: string;
+  iconLink?: string;
+  thumbnailLink?: string;
+  webViewLink?: string;
+  parents?: string[];
+}
+
 export type DriveKind = "folder" | "doc" | "sheet" | "slide" | "image" | "video" | "audio" | "pdf" | "archive" | "other";
 export type FilterKind = "folder" | "doc" | "image" | "video" | "pdf" | "audio" | "archive";
 
@@ -125,12 +151,23 @@ export const driveV2Api = {
     if (opts.orderBy) q.set("orderBy", opts.orderBy);
     return v2req<ListResult>(`${base(accountId)}/list?${q}`);
   },
-  search: (accountId: string, params: { text?: string; starred?: boolean; pageToken?: string }) => {
+  search: (accountId: string, params: SearchParams) => {
     const q = new URLSearchParams();
     if (params.text) q.set("text", params.text);
+    if (params.mimeType) q.set("mimeType", params.mimeType);
+    if (params.mimeContains) q.set("mimeContains", params.mimeContains);
+    if (params.owner) q.set("owner", params.owner);
+    if (params.before) q.set("before", params.before);
+    if (params.after) q.set("after", params.after);
     if (params.starred) q.set("starred", "true");
     if (params.pageToken) q.set("pageToken", params.pageToken);
     return v2req<ListResult>(`${base(accountId)}/search?${q}`);
+  },
+  scan: (accountId: string, opts: { orderBy?: string; cap?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (opts.orderBy) q.set("orderBy", opts.orderBy);
+    if (opts.cap) q.set("cap", String(opts.cap));
+    return v2req<{ files: DriveScanFile[]; truncated: boolean }>(`${base(accountId)}/scan?${q}`);
   },
   recent: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/recent${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
   starred: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/starred${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
