@@ -338,7 +338,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         else if (view === "starred") result = await driveV2Api.starred(accountId, nextPageToken);
         else if (view === "trash") result = await driveV2Api.trash(accountId, nextPageToken);
         else result = await driveV2Api.search(accountId, { text: searchQuery, starred: searchStarredOnly, pageToken: nextPageToken });
-        if (seq !== loadSeq) return;
+        if (seq !== loadSeq) { set({ loadingMore: false }); return; } // superseded — still clear the flag
         set((s) => ({ nodes: [...s.nodes, ...result.files], nextPageToken: result.nextPageToken, loadingMore: false }));
       } catch {
         set({ loadingMore: false });
@@ -447,6 +447,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       await mutate([id], (nodes) => nodes.map((n) => (n.id === id ? { ...n, name } : n)), async () => {
         const { file } = await driveV2Api.rename(accountId, id, name);
         set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
+        invalidateFolderViews(); // else re-navigating within the 30s cache TTL shows the old name
       });
     },
 
@@ -460,6 +461,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         (nodes) => nodes.map((n) => (n.id === id ? { ...n, starred } : n)).filter((n) => (get().view === "starred" && !starred ? n.id !== id : true)),
         async () => {
           await driveV2Api.setStar(accountId, id, starred);
+          invalidateFolderViews(); // keep the cached folder in sync with the star change
         },
       );
     },
@@ -500,8 +502,17 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     move: async (ids, destId) => {
       const accountId = get().accountId;
       if (!accountId) return;
-      const srcFolder = currentFolderId(get().path);
-      const ok = await bulk(ids, (id) => driveV2Api.move(accountId, id, [destId], [srcFolder]), (nodes, done) => nodes.filter((n) => !done.has(n.id)));
+      // Detach from each item's REAL parents (not the current view folder) — otherwise a move from
+      // Recent/Starred/Search leaves the file in its original folder (duplicated across two parents).
+      const snapshot = get().nodes;
+      const ok = await bulk(
+        ids,
+        (id) => {
+          const removeParents = (snapshot.find((n) => n.id === id)?.parents ?? []).filter((p) => p !== destId);
+          return driveV2Api.move(accountId, id, [destId], removeParents);
+        },
+        (nodes, done) => nodes.filter((n) => !done.has(n.id)),
+      );
       invalidateFolderViews();
       set({ selection: new Set() });
       if (ok.done.length) pushToast({ message: `Moved ${ok.done.length} item${ok.done.length === 1 ? "" : "s"}`, tone: "ok" });

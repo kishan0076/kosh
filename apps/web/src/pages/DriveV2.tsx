@@ -470,21 +470,26 @@ function DriveContentArea({
   onDropFiles: (files: File[]) => void;
 }) {
   const [drag, setDrag] = useState(false);
-  if (listLoading) return <DriveContentSkeleton layout={layout} />;
-  if (listError) return <DriveErrorState message={listError} onRetry={() => void useDriveV2.getState().load(true)} />;
-  if (!visible.length) return <DriveEmptyState view={view} onUpload={onUpload} />;
-
+  const canDrop = view === "myDrive";
   const rowProps = (node: DriveNode) => ({ node, selected: selection.has(node.id), busy: busyIds.has(node.id), renaming: renamingId === node.id, ...handlers });
 
+  // The drop target wraps ALL states (incl. skeleton/empty), so drag-and-drop upload works even in an
+  // empty folder. onDragLeave ignores transitions onto descendants to avoid overlay flicker.
   return (
     <div
-      onDragOver={view === "myDrive" ? (e) => { e.preventDefault(); setDrag(true); } : undefined}
-      onDragLeave={() => setDrag(false)}
-      onDrop={view === "myDrive" ? (e) => { e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
-      className={cn("relative max-h-[calc(100dvh-14rem)] overflow-y-auto", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
+      onDragOver={canDrop ? (e) => { e.preventDefault(); setDrag(true); } : undefined}
+      onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
+      onDrop={canDrop ? (e) => { e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
+      className={cn("relative max-h-[calc(100dvh-14rem)] min-h-[320px] overflow-y-auto", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
     >
       {drag && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-primary-soft/40 text-[14px] font-semibold text-primary">Drop to upload here</div>}
-      {layout === "list" ? (
+      {listLoading ? (
+        <DriveContentSkeleton layout={layout} />
+      ) : listError ? (
+        <DriveErrorState message={listError} onRetry={() => void useDriveV2.getState().load(true)} />
+      ) : !visible.length ? (
+        <DriveEmptyState view={view} onUpload={onUpload} />
+      ) : layout === "list" ? (
         <div>
           <ListHeader />
           {visible.map((n) => <FileRow key={n.id} {...rowProps(n)} />)}
