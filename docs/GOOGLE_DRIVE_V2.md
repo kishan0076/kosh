@@ -76,8 +76,21 @@ account's granted scope (exact-token match on `…/auth/drive`).
   bulk move/trash/restore/delete/star run at bounded concurrency with per-item success/failure.
 - **Right-click context menu** and hover quick-actions, capability-aware (actions Drive says you can't
   perform are hidden/disabled to avoid errors).
-- **Details drawer** — thumbnail, type, size, owner, dates, checksum, description, and a read-only
-  sharing summary, plus quick actions.
+- **Details drawer** — thumbnail, type, size, owner, dates, checksum, **editable notes** (persisted to
+  the file's Drive description), a sharing summary, and quick actions.
+- **Sharing & permissions** — a Share modal: add people by email with a role, change/remove each
+  person's access, toggle "Anyone with the link", and copy the link (`permissions.*`).
+- **Drag-and-drop move** — drag files/cards (or a whole selection) onto folders or breadcrumb segments.
+- **Virtualized** list and grid — thousands of items scroll smoothly.
+- **⌘K command palette** — run actions or search-and-open any file.
+- **Insights** — a storage-by-type breakdown, a **duplicate finder** (group by md5, reclaim space),
+  **largest files**, and **stale files** (least-recently-opened), backed by a capped Drive scan.
+- **Bulk rename** — find/replace + sequential numbering with an extension-preserving live preview.
+- **Advanced search operators** — `type:`, `owner:me|<email>`, `before:`/`after:`, `is:starred`, plus
+  **saved searches**.
+- **Version history** — list and delete prior revisions of a file.
+- **Shared with me** — a dedicated view of files others shared with you.
+- **Recursive folder copy** — "Make a copy" on a folder walks and recreates the whole tree.
 - **Custom Create-folder modal** — name validation, live duplicate hint, and optional folder **color**
   and **description**.
 - **Custom Delete-confirmation modal** — clear trash-vs-permanent modes, item info and consequences, an
@@ -91,47 +104,54 @@ account's granted scope (exact-token match on `…/auth/drive`).
 
 ---
 
-## 5. Suggested next features (powerful additions)
+## 5. Still on the roadmap (feasible)
 
-Realistic with the Drive API; ordered roughly by value. These are **not** built yet:
+Realistic with the current scope; not built yet:
 
-- **Drag-and-drop move** — drop files onto folders / breadcrumb segments (builds on `move`), plus
-  rubber-band drag-select.
-- **Row/card virtualization** — for folders with thousands of items (pagination + "load more" is the
-  current interim scaler).
-- **Full sharing management** — `permissions.list/create/update/delete` (V2 ships a read-only sharing
-  summary; full management needs a new server route).
-- **Version history** — `revisions.list` for binary files; a **Drive Activity** timeline
-  (`activity.query`, extra scope).
 - **Real-time two-way sync** — poll `changes.list` from a stored page token, then `changes.watch`
-  webhooks (needs new server routes + a callback).
-- **Power panels** — a **duplicate finder** (group by `md5Checksum`), **largest files**
-  (`orderBy=quotaBytesUsed`), **stale files** (`viewedByMeTime`), a **storage treemap**, and a
-  **bulk-rename** tool with patterns.
-- **Recursive folder copy** — Drive can't copy folders natively; walk + recreate + copy children.
-- **Shared Drives / Shared-with-me / Computers** spaces (`driveId`, `corpora`, `includeItemsFromAllDrives`).
-- **Embedded preview** for PDF/Docs/video via an iframe — needs a `frame-src https://drive.google.com`
-  addition to the web CSP (deliberately not changed here).
-- **Service account + domain-wide delegation** for org-wide admin/migration.
-- **Per-folder notes / saved searches** stored via `appProperties`.
+  webhooks (needs new server routes + a callback endpoint).
+- **Rubber-band drag-select** and drag-drop **upload into a specific folder** (drop external files onto
+  a folder row).
+- **Embedded preview** for PDF/Docs/video via an iframe — needs one line added to the web CSP
+  (`frame-src https://drive.google.com`); today non-images open in Drive.
+- **Restore a specific revision** / download old versions (list + delete are built).
+- **Shared Drives** (`driveId`, `corpora=drive`) as first-class spaces — the API already passes
+  `supportsAllDrives`, so items in Shared Drives are operable; a dedicated space picker is the addition.
+
+## 6. Infra / enterprise-gated (documented, deliberately not shipped)
+
+These need infrastructure, an admin setup, or a new OAuth scope + re-consent — shipping a half-working
+version would be worse than none, so they're documented instead:
+
+- **Drive Activity timeline** — the Drive Activity API is a *separate* API that must be enabled and
+  needs the extra `drive.activity.readonly` scope (a re-consent). Straightforward to add once you accept
+  that scope prompt.
+- **Full governance** — Labels (the **Drive Labels API**, a separate API + admin label taxonomy),
+  retention policies, and DLP are Workspace-admin / enterprise features, not user-level API calls.
+- **Service account + domain-wide delegation** — an org deployment concern (a service-account key +
+  admin console delegation), not something to expose in the per-user UI.
+- **Exportable audit logs** — meaningful only alongside the change-tracking/activity work above.
 
 ---
 
-## 6. Endpoints (all under `/drive-v2/accounts/:id`, owner-scoped)
+## 7. Endpoints (all under `/drive-v2/accounts/:id`, owner-scoped)
 
-Reads: `GET /list?parent=`, `/search?text=&starred=`, `/recent`, `/starred`, `/trash`,
-`/files/:fileId`, `/path?folder=`. Writes: `POST /folders`, `PATCH /files/:fileId/rename|star|trash|meta`,
-`POST /files/:fileId/move|copy`, `DELETE /files/:fileId`, `POST /empty-trash`. Accounts, config, storage
-quota and the upload token reuse the V1 endpoints. Errors use Kosh's typed envelope
-(`NEEDS_RECONNECT` 400 → the scope gate, `UPSTREAM` 502 → retry).
+Reads: `GET /list?parent=`, `/search` (text/mimeType/mimeContains/owner/before/after/starred),
+`/recent`, `/starred`, `/trash`, `/shared`, `/scan?orderBy=&cap=`, `/files/:fileId`, `/path?folder=`,
+`/files/:fileId/permissions`, `/files/:fileId/revisions`. Writes: `POST /folders`,
+`PATCH /files/:fileId/rename|star|trash|meta`, `POST /files/:fileId/move|copy`, `DELETE /files/:fileId`,
+`POST /empty-trash`, `POST|PATCH|DELETE /files/:fileId/permissions[/:permId]`,
+`DELETE /files/:fileId/revisions/:revId`. Accounts, config, storage quota and the upload token reuse the
+V1 endpoints. Errors use Kosh's typed envelope (`NEEDS_RECONNECT` 400 → the scope gate, `UPSTREAM` 502 → retry).
 
 ---
 
-## 7. Notes & limits
+## 8. Notes & limits
 
 - **Google-native files** (Docs/Sheets/Slides) have no size/checksum/direct-download link — V2 shows
   "—" and offers "Open in Drive".
-- **Copy** is files-only (Drive has no folder copy).
+- **File copy** is atomic; **folder copy** is a bounded (500-op) client-side walk.
+- **Insights** scans up to 20k files and flags when the result was sampled.
 - **Thumbnails** are short-lived and auth-scoped; V2 falls back to a file-type icon if one won't load.
 - The only raw hex colors in V2 are Google Drive's own **folder-color palette** (confined to the
   color picker); everything else uses Kosh's semantic design tokens.
