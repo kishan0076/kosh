@@ -204,6 +204,7 @@ export async function handleNotification(h: { channelId?: string; token?: string
 async function pollAndBroadcast(ch: Channel): Promise<void> {
   if (pollLocks.has(ch.channelId)) return; // coalesce concurrent notifications for the same channel
   pollLocks.add(ch.channelId);
+  let morePending = false;
   try {
     const minted = await mintFor(ch.accountId);
     if (!minted) return;
@@ -214,6 +215,7 @@ async function pollAndBroadcast(ch: Channel): Promise<void> {
       collected.push(...changes);
       pageToken = nextPageToken ?? newStartPageToken ?? pageToken;
       if (!nextPageToken) break;
+      if (i === MAX_DRAIN_PAGES - 1) morePending = true; // hit the cap with pages still queued
     }
     ch.pageToken = pageToken;
     if (collected.length) broadcast(ch.accountId, { type: "changes", changes: collected });
@@ -221,5 +223,11 @@ async function pollAndBroadcast(ch: Channel): Promise<void> {
     logger.warn({ e, accountId: ch.accountId }, "drive-v2 push: poll after notification failed");
   } finally {
     pollLocks.delete(ch.channelId);
+  }
+  // A very large burst exceeded the per-notification page cap — drain the rest promptly rather than
+  // waiting for the next ping (only if this channel is still the live one).
+  if (morePending && channelsById.get(ch.channelId) === ch) {
+    const t = setTimeout(() => void pollAndBroadcast(ch), 500);
+    t.unref?.();
   }
 }

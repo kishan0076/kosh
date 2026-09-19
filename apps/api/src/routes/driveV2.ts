@@ -217,7 +217,6 @@ driveV2Router.get(
     res.write("retry: 10000\n\n");
     res.write(`data: ${JSON.stringify({ type: "ready" })}\n\n`);
     addSubscriber(acc.id, res);
-    await ensureWatch(acc.id, uid).catch(() => {}); // best-effort; polling still covers gaps
     const heartbeat = setInterval(() => {
       try {
         res.write(": ping\n\n"); // comment frame keeps the connection alive through proxies
@@ -226,10 +225,15 @@ driveV2Router.get(
       }
     }, 25_000);
     heartbeat.unref?.();
+    // Register cleanup BEFORE the await: a disconnect during channel setup must still evict the
+    // subscriber + heartbeat (otherwise the socket, timer and Google channel would leak forever).
+    let closed = false;
     req.on("close", () => {
+      closed = true;
       clearInterval(heartbeat);
       removeSubscriber(acc.id, res);
     });
+    if (!closed) await ensureWatch(acc.id, uid).catch(() => {}); // best-effort; polling still covers gaps
   }),
 );
 

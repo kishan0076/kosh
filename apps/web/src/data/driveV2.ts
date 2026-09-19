@@ -370,7 +370,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
           entries.push({ fileId: c.fileId, name: c.file.name, action: isNewChild ? "created" : "edited", time: c.time ?? now, isFolder: c.file.isFolder });
         }
       }
-      const activity = entries.length ? [...entries.reverse(), ...s.activity].slice(0, ACTIVITY_CAP) : s.activity;
+      // Dedup by (fileId, time, action): the same change can arrive via BOTH the SSE push and a poll
+      // during the SSE connect window — without this the timeline would show duplicate rows.
+      const activity = entries.length ? dedupeActivity([...entries.reverse(), ...s.activity]).slice(0, ACTIVITY_CAP) : s.activity;
       return { nodes, detailsNode, activity };
     });
     invalidateFolderViews(); // next navigation refetches authoritative state
@@ -419,9 +421,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   /** Open the SSE push channel for the current account; SSE delivers changes, the poller idles. */
   function openEventSource(): void {
     if (typeof EventSource === "undefined") return; // SSR / unsupported
+    closeEventSource(); // always drop any prior stream first — e.g. switching to a no-scope account
     const { accountId, pushSync, scopeOk } = get();
     if (!pushSync || !accountId || !scopeOk) return;
-    closeEventSource();
     const esAccount = accountId;
     const es = new EventSource(`${API_BASE}/drive-v2/accounts/${accountId}/events`, { withCredentials: true });
     let openedOnce = false;
@@ -963,6 +965,19 @@ function withoutIds(set: Set<string>, ids: string[]): Set<string> {
   const next = new Set(set);
   for (const id of ids) next.delete(id);
   return next;
+}
+
+/** Drop duplicate activity rows keyed by (fileId, time, action), keeping the first (newest) seen. */
+function dedupeActivity(list: ActivityEntry[]): ActivityEntry[] {
+  const seen = new Set<string>();
+  const out: ActivityEntry[] = [];
+  for (const e of list) {
+    const key = `${e.fileId}|${e.time}|${e.action}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
 }
 
 /** Run per-id calls at bounded concurrency; remove succeeded ids optimistically, keep failures. */
