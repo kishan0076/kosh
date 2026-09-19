@@ -172,6 +172,7 @@ export const driveV2Api = {
   recent: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/recent${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
   starred: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/starred${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
   trash: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/trash${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
+  sharedWithMe: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/shared${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
   getFile: (accountId: string, fileId: string) => v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}`),
   path: (accountId: string, folder: string) => v2req<{ path: { id: string; name: string }[] }>(`${base(accountId)}/path?folder=${encodeURIComponent(folder)}`),
 
@@ -199,4 +200,16 @@ export const driveV2Api = {
     v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
   removePermission: (accountId: string, fileId: string, permId: string) =>
     v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "DELETE" }),
+
+  listRevisions: (accountId: string, fileId: string) => v2req<{ revisions: DriveRevision[] }>(`${base(accountId)}/files/${fileId}/revisions`),
+  deleteRevision: (accountId: string, fileId: string, revId: string) => v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/revisions/${revId}`, { method: "DELETE" }),
 };
+
+export interface DriveRevision {
+  id: string;
+  modifiedTime?: string;
+  size?: number;
+  keepForever?: boolean;
+  originalFilename?: string;
+  lastModifyingUser?: { displayName?: string };
+}

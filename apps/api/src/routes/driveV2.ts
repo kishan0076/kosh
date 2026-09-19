@@ -11,12 +11,15 @@ import {
   createPermission,
   deleteNode,
   deletePermission,
+  deleteRevision,
   emptyTrash,
   folderPath,
   getFile,
   listChildren,
   listPermissions,
   listRecent,
+  listRevisions,
+  listSharedWithMe,
   listStarred,
   listTrash,
   moveNode,
@@ -144,6 +147,7 @@ const viewRoute = (path: string, fn: (t: string, pageToken?: string) => Promise<
 viewRoute("/drive-v2/accounts/:id/recent", listRecent);
 viewRoute("/drive-v2/accounts/:id/starred", listStarred);
 viewRoute("/drive-v2/accounts/:id/trash", listTrash);
+viewRoute("/drive-v2/accounts/:id/shared", listSharedWithMe);
 
 driveV2Router.get(
   "/drive-v2/accounts/:id/files/:fileId",
@@ -263,6 +267,27 @@ driveV2Router.post(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     await driveCall(emptyTrash(token));
+    res.json({ ok: true });
+  }),
+);
+
+/* ── revisions (version history) ── */
+
+driveV2Router.get(
+  "/drive-v2/accounts/:id/files/:fileId/revisions",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    res.json({ revisions: await driveCall(listRevisions(token, fileId(String(req.params.fileId)))) });
+  }),
+);
+
+driveV2Router.delete(
+  "/drive-v2/accounts/:id/files/:fileId/revisions/:revId",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    await driveCall(deleteRevision(token, fileId(String(req.params.fileId)), String(req.params.revId)));
     res.json({ ok: true });
   }),
 );

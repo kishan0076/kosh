@@ -1,4 +1,5 @@
-import { CornerUpRight, Download, ExternalLink, Eye, Pencil, Share2, Star, Trash2, User, Users, X } from "lucide-react";
+import { useState } from "react";
+import { Check, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, Share2, Star, Trash2, User, Users, X } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
@@ -28,6 +29,7 @@ export function DriveDetails({
   onTrash,
   onPreview,
   onShare,
+  onUpdateMeta,
 }: {
   node: DriveNode | null;
   count: number;
@@ -40,6 +42,7 @@ export function DriveDetails({
   onTrash: (node: DriveNode) => void;
   onPreview: (node: DriveNode) => void;
   onShare: (node: DriveNode) => void;
+  onUpdateMeta: (node: DriveNode, patch: { description?: string }) => void;
 }) {
   // Multi-select aggregate
   if (count > 1) {
@@ -87,12 +90,8 @@ export function DriveDetails({
           {node.md5Checksum && <Fact label="Checksum" value={node.md5Checksum.slice(0, 12) + "…"} />}
         </div>
 
-        {node.description && (
-          <div className="border-t border-border px-4 py-3">
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-faint">Description</div>
-            <p className="whitespace-pre-wrap text-[12.5px] text-muted">{node.description}</p>
-          </div>
-        )}
+        <NotesEditor key={node.id} node={node} onSave={(desc) => onUpdateMeta(node, { description: desc })} />
+
 
         <div className="border-t border-border px-4 py-3">
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">
@@ -101,6 +100,38 @@ export function DriveDetails({
           <p className="text-[12.5px] text-muted">{node.shared ? "Shared with others." : "Private to you."} {node.ownedByMe ? "You own this." : ""}</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Editable notes — persisted to the file's Drive `description`. */
+function NotesEditor({ node, onSave }: { node: DriveNode; onSave: (desc: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(node.description ?? "");
+  const canEdit = node.capabilities?.canEdit !== false;
+  return (
+    <div className="border-t border-border px-4 py-3">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-faint">Notes</span>
+        {canEdit && !editing && (
+          <button onClick={() => { setValue(node.description ?? ""); setEditing(true); }} className="inline-flex items-center gap-1 text-[11.5px] text-primary hover:underline">
+            {node.description ? <><Pencil size={11} /> Edit</> : <><Plus size={12} /> Add</>}
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <div className="space-y-2">
+          <textarea autoFocus value={value} onChange={(e) => setValue(e.target.value)} rows={3} maxLength={1000} className="w-full resize-none rounded-[var(--radius-control)] border border-border bg-surface px-2.5 py-2 text-[12.5px] outline-none focus:border-primary focus:ring-focus" />
+          <div className="flex justify-end gap-1.5">
+            <button onClick={() => setEditing(false)} className="rounded-md px-2 py-1 text-[12px] text-muted hover:bg-surface-2"><X size={13} className="mr-1 inline" />Cancel</button>
+            <button onClick={() => { onSave(value.trim()); setEditing(false); }} className="rounded-md bg-primary px-2 py-1 text-[12px] font-medium text-primary-foreground hover:bg-primary-hover"><Check size={13} className="mr-1 inline" />Save</button>
+          </div>
+        </div>
+      ) : node.description ? (
+        <p className="whitespace-pre-wrap text-[12.5px] text-muted">{node.description}</p>
+      ) : (
+        <p className="text-[12.5px] text-faint">No notes yet.</p>
+      )}
     </div>
   );
 }

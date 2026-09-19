@@ -187,6 +187,34 @@ export function listStarred(accessToken: string, pageToken?: string): Promise<Li
 export function listTrash(accessToken: string, pageToken?: string): Promise<ListResult> {
   return listByQuery(accessToken, "trashed = true", { orderBy: "modifiedTime desc", pageToken });
 }
+export function listSharedWithMe(accessToken: string, pageToken?: string): Promise<ListResult> {
+  return listByQuery(accessToken, "sharedWithMe = true and trashed = false", { orderBy: "modifiedTime desc", pageToken });
+}
+
+/* ── revisions (version history for binary files) ── */
+
+export interface DriveRevision {
+  id: string;
+  modifiedTime?: string;
+  size?: number;
+  keepForever?: boolean;
+  lastModifyingUser?: { displayName?: string };
+  originalFilename?: string;
+}
+
+export async function listRevisions(accessToken: string, fileId: string): Promise<DriveRevision[]> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions`);
+  u.searchParams.set("fields", "revisions(id,modifiedTime,size,keepForever,originalFilename,lastModifyingUser(displayName))");
+  u.searchParams.set("pageSize", "200");
+  const res = await driveFetch(accessToken, u, {}, "Couldn't load version history");
+  const json = (await res.json()) as { revisions?: (Omit<DriveRevision, "size"> & { size?: string })[] };
+  return (json.revisions ?? []).map((r) => ({ ...r, size: r.size != null ? Number(r.size) : undefined }));
+}
+
+export async function deleteRevision(accessToken: string, fileId: string, revId: string): Promise<void> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}`);
+  await driveFetch(accessToken, u, { method: "DELETE" }, "Couldn't delete that version");
+}
 
 /** One file's full metadata (details panel). */
 export async function getFile(accessToken: string, id: string): Promise<DriveNode> {

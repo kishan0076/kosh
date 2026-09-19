@@ -13,6 +13,7 @@ import {
   Filter,
   FolderPlus,
   HardDrive,
+  History,
   LayoutGrid,
   List as ListIcon,
   Pencil,
@@ -26,6 +27,7 @@ import {
   Trash2,
   Type,
   Upload,
+  Users,
   X,
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
@@ -43,6 +45,7 @@ import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components
 import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
+import { RevisionsModal } from "@/components/drive-v2/RevisionsModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
@@ -251,6 +254,7 @@ function Shell() {
             onTrash={(n) => store.getState().openDialog({ kind: "delete", ids: [n.id], permanent: view === "trash" })}
             onPreview={(n) => store.getState().setPreview(n)}
             onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
+            onUpdateMeta={(n, patch) => void store.getState().updateMeta(n.id, patch)}
           />
         </aside>
       )}
@@ -264,6 +268,7 @@ function Shell() {
       {dialog?.kind === "move" && <MoveToModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "share" && <ShareModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "rename-bulk" && <BulkRenameModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
+      {dialog?.kind === "revisions" && <RevisionsModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} onClose={() => store.getState().setPreview(null)} />}
     </div>
   );
@@ -287,7 +292,11 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
     if (node.webContentLink) a.push({ label: "Download", icon: Download, onClick: () => window.open(node.webContentLink, "_blank", "noopener") });
     if (node.capabilities?.canRename !== false) a.push({ label: "Rename", icon: Pencil, shortcut: "F2", onClick: () => ctx.setRenamingId(node.id) });
     if (node.capabilities?.canShare !== false) a.push({ label: "Share…", icon: Share2, onClick: () => s.openDialog({ kind: "share", node }) });
-    if (!node.isFolder && node.capabilities?.canCopy !== false) a.push({ label: "Make a copy", icon: Copy, onClick: () => void s.copy(node.id) });
+    if (node.isFolder) a.push({ label: "Make a copy", icon: Copy, onClick: () => void s.copyFolder(node.id) });
+    else {
+      if (node.capabilities?.canCopy !== false) a.push({ label: "Make a copy", icon: Copy, onClick: () => void s.copy(node.id) });
+      a.push({ label: "Version history", icon: History, onClick: () => s.openDialog({ kind: "revisions", node }) });
+    }
   }
   a.push({ label: many ? `Star ${ids.length}` : node.starred ? "Unstar" : "Star", icon: Star, onClick: () => ids.forEach((id) => void s.toggleStar(id)) });
   if (many) a.push({ label: `Bulk rename ${ids.length}`, icon: Type, onClick: () => s.openDialog({ kind: "rename-bulk", ids }) });
@@ -309,6 +318,7 @@ function DriveNav() {
     { v: "myDrive", label: "My Drive", icon: HardDrive },
     { v: "recent", label: "Recent", icon: Clock },
     { v: "starred", label: "Starred", icon: Star, tone: "text-gold" },
+    { v: "shared", label: "Shared with me", icon: Users },
     { v: "trash", label: "Trash", icon: Trash2 },
   ];
   const pct = quota?.limit ? Math.min(100, Math.round((quota.usage / quota.limit) * 100)) : 0;

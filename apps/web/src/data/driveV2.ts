@@ -12,7 +12,7 @@ function toastErr(message: string): void {
   useUi.getState().toast({ message, tone: "danger" });
 }
 
-export type DriveView = "myDrive" | "recent" | "starred" | "trash" | "search";
+export type DriveView = "myDrive" | "recent" | "starred" | "trash" | "shared" | "search";
 export type Layout = "grid" | "list";
 export type SortKey = "name" | "modified" | "size" | "kind";
 export type SortDir = "asc" | "desc";
@@ -24,6 +24,7 @@ export type Dialog =
   | { kind: "move"; ids: string[] }
   | { kind: "share"; node: DriveNode }
   | { kind: "rename-bulk"; ids: string[] }
+  | { kind: "revisions"; node: DriveNode }
   | null;
 
 export interface UploadTask {
@@ -118,6 +119,8 @@ interface DriveV2State {
   deletePermanent: (ids: string[]) => Promise<void>;
   move: (ids: string[], destId: string) => Promise<void>;
   copy: (id: string) => Promise<void>;
+  copyFolder: (id: string) => Promise<void>;
+  updateMeta: (id: string, patch: { description?: string; folderColorRgb?: string }) => Promise<void>;
   emptyTrash: () => Promise<void>;
   uploadFiles: (files: File[]) => Promise<void>;
 }
@@ -230,6 +233,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       else if (view === "recent") result = await driveV2Api.recent(accountId);
       else if (view === "starred") result = await driveV2Api.starred(accountId);
       else if (view === "trash") result = await driveV2Api.trash(accountId);
+      else if (view === "shared") result = await driveV2Api.sharedWithMe(accountId);
       else {
         const p = parseSearch(searchQuery, selectedAccount()?.email);
         if (searchStarredOnly) p.starred = true;
@@ -388,6 +392,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         else if (view === "recent") result = await driveV2Api.recent(accountId, nextPageToken);
         else if (view === "starred") result = await driveV2Api.starred(accountId, nextPageToken);
         else if (view === "trash") result = await driveV2Api.trash(accountId, nextPageToken);
+        else if (view === "shared") result = await driveV2Api.sharedWithMe(accountId, nextPageToken);
         else {
           const p = parseSearch(searchQuery, selectedAccount()?.email);
           if (searchStarredOnly) p.starred = true;
@@ -591,6 +596,54 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         set((s) => ({ nodes: [file, ...s.nodes] }));
       }, { refreshQuota: true });
       pushToast({ message: "Copy created", tone: "ok" });
+    },
+
+    copyFolder: async (id) => {
+      const accountId = get().accountId;
+      if (!accountId) return;
+      const src = get().nodes.find((n) => n.id === id);
+      if (!src) return;
+      const destParent = currentFolderId(get().path);
+      pushToast({ message: `Copying “${src.name}”…`, tone: "default" });
+      let ops = 0;
+      const CAP = 500; // safety ceiling so a huge tree can't run away
+      async function copyInto(srcFolderId: string, destFolderId: string): Promise<void> {
+        let pageToken: string | undefined;
+        do {
+          const res = await driveV2Api.list(accountId!, srcFolderId, { pageToken });
+          for (const child of res.files) {
+            if (ops >= CAP) return;
+            ops++;
+            if (child.isFolder) {
+              const { file } = await driveV2Api.createFolder(accountId!, { name: child.name, parentId: destFolderId });
+              await copyInto(child.id, file.id);
+            } else {
+              await driveV2Api.copy(accountId!, child.id, { parents: [destFolderId] });
+            }
+          }
+          pageToken = res.nextPageToken;
+        } while (pageToken && ops < CAP);
+      }
+      try {
+        const { file: root } = await driveV2Api.createFolder(accountId, { name: `Copy of ${src.name}`, parentId: destParent });
+        await copyInto(src.id, root.id);
+        invalidateFolderViews();
+        if (get().view === "myDrive") void load(true);
+        void get().loadQuota();
+        pushToast({ message: ops >= CAP ? `Copied ${CAP}+ items (stopped at the limit)` : `Copied “${src.name}”`, tone: ops >= CAP ? "warn" : "ok" });
+      } catch (err) {
+        toastErr(err instanceof Error ? err.message : "Couldn't copy the folder.");
+      }
+    },
+
+    updateMeta: async (id, patch) => {
+      const accountId = get().accountId;
+      if (!accountId) return;
+      await mutate([id], (nodes) => nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)), async () => {
+        const { file } = await driveV2Api.updateMeta(accountId, id, patch);
+        set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
+        invalidateFolderViews();
+      });
     },
 
     emptyTrash: async () => {

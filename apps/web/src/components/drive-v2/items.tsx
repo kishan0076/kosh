@@ -267,6 +267,7 @@ const EMPTY_COPY: Record<DriveView, { icon: typeof Folder; title: string; body: 
   recent: { icon: File, title: "Nothing recent", body: "Files you open or edit will show up here." },
   starred: { icon: Star, title: "No starred items", body: "Star files and folders to find them fast." },
   trash: { icon: FolderOpen, title: "Trash is empty", body: "Items you delete land here for 30 days." },
+  shared: { icon: FolderOpen, title: "Nothing shared with you", body: "Files others share with you will appear here." },
   search: { icon: Search, title: "No matches", body: "Try a different search term." },
 };
 
