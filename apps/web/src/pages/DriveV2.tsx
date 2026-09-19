@@ -119,7 +119,7 @@ function Shell() {
   const detailsId = useDriveV2((s) => s.detailsId);
   const detailsNode = useDriveV2((s) => s.detailsNode);
   const detailsLoading = useDriveV2((s) => s.detailsLoading);
-  const previewId = useDriveV2((s) => s.previewId);
+  const previewNode = useDriveV2((s) => s.previewNode);
   const dialog = useDriveV2((s) => s.dialog);
   const uploads = useDriveV2((s) => s.uploads);
 
@@ -146,7 +146,6 @@ function Shell() {
   }, [nodes, prefs]);
   const orderedIds = useMemo(() => visible.map((n) => n.id), [visible]);
 
-  const previewNode = previewId ? nodes.find((n) => n.id === previewId) ?? null : null;
 
   /** Ids an action should target: the whole selection if the node is part of a multi-select, else just it. */
   const targetsFor = useCallback((node: DriveNode): string[] => (selection.has(node.id) && selection.size > 1 ? [...selection] : [node.id]), [selection]);
@@ -154,7 +153,7 @@ function Shell() {
   const handlers: ItemHandlers = {
     onOpen: (node) => {
       if (node.isFolder) store.getState().openFolder(node);
-      else store.getState().setPreview(node.id);
+      else store.getState().setPreview(node);
     },
     onClick: (node, e) => {
       store.getState().toggleSelect(node.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey }, orderedIds);
@@ -235,7 +234,7 @@ function Shell() {
             onStar={(n) => void store.getState().toggleStar(n.id)}
             onMove={(n) => store.getState().openDialog({ kind: "move", ids: [n.id] })}
             onTrash={(n) => store.getState().openDialog({ kind: "delete", ids: [n.id], permanent: view === "trash" })}
-            onPreview={(n) => store.getState().setPreview(n.id)}
+            onPreview={(n) => store.getState().setPreview(n)}
           />
         </aside>
       )}
@@ -265,7 +264,7 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
   const a: MenuAction[] = [];
   if (!many) {
     if (node.isFolder) a.push({ label: "Open", icon: CornerUpRight, onClick: () => s.openFolder(node) });
-    else a.push({ label: "Preview", icon: ExternalLink, onClick: () => s.setPreview(node.id) });
+    else a.push({ label: "Preview", icon: ExternalLink, onClick: () => s.setPreview(node) });
     if (node.webViewLink) a.push({ label: "Open in Drive", icon: ExternalLink, onClick: () => window.open(node.webViewLink, "_blank", "noopener") });
     if (node.webContentLink) a.push({ label: "Download", icon: Download, onClick: () => window.open(node.webContentLink, "_blank", "noopener") });
     if (node.capabilities?.canRename !== false) a.push({ label: "Rename", icon: Pencil, shortcut: "F2", onClick: () => ctx.setRenamingId(node.id) });
@@ -562,7 +561,7 @@ function VirtualGrid({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HT
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
-    const compute = () => { const w = el.clientWidth; const min = 150, gap = 12; setCols(Math.max(1, Math.floor((w + gap) / (min + gap)))); };
+    const compute = () => { const w = el.clientWidth - 24; const min = 150, gap = 12; setCols(Math.max(1, Math.floor((w + gap) / (min + gap)))); }; // -24 = p-3 horizontal padding
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(el);

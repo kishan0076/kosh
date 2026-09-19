@@ -16,7 +16,7 @@ function useFolderDrop(node: DriveNode, onFolderDrop: (folder: DriveNode, ids: s
     over,
     dropProps: {
       onDragOver: (e: ReactDragEvent) => { if (hasDriveDrag(e)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move"; setOver(true); } },
-      onDragLeave: () => setOver(false),
+      onDragLeave: (e: ReactDragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false); }, // ignore crossings onto children (no flicker)
       onDrop: (e: ReactDragEvent) => {
         if (!hasDriveDrag(e)) return; // external file drop bubbles to the content upload zone
         e.preventDefault();

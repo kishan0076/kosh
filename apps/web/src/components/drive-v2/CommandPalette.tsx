@@ -74,7 +74,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
   const fileRows = results.map((node) => ({
     id: "f-" + node.id,
     node,
-    run: () => { if (node.isFolder) s().openFolder(node); else s().setPreview(node.id); },
+    run: () => { if (node.isFolder) s().openFolder(node); else s().setPreview(node); },
   }));
   const total = commands.length + fileRows.length;
 

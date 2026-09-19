@@ -69,7 +69,7 @@ interface DriveV2State {
   detailsId: string | null;
   detailsNode: DriveNode | null;
   detailsLoading: boolean;
-  previewId: string | null;
+  previewNode: DriveNode | null;
 
   quota: DriveQuota | null;
   busyIds: Set<string>;
@@ -104,7 +104,7 @@ interface DriveV2State {
 
   openDialog: (d: Dialog) => void;
   closeDialog: () => void;
-  setPreview: (id: string | null) => void;
+  setPreview: (node: DriveNode | null) => void;
 
   createFolder: (input: { name: string; parentId: string; folderColorRgb?: string; description?: string }) => Promise<void>;
   rename: (id: string, name: string) => Promise<void>;
@@ -252,7 +252,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     detailsId: null,
     detailsNode: null,
     detailsLoading: false,
-    previewId: null,
+    previewNode: null,
     quota: null,
     busyIds: new Set(),
     dialog: null,
@@ -421,7 +421,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
     openDialog: (d) => set({ dialog: d }),
     closeDialog: () => set({ dialog: null }),
-    setPreview: (id) => set({ previewId: id }),
+    setPreview: (node) => set({ previewNode: node }),
 
     createFolder: async (input) => {
       const accountId = get().accountId;
@@ -502,11 +502,18 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     move: async (ids, destId) => {
       const accountId = get().accountId;
       if (!accountId) return;
+      // Skip items already in the destination — otherwise a same-folder "move" (e.g. dropping onto the
+      // current folder's breadcrumb) would optimistically remove them from the view for no reason.
+      const snapshot = get().nodes;
+      const targets = ids.filter((id) => !(snapshot.find((n) => n.id === id)?.parents ?? []).includes(destId));
+      if (!targets.length) {
+        set({ selection: new Set() });
+        return;
+      }
       // Detach from each item's REAL parents (not the current view folder) — otherwise a move from
       // Recent/Starred/Search leaves the file in its original folder (duplicated across two parents).
-      const snapshot = get().nodes;
       const ok = await bulk(
-        ids,
+        targets,
         (id) => {
           const removeParents = (snapshot.find((n) => n.id === id)?.parents ?? []).filter((p) => p !== destId);
           return driveV2Api.move(accountId, id, [destId], removeParents);
