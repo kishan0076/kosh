@@ -79,8 +79,21 @@ account's granted scope (exact-token match on `…/auth/drive`).
 - **Details drawer** — thumbnail, type, size, owner, dates, checksum, **editable notes** (persisted to
   the file's Drive description), a sharing summary, and quick actions.
 - **Sharing & permissions** — a Share modal: add people by email with a role, change/remove each
-  person's access, toggle "Anyone with the link", and copy the link (`permissions.*`).
+  person's access (domain grants and non-assignable roles shown read-only), toggle "Anyone with the
+  link", and copy the link (`permissions.*`).
+- **Embedded preview** — PDFs, videos, and Google Docs/Sheets/Slides open **inline** in a full-screen
+  viewer (Drive's own embed via a scoped CSP `frame-src`); images render directly; anything else offers
+  "Open in Drive".
+- **Live two-way sync** — a background poller (`changes.list` from a `startPageToken`) keeps the open
+  view in step with Drive: external edits, new files and deletions appear automatically. A toolbar
+  **sync pill** shows live / syncing / error + "synced N ago"; polling pauses when the tab is hidden.
+- **Activity timeline** — every change (created / edited / trashed / removed), in Kosh or elsewhere in
+  Drive, streams into an Activity panel while the tab is open, with **CSV export** (a lightweight audit
+  log).
+- **Shared Drives (spaces)** — a space picker switches between **My Drive** and each Shared Drive; browse,
+  search, recent, starred and trash are all scoped to the selected drive (`corpora=drive` + `driveId`).
 - **Drag-and-drop move** — drag files/cards (or a whole selection) onto folders or breadcrumb segments.
+- **Rubber-band select** — click-drag an empty area to marquee-select the visible items (hold ⇧/⌘ to add).
 - **Virtualized** list and grid — thousands of items scroll smoothly.
 - **⌘K command palette** — run actions or search-and-open any file.
 - **Insights** — a storage-by-type breakdown, a **duplicate finder** (group by md5, reclaim space),
@@ -88,7 +101,8 @@ account's granted scope (exact-token match on `…/auth/drive`).
 - **Bulk rename** — find/replace + sequential numbering with an extension-preserving live preview.
 - **Advanced search operators** — `type:`, `owner:me|<email>`, `before:`/`after:`, `is:starred`, plus
   **saved searches**.
-- **Version history** — list and delete prior revisions of a file.
+- **Version history** — list prior revisions, **download** any version, **keep-forever** (pin) a
+  version so Drive won't auto-prune it, and delete old ones.
 - **Shared with me** — a dedicated view of files others shared with you.
 - **Recursive folder copy** — "Make a copy" on a folder walks and recreates the whole tree.
 - **Custom Create-folder modal** — name validation, live duplicate hint, and optional folder **color**
@@ -108,29 +122,35 @@ account's granted scope (exact-token match on `…/auth/drive`).
 
 Realistic with the current scope; not built yet:
 
-- **Real-time two-way sync** — poll `changes.list` from a stored page token, then `changes.watch`
-  webhooks (needs new server routes + a callback endpoint).
-- **Rubber-band drag-select** and drag-drop **upload into a specific folder** (drop external files onto
-  a folder row).
-- **Embedded preview** for PDF/Docs/video via an iframe — needs one line added to the web CSP
-  (`frame-src https://drive.google.com`); today non-images open in Drive.
-- **Restore a specific revision** / download old versions (list + delete are built).
-- **Shared Drives** (`driveId`, `corpora=drive`) as first-class spaces — the API already passes
-  `supportsAllDrives`, so items in Shared Drives are operable; a dedicated space picker is the addition.
+- **`changes.watch` push webhooks** — today sync is *polling* (`changes.list` every ~12s while the tab
+  is visible), which is simple and reliable. Push notifications would cut latency to near-instant but
+  need a public, verifiable callback endpoint + channel lifecycle management on the server.
+- **Drag-drop upload into a specific folder** — drop external files directly onto a folder row (today
+  they upload into the current folder).
+- **In-place revision restore** — promote an old revision to "current" without the download-then-reupload
+  round-trip (the API has no direct "make revision X the head" call for binary files, so this means
+  re-uploading the chosen revision's bytes).
 
-## 6. Infra / enterprise-gated (documented, deliberately not shipped)
+## 6. Enterprise / admin-gated (documented, deliberately NOT shipped)
 
-These need infrastructure, an admin setup, or a new OAuth scope + re-consent — shipping a half-working
-version would be worse than none, so they're documented instead:
+These are **not** per-user Drive API features — a per-user OAuth token cannot perform them. They require
+a Google Workspace **admin console**, a separate enterprise API + an admin-defined taxonomy, or a new
+OAuth scope with re-consent. Shipping fake UI that only *looked* like it applied them would be worse than
+not shipping — so they're documented here with exactly what each one needs, and left out.
 
-- **Drive Activity timeline** — the Drive Activity API is a *separate* API that must be enabled and
-  needs the extra `drive.activity.readonly` scope (a re-consent). Straightforward to add once you accept
-  that scope prompt.
-- **Full governance** — Labels (the **Drive Labels API**, a separate API + admin label taxonomy),
-  retention policies, and DLP are Workspace-admin / enterprise features, not user-level API calls.
+- **Drive Activity API timeline** — the in-app Activity panel (§4) is built from the **changes feed** on
+  the existing scope. A richer, actor-attributed timeline ("Alex commented", "Sam moved") needs the
+  *separate* **Drive Activity API** enabled **and** the extra `drive.activity.readonly` scope (a
+  re-consent). Additive once you accept that scope prompt; not shipped to avoid a silent scope upgrade.
+- **Labels / retention / DLP** — Labels are the **Drive Labels API** (a separate API **plus** an
+  admin-published label taxonomy); retention and DLP are **Workspace-admin / Vault** policies. None are
+  user-level calls — a personal OAuth token has nothing to apply, so there is no honest per-user UI to
+  build.
 - **Service account + domain-wide delegation** — an org deployment concern (a service-account key +
-  admin console delegation), not something to expose in the per-user UI.
-- **Exportable audit logs** — meaningful only alongside the change-tracking/activity work above.
+  admin-console delegation), never something to expose in a per-user UI.
+- **Exportable audit logs (org-wide)** — the built Activity panel exports the *current session's*
+  observed changes as CSV. A tamper-evident, org-wide audit export is a Workspace-admin / Vault feature,
+  not a user-token capability.
 
 ---
 
@@ -138,11 +158,16 @@ version would be worse than none, so they're documented instead:
 
 Reads: `GET /list?parent=`, `/search` (text/mimeType/mimeContains/owner/before/after/starred),
 `/recent`, `/starred`, `/trash`, `/shared`, `/scan?orderBy=&cap=`, `/files/:fileId`, `/path?folder=`,
-`/files/:fileId/permissions`, `/files/:fileId/revisions`. Writes: `POST /folders`,
+`/files/:fileId/permissions`, `/files/:fileId/revisions`, `/drives` (Shared Drives),
+`/changes/start` + `/changes?pageToken=` (live sync). All list/search/view reads accept an optional
+`?driveId=` to scope to a Shared Drive. Writes: `POST /folders`,
 `PATCH /files/:fileId/rename|star|trash|meta`, `POST /files/:fileId/move|copy`, `DELETE /files/:fileId`,
 `POST /empty-trash`, `POST|PATCH|DELETE /files/:fileId/permissions[/:permId]`,
-`DELETE /files/:fileId/revisions/:revId`. Accounts, config, storage quota and the upload token reuse the
-V1 endpoints. Errors use Kosh's typed envelope (`NEEDS_RECONNECT` 400 → the scope gate, `UPSTREAM` 502 → retry).
+`PATCH /files/:fileId/revisions/:revId` (keep-forever) + `DELETE /files/:fileId/revisions/:revId`.
+Accounts, config, storage quota and the upload token reuse the V1 endpoints. Revision **bytes** download
+browser→Google directly with a short-lived token (never proxied). Errors use Kosh's typed envelope
+(`NEEDS_RECONNECT` 400 → the scope gate, `FORBIDDEN` 403 → per-item permission, `DRIVE_BAD_REQUEST` 400,
+`UPSTREAM` 502 → retry).
 
 ---
 
@@ -152,6 +177,12 @@ V1 endpoints. Errors use Kosh's typed envelope (`NEEDS_RECONNECT` 400 → the sc
   "—" and offers "Open in Drive".
 - **File copy** is atomic; **folder copy** is a bounded (500-op) client-side walk.
 - **Insights** scans up to 20k files and flags when the result was sampled.
+- **Live sync** polls every ~12s while the tab is visible and pauses when hidden (to save quota); it
+  re-anchors its page token when you switch account or Shared Drive. The Activity timeline lives only in
+  the open tab (it is not persisted server-side) and is capped at 200 recent entries.
+- **Embedded preview** requires `frame-src https://drive.google.com https://docs.google.com` in the web
+  CSP (`apps/web/public/_headers`); the iframe is sandboxed. It reflects Drive's own sharing — a file you
+  can't view in Drive won't render in the embed.
 - **Thumbnails** are short-lived and auth-scoped; V2 falls back to a file-type icon if one won't load.
 - The only raw hex colors in V2 are Google Drive's own **folder-color palette** (confined to the
   color picker); everything else uses Kosh's semantic design tokens.

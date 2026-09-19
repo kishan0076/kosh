@@ -87,6 +87,28 @@ export interface SearchParams {
   after?: string;
   starred?: boolean;
   pageToken?: string;
+  driveId?: string;
+}
+
+export interface SharedDrive {
+  id: string;
+  name: string;
+  colorRgb?: string;
+  capabilities?: Record<string, boolean>;
+}
+
+export interface DriveChange {
+  fileId: string;
+  removed: boolean;
+  time?: string;
+  changeType?: string;
+  file?: DriveNode;
+}
+
+export interface ChangesResult {
+  changes: DriveChange[];
+  newStartPageToken?: string;
+  nextPageToken?: string;
 }
 
 export interface DriveScanFile {
@@ -144,11 +166,24 @@ export interface DrivePermission {
 
 const base = (accountId: string) => `/drive-v2/accounts/${accountId}`;
 
+interface ViewQuery {
+  pageToken?: string;
+  driveId?: string;
+}
+function viewQuery(opts: ViewQuery): string {
+  const q = new URLSearchParams();
+  if (opts.pageToken) q.set("pageToken", opts.pageToken);
+  if (opts.driveId) q.set("driveId", opts.driveId);
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
 export const driveV2Api = {
-  list: (accountId: string, parent = "root", opts: { pageToken?: string; orderBy?: string } = {}) => {
+  list: (accountId: string, parent = "root", opts: { pageToken?: string; orderBy?: string; driveId?: string } = {}) => {
     const q = new URLSearchParams({ parent });
     if (opts.pageToken) q.set("pageToken", opts.pageToken);
     if (opts.orderBy) q.set("orderBy", opts.orderBy);
+    if (opts.driveId) q.set("driveId", opts.driveId);
     return v2req<ListResult>(`${base(accountId)}/list?${q}`);
   },
   search: (accountId: string, params: SearchParams) => {
@@ -161,6 +196,7 @@ export const driveV2Api = {
     if (params.after) q.set("after", params.after);
     if (params.starred) q.set("starred", "true");
     if (params.pageToken) q.set("pageToken", params.pageToken);
+    if (params.driveId) q.set("driveId", params.driveId);
     return v2req<ListResult>(`${base(accountId)}/search?${q}`);
   },
   scan: (accountId: string, opts: { orderBy?: string; cap?: number } = {}) => {
@@ -169,10 +205,20 @@ export const driveV2Api = {
     if (opts.cap) q.set("cap", String(opts.cap));
     return v2req<{ files: DriveScanFile[]; truncated: boolean }>(`${base(accountId)}/scan?${q}`);
   },
-  recent: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/recent${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
-  starred: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/starred${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
-  trash: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/trash${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
-  sharedWithMe: (accountId: string, pageToken?: string) => v2req<ListResult>(`${base(accountId)}/shared${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
+  recent: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/recent${viewQuery(opts)}`),
+  starred: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/starred${viewQuery(opts)}`),
+  trash: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/trash${viewQuery(opts)}`),
+  sharedWithMe: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/shared${viewQuery(opts)}`),
+
+  drives: (accountId: string, pageToken?: string) =>
+    v2req<{ drives: SharedDrive[]; nextPageToken?: string }>(`${base(accountId)}/drives${pageToken ? `?pageToken=${encodeURIComponent(pageToken)}` : ""}`),
+  changesStart: (accountId: string, driveId?: string) =>
+    v2req<{ startPageToken: string }>(`${base(accountId)}/changes/start${driveId ? `?driveId=${encodeURIComponent(driveId)}` : ""}`),
+  changes: (accountId: string, pageToken: string, driveId?: string) => {
+    const q = new URLSearchParams({ pageToken });
+    if (driveId) q.set("driveId", driveId);
+    return v2req<ChangesResult>(`${base(accountId)}/changes?${q}`);
+  },
   getFile: (accountId: string, fileId: string) => v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}`),
   path: (accountId: string, folder: string) => v2req<{ path: { id: string; name: string }[] }>(`${base(accountId)}/path?folder=${encodeURIComponent(folder)}`),
 
@@ -203,6 +249,8 @@ export const driveV2Api = {
 
   listRevisions: (accountId: string, fileId: string) => v2req<{ revisions: DriveRevision[] }>(`${base(accountId)}/files/${fileId}/revisions`),
   deleteRevision: (accountId: string, fileId: string, revId: string) => v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/revisions/${revId}`, { method: "DELETE" }),
+  updateRevision: (accountId: string, fileId: string, revId: string, keepForever: boolean) =>
+    v2req<{ revision: DriveRevision }>(`${base(accountId)}/files/${fileId}/revisions/${revId}`, { method: "PATCH", body: JSON.stringify({ keepForever }) }),
 };
 
 export interface DriveRevision {

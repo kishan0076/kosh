@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { History, Trash2 } from "lucide-react";
+import { Download, History, Pin, PinOff, Trash2 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { ago } from "@/lib/time";
+import { cn } from "@/lib/cn";
 import { Button, Spinner } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { useUi } from "@/data/ui";
@@ -10,6 +11,7 @@ import { useDriveV2 } from "@/data/driveV2";
 
 export function RevisionsModal({ node, onClose }: { node: DriveNode; onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId)!;
+  const download = useDriveV2((s) => s.downloadRevision);
   const toast = useUi((s) => s.toast);
   const [revs, setRevs] = useState<DriveRevision[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +45,19 @@ export function RevisionsModal({ node, onClose }: { node: DriveNode; onClose: ()
     }
   }
 
+  async function toggleKeep(rev: DriveRevision) {
+    setBusy(rev.id);
+    try {
+      const { revision } = await driveV2Api.updateRevision(accountId, node.id, rev.id, !rev.keepForever);
+      setRevs((rs) => rs.map((r) => (r.id === rev.id ? { ...r, keepForever: revision.keepForever } : r)));
+      toast({ message: revision.keepForever ? "Version pinned — kept forever" : "Version unpinned", tone: "ok" });
+    } catch {
+      toast({ message: "Couldn't update that version", tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <Modal open onClose={onClose} className="max-w-lg" labelledBy="rev-title">
       <div className="flex items-center gap-3 border-b border-border px-5 py-4">
@@ -67,19 +82,31 @@ export function RevisionsModal({ node, onClose }: { node: DriveNode; onClose: ()
                   <div className="flex items-center gap-2 text-[13px] font-medium">
                     {r.modifiedTime ? ago(r.modifiedTime) : "Unknown time"}
                     {i === 0 && <span className="rounded-full bg-ok-soft px-1.5 text-[10px] text-ok">current</span>}
+                    {r.keepForever && <span className="inline-flex items-center gap-0.5 rounded-full bg-primary-soft px-1.5 text-[10px] text-primary"><Pin size={9} /> kept</span>}
                   </div>
                   <div className="text-[11.5px] text-faint">{r.lastModifyingUser?.displayName ?? "Someone"}{r.size != null ? ` · ${formatBytes(r.size)}` : ""}</div>
                 </div>
                 {busy === r.id ? (
                   <Spinner size={14} className="text-muted" />
-                ) : i !== 0 ? (
-                  <button onClick={() => remove(r)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-danger" aria-label="Delete this version"><Trash2 size={15} /></button>
-                ) : null}
+                ) : (
+                  <div className="flex items-center gap-0.5">
+                    <button onClick={() => void download(node.id, r.id, node.name)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-primary" aria-label="Download this version" title="Download this version"><Download size={15} /></button>
+                    <button onClick={() => void toggleKeep(r)} className={cn("grid h-8 w-8 place-items-center rounded-md hover:bg-surface-2", r.keepForever ? "text-primary" : "text-muted hover:text-primary")} aria-label={r.keepForever ? "Unpin this version" : "Keep this version forever"} title={r.keepForever ? "Unpin (allow auto-cleanup)" : "Keep forever (pin)"}>
+                      {r.keepForever ? <Pin size={15} /> : <PinOff size={15} />}
+                    </button>
+                    {i !== 0 && <button onClick={() => remove(r)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-danger" aria-label="Delete this version" title="Delete this version"><Trash2 size={15} /></button>}
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
+      {!loading && !error && revs.length > 0 && (
+        <p className="border-t border-border px-5 py-2.5 text-[11.5px] text-faint">
+          Download any version to your device, or pin one to keep it forever. To restore an old version, download it and re-upload — Drive makes it the new current version.
+        </p>
+      )}
       <div className="flex justify-end border-t border-border px-5 py-3.5">
         <Button variant="primary" onClick={onClose}>Done</Button>
       </div>

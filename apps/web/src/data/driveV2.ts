@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { uid } from "@/lib/ids";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
-import { driveV2Api, hasFullDrive, type DriveNode, type SearchParams } from "./driveV2Api";
+import { driveV2Api, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
 
 /** Push a toast without a React hook (store actions run outside components). */
@@ -43,6 +43,23 @@ interface ViewPrefs {
   filterKind: FilterKind | null;
 }
 
+/** Live-sync status shown in the toolbar. */
+export type SyncStatus = "off" | "live" | "syncing" | "error";
+export interface SyncState {
+  status: SyncStatus;
+  lastAt: number | null; // ms epoch of the last successful poll
+  applied: number; // running count of changes applied this session
+}
+
+/** One entry in the activity/changes timeline (exportable as an audit log). */
+export interface ActivityEntry {
+  fileId: string;
+  name: string;
+  action: "edited" | "created" | "trashed" | "removed";
+  time: string; // ISO
+  isFolder: boolean;
+}
+
 interface DriveV2State {
   status: "loading" | "ready" | "error";
   error: string | null;
@@ -81,8 +98,23 @@ interface DriveV2State {
   insightsOpen: boolean;
   setInsights: (v: boolean) => void;
 
+  // Shared Drives (spaces): null spaceId = My Drive.
+  spaces: SharedDrive[];
+  spaceId: string | null;
+  spaceName: string | null;
+
+  // Live two-way sync (changes.list polling) + activity timeline.
+  sync: SyncState;
+  activity: ActivityEntry[];
+  activityOpen: boolean;
+  setActivity: (v: boolean) => void;
+  clearActivity: () => void;
+
   init: () => Promise<void>;
   selectAccount: (id: string) => Promise<void>;
+  selectSpace: (id: string | null) => Promise<void>;
+  startSync: () => void;
+  stopSync: () => void;
   reconnectUrl: () => string;
 
   setView: (v: DriveView) => void;
@@ -105,6 +137,7 @@ interface DriveV2State {
 
   toggleSelect: (id: string, mods: { shift?: boolean; meta?: boolean }, orderedIds: string[]) => void;
   selectAll: (orderedIds: string[]) => void;
+  marqueeSelect: (ids: string[]) => void;
   clearSelection: () => void;
 
   openDialog: (d: Dialog) => void;
@@ -123,6 +156,7 @@ interface DriveV2State {
   updateMeta: (id: string, patch: { description?: string; folderColorRgb?: string }) => Promise<void>;
   emptyTrash: () => Promise<void>;
   uploadFiles: (files: File[]) => Promise<void>;
+  downloadRevision: (fileId: string, revId: string, filename: string) => Promise<void>;
 }
 
 /* ── module-level (no re-render) ── */
@@ -131,6 +165,13 @@ const folderCache = new Map<string, { nodes: DriveNode[]; nextPageToken?: string
 let tokenCache: { accountId: string; token: string; exp: number } | null = null;
 let loadSeq = 0; // bumped on every navigation/load so slow mutations never clobber newer views
 const uploadControls = new Map<string, ResumableControl>();
+
+/* Live-sync controller (module-level so it survives re-renders; driven by the page's mount effect). */
+const SYNC_INTERVAL = 12_000; // poll cadence when the tab is visible
+const ACTIVITY_CAP = 200;
+let syncActive = false;
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let syncToken: string | null = null; // changes.list page token ("where we are")
 
 const PREFS_KEY = "kosh.driveV2.prefs";
 const DEFAULT_PREFS: ViewPrefs = { layout: "grid", sortKey: "name", sortDir: "asc", filterKind: null };
@@ -150,7 +191,8 @@ function savePrefs(p: ViewPrefs) {
   }
 }
 
-const currentFolderId = (path: { id: string }[]) => path.at(-1)?.id ?? "root";
+/** The folder currently browsed: the deepest breadcrumb, else the space root (Shared Drive id or "root"). */
+const currentFolderId = (path: { id: string }[], spaceId: string | null = null) => path.at(-1)?.id ?? spaceId ?? "root";
 
 /** Map `type:` operator values to a Drive mime filter. */
 const TYPE_MAP: Record<string, { exact?: string; contains?: string }> = {
@@ -207,14 +249,15 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   }
 
   function cacheKey(view: DriveView, folderId: string): string {
-    return `${get().accountId}:${view}:${view === "myDrive" ? folderId : ""}`;
+    return `${get().accountId}:${get().spaceId ?? ""}:${view}:${view === "myDrive" ? folderId : ""}`;
   }
 
   /** Fetch the current view's first page, cache-first for My Drive. */
   async function load(force = false): Promise<void> {
-    const { accountId, view, path, searchQuery, searchStarredOnly } = get();
+    const { accountId, view, path, searchQuery, searchStarredOnly, spaceId } = get();
     if (!accountId || !get().scopeOk) return;
-    const folderId = currentFolderId(path);
+    const folderId = currentFolderId(path, spaceId);
+    const driveId = spaceId ?? undefined;
     const key = cacheKey(view, folderId);
     const myseq = ++loadSeq;
 
@@ -229,14 +272,15 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     set({ listLoading: true, listError: null });
     try {
       let result;
-      if (view === "myDrive") result = await driveV2Api.list(accountId, folderId);
-      else if (view === "recent") result = await driveV2Api.recent(accountId);
-      else if (view === "starred") result = await driveV2Api.starred(accountId);
-      else if (view === "trash") result = await driveV2Api.trash(accountId);
+      if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { driveId });
+      else if (view === "recent") result = await driveV2Api.recent(accountId, { driveId });
+      else if (view === "starred") result = await driveV2Api.starred(accountId, { driveId });
+      else if (view === "trash") result = await driveV2Api.trash(accountId, { driveId });
       else if (view === "shared") result = await driveV2Api.sharedWithMe(accountId);
       else {
         const p = parseSearch(searchQuery, selectedAccount()?.email);
         if (searchStarredOnly) p.starred = true;
+        p.driveId = driveId;
         result = await driveV2Api.search(accountId, p);
       }
       if (myseq !== loadSeq) return; // superseded by a newer navigation
@@ -277,7 +321,84 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
   function invalidateFolderViews() {
     // Drop the time-sensitive caches (recent/starred/trash aren't cached, so this clears My Drive dirs).
-    for (const k of [...folderCache.keys()]) if (k.startsWith(`${get().accountId}:myDrive:`)) folderCache.delete(k);
+    for (const k of [...folderCache.keys()]) if (k.startsWith(`${get().accountId}:`) && k.includes(":myDrive:")) folderCache.delete(k);
+  }
+
+  /** Fetch the account's Shared Drives for the space picker (non-fatal — many accounts have none). */
+  async function loadSpaces(): Promise<void> {
+    const accountId = get().accountId;
+    if (!accountId || !get().scopeOk) return;
+    try {
+      const { drives } = await driveV2Api.drives(accountId);
+      if (get().accountId === accountId) set({ spaces: drives });
+    } catch {
+      /* Shared Drives are optional — ignore (e.g. consumer accounts return none). */
+    }
+  }
+
+  /** Fold a batch of Drive changes into the live view + the activity timeline (two-way sync). */
+  function applyChanges(changes: DriveChange[]): void {
+    if (!changes.length) return;
+    const entries: ActivityEntry[] = [];
+    set((s) => {
+      let nodes = s.nodes;
+      let detailsNode = s.detailsNode;
+      const folderId = currentFolderId(s.path, s.spaceId);
+      const now = new Date().toISOString();
+      for (const c of changes) {
+        const idx = nodes.findIndex((n) => n.id === c.fileId);
+        const known = nodes[idx];
+        const gone = c.removed || c.file?.trashed;
+        // Node mutation is view-scoped; the activity log records EVERY change in the corpus.
+        if (gone) {
+          if (idx !== -1 && s.view !== "trash") nodes = nodes.filter((n) => n.id !== c.fileId);
+          if (detailsNode?.id === c.fileId) detailsNode = null;
+          entries.push({ fileId: c.fileId, name: known?.name ?? c.file?.name ?? "A file", action: c.removed ? "removed" : "trashed", time: c.time ?? now, isFolder: known?.isFolder ?? c.file?.isFolder ?? false });
+        } else if (c.file) {
+          const isNewChild = idx === -1 && s.view === "myDrive" && (c.file.parents ?? []).includes(folderId);
+          if (idx !== -1) nodes = nodes.map((n) => (n.id === c.fileId ? c.file! : n)); // external edit → reflect it
+          else if (isNewChild) nodes = [c.file, ...nodes]; // a new child of the folder we're looking at
+          if (detailsNode?.id === c.fileId) detailsNode = c.file;
+          entries.push({ fileId: c.fileId, name: c.file.name, action: isNewChild ? "created" : "edited", time: c.time ?? now, isFolder: c.file.isFolder });
+        }
+      }
+      const activity = entries.length ? [...entries.reverse(), ...s.activity].slice(0, ACTIVITY_CAP) : s.activity;
+      return { nodes, detailsNode, activity };
+    });
+    invalidateFolderViews(); // next navigation refetches authoritative state
+  }
+
+  /** One sync poll: (re)establish a page token if needed, else fetch+apply changes and advance it. */
+  async function syncTick(): Promise<void> {
+    const { accountId, scopeOk, spaceId } = get();
+    const visible = typeof document === "undefined" || document.visibilityState === "visible";
+    if (syncActive && accountId && scopeOk && visible) {
+      try {
+        if (!syncToken) {
+          // First tick after start / account / space switch — anchor at "now".
+          const { startPageToken } = await driveV2Api.changesStart(accountId, spaceId ?? undefined);
+          syncToken = startPageToken;
+          set({ sync: { status: "live", lastAt: Date.now(), applied: get().sync.applied } });
+        } else {
+          set((s) => ({ sync: { ...s.sync, status: "syncing" } }));
+          const { changes, newStartPageToken, nextPageToken } = await driveV2Api.changes(accountId, syncToken, spaceId ?? undefined);
+          applyChanges(changes);
+          syncToken = nextPageToken ?? newStartPageToken ?? syncToken;
+          set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + changes.length } }));
+          // More pages queued? drain them promptly instead of waiting a full interval.
+          if (nextPageToken) { scheduleSync(300); return; }
+        }
+      } catch {
+        set((s) => ({ sync: { ...s.sync, status: "error" } }));
+      }
+    }
+    scheduleSync(SYNC_INTERVAL);
+  }
+
+  function scheduleSync(delay: number): void {
+    if (!syncActive) return;
+    if (syncTimer) clearTimeout(syncTimer);
+    syncTimer = setTimeout(() => void syncTick(), delay);
   }
 
   return {
@@ -309,7 +430,16 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     dialog: null,
     uploads: [],
     insightsOpen: false,
-    setInsights: (v) => set({ insightsOpen: v }),
+    setInsights: (v) => set(v ? { insightsOpen: true, activityOpen: false } : { insightsOpen: false }),
+
+    spaces: [],
+    spaceId: null,
+    spaceName: null,
+    sync: { status: "off", lastAt: null, applied: 0 },
+    activity: [],
+    activityOpen: false,
+    setActivity: (v) => set(v ? { activityOpen: true, insightsOpen: false } : { activityOpen: false }),
+    clearActivity: () => set({ activity: [] }),
 
     init: async () => {
       set({ status: "loading", error: null });
@@ -320,7 +450,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         if (first) {
           set({ accountId: first.id });
           set({ scopeOk: computeScopeOk() });
-          if (get().scopeOk) await Promise.all([load(), get().loadQuota()]);
+          if (get().scopeOk) await Promise.all([load(), get().loadQuota(), loadSpaces()]);
         }
       } catch (err) {
         set({ status: "error", error: err instanceof Error ? err.message : "Couldn't reach the Drive service." });
@@ -329,15 +459,35 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
     selectAccount: async (id) => {
       tokenCache = null;
-      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false });
+      syncToken = null; // new corpus → re-anchor sync
+      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [] });
       set({ scopeOk: computeScopeOk() });
-      if (get().scopeOk) await Promise.all([load(true), get().loadQuota()]);
+      if (get().scopeOk) await Promise.all([load(true), get().loadQuota(), loadSpaces()]);
+    },
+
+    selectSpace: async (id) => {
+      syncToken = null; // switching spaces re-anchors the change feed
+      const space = id ? get().spaces.find((d) => d.id === id) ?? null : null;
+      set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false });
+      await load(true);
+    },
+
+    startSync: () => {
+      if (!get().accountId || !get().scopeOk) { set({ sync: { status: "off", lastAt: null, applied: 0 } }); return; }
+      syncActive = true;
+      set((s) => ({ sync: { ...s.sync, status: s.sync.status === "off" ? "syncing" : s.sync.status } }));
+      scheduleSync(0); // kick immediately (first tick anchors the page token)
+    },
+    stopSync: () => {
+      syncActive = false;
+      if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
+      set((s) => ({ sync: { ...s.sync, status: "off" } }));
     },
 
     reconnectUrl: () => driveApi.connectUrl(),
 
     setView: (v) => {
-      set({ insightsOpen: false });
+      set({ insightsOpen: false, activityOpen: false });
       if (v === get().view && v !== "search") return;
       // path is preserved across views so returning to My Drive restores the last folder.
       set({ view: v, selection: new Set(), detailsId: null, detailsNode: null });
@@ -383,22 +533,24 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
     load,
     loadMore: async () => {
-      const { accountId, view, path, nextPageToken, searchQuery, searchStarredOnly, loadingMore } = get();
+      const { accountId, view, path, nextPageToken, searchQuery, searchStarredOnly, loadingMore, spaceId } = get();
       if (!accountId || !nextPageToken || loadingMore) return;
       set({ loadingMore: true });
       const seq = loadSeq;
+      const driveId = spaceId ?? undefined;
       try {
         let result;
-        const folderId = currentFolderId(path);
-        if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { pageToken: nextPageToken });
-        else if (view === "recent") result = await driveV2Api.recent(accountId, nextPageToken);
-        else if (view === "starred") result = await driveV2Api.starred(accountId, nextPageToken);
-        else if (view === "trash") result = await driveV2Api.trash(accountId, nextPageToken);
-        else if (view === "shared") result = await driveV2Api.sharedWithMe(accountId, nextPageToken);
+        const folderId = currentFolderId(path, spaceId);
+        if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { pageToken: nextPageToken, driveId });
+        else if (view === "recent") result = await driveV2Api.recent(accountId, { pageToken: nextPageToken, driveId });
+        else if (view === "starred") result = await driveV2Api.starred(accountId, { pageToken: nextPageToken, driveId });
+        else if (view === "trash") result = await driveV2Api.trash(accountId, { pageToken: nextPageToken, driveId });
+        else if (view === "shared") result = await driveV2Api.sharedWithMe(accountId, { pageToken: nextPageToken });
         else {
           const p = parseSearch(searchQuery, selectedAccount()?.email);
           if (searchStarredOnly) p.starred = true;
           p.pageToken = nextPageToken;
+          p.driveId = driveId;
           result = await driveV2Api.search(accountId, p);
         }
         if (seq !== loadSeq) { set({ loadingMore: false }); return; } // superseded — still clear the flag
@@ -480,6 +632,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       });
     },
     selectAll: (orderedIds) => set({ selection: new Set(orderedIds) }),
+    marqueeSelect: (ids) => set({ selection: new Set(ids) }),
     clearSelection: () => set({ selection: new Set() }),
 
     openDialog: (d) => set({ dialog: d }),
@@ -605,7 +758,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (!accountId) return;
       const src = get().nodes.find((n) => n.id === id);
       if (!src) return;
-      const destParent = currentFolderId(get().path);
+      const destParent = currentFolderId(get().path, get().spaceId);
       pushToast({ message: `Copying “${src.name}”…`, tone: "default" });
       let ops = 0;
       const CAP = 500; // safety ceiling so a huge tree can't run away
@@ -673,7 +826,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     uploadFiles: async (files) => {
       const accountId = get().accountId;
       if (!accountId || !files.length) return;
-      const folderId = currentFolderId(get().path);
+      const folderId = currentFolderId(get().path, get().spaceId);
       const token = await ensureToken(accountId).catch(() => null);
       if (!token) {
         toastErr("Couldn't start the upload — reconnect the account.");
@@ -705,6 +858,31 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       invalidateFolderViews();
       void get().loadQuota();
       if (get().view === "myDrive") void load(true);
+    },
+
+    downloadRevision: async (fileId, revId, filename) => {
+      const accountId = get().accountId;
+      if (!accountId) return;
+      try {
+        // Bytes fetched browser→Google directly with a short-lived token (same path as uploads) —
+        // the revision content never proxies through the API.
+        const token = await ensureToken(accountId);
+        const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}?alt=media`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error(`Download failed (${res.status})`);
+        const blob = await res.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = filename || "version";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+        pushToast({ message: "Version downloaded", tone: "ok" });
+      } catch {
+        toastErr("Couldn't download that version. Google-native docs (Docs/Sheets/Slides) keep history in Drive itself.");
+      }
     },
   };
 });

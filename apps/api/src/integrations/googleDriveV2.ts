@@ -127,12 +127,16 @@ export interface ListResult {
   nextPageToken?: string;
 }
 
+/** Options shared by every list/view helper. `driveId` scopes the query to a Shared Drive. */
+export interface ViewOpts {
+  pageToken?: string;
+  orderBy?: string;
+  pageSize?: number;
+  driveId?: string;
+}
+
 /** Low-level list by an arbitrary `q`. Powers folder browse, search, recent, starred and trash. */
-export async function listByQuery(
-  accessToken: string,
-  q: string,
-  opts: { pageToken?: string; orderBy?: string; pageSize?: number } = {},
-): Promise<ListResult> {
+export async function listByQuery(accessToken: string, q: string, opts: ViewOpts = {}): Promise<ListResult> {
   const u = new URL(`${DRIVE_API}/files`);
   u.searchParams.set("q", q);
   u.searchParams.set("fields", `nextPageToken,files(${FILE_FIELDS})`);
@@ -140,21 +144,27 @@ export async function listByQuery(
   u.searchParams.set("pageSize", String(opts.pageSize ?? 100));
   u.searchParams.set("spaces", "drive");
   u.searchParams.set("supportsAllDrives", "true");
+  // Scope to a Shared Drive when asked (otherwise the default: the user's own corpus).
+  if (opts.driveId) {
+    u.searchParams.set("corpora", "drive");
+    u.searchParams.set("driveId", opts.driveId);
+    u.searchParams.set("includeItemsFromAllDrives", "true");
+  }
   if (opts.pageToken) u.searchParams.set("pageToken", opts.pageToken);
   const res = await driveFetch(accessToken, u, {}, "Couldn't list Drive items");
   const json = (await res.json()) as { files?: RawFile[]; nextPageToken?: string };
   return { files: (json.files ?? []).map(toNode), nextPageToken: json.nextPageToken };
 }
 
-/** List the direct children of a folder ("root" for My Drive top level). */
-export function listChildren(accessToken: string, parentId = "root", opts: { pageToken?: string; orderBy?: string; pageSize?: number } = {}): Promise<ListResult> {
+/** List the direct children of a folder ("root" for My Drive top level, or a Shared Drive id). */
+export function listChildren(accessToken: string, parentId = "root", opts: ViewOpts = {}): Promise<ListResult> {
   return listByQuery(accessToken, `'${qval(parentId)}' in parents and trashed = false`, opts);
 }
 
-/** Search by free text and/or advanced filters (type/owner/date/starred). */
+/** Search by free text and/or advanced filters (type/owner/date/starred), optionally within a Shared Drive. */
 export function searchFiles(
   accessToken: string,
-  params: { text?: string; mimeType?: string; mimeContains?: string; owner?: string; before?: string; after?: string; starred?: boolean; pageToken?: string },
+  params: { text?: string; mimeType?: string; mimeContains?: string; owner?: string; before?: string; after?: string; starred?: boolean; pageToken?: string; driveId?: string },
 ): Promise<ListResult> {
   const clauses = ["trashed = false"];
   if (params.text) {
@@ -167,7 +177,74 @@ export function searchFiles(
   if (params.before) clauses.push(`modifiedTime < '${qval(params.before)}'`);
   if (params.after) clauses.push(`modifiedTime > '${qval(params.after)}'`);
   if (params.starred) clauses.push("starred = true");
-  return listByQuery(accessToken, clauses.join(" and "), { pageToken: params.pageToken });
+  return listByQuery(accessToken, clauses.join(" and "), { pageToken: params.pageToken, driveId: params.driveId });
+}
+
+/* ── Shared Drives (team drives) ── */
+
+export interface SharedDrive {
+  id: string;
+  name: string;
+  colorRgb?: string;
+  capabilities?: Record<string, boolean>;
+}
+
+/** List the Shared Drives the account can see (for the space picker). */
+export async function listDrives(accessToken: string, pageToken?: string): Promise<{ drives: SharedDrive[]; nextPageToken?: string }> {
+  const u = new URL(`${DRIVE_API}/drives`);
+  u.searchParams.set("fields", "nextPageToken,drives(id,name,colorRgb,capabilities(canRename,canDeleteChildren,canAddChildren))");
+  u.searchParams.set("pageSize", "100");
+  if (pageToken) u.searchParams.set("pageToken", pageToken);
+  const res = await driveFetch(accessToken, u, {}, "Couldn't list Shared Drives");
+  const json = (await res.json()) as { drives?: SharedDrive[]; nextPageToken?: string };
+  return { drives: json.drives ?? [], nextPageToken: json.nextPageToken };
+}
+
+/* ── change tracking (real-time two-way sync) ── */
+
+export interface DriveChange {
+  fileId: string;
+  removed: boolean;
+  time?: string;
+  changeType?: string;
+  file?: DriveNode; // absent when the item was removed/trashed away
+}
+
+/** Get a page token marking "now" — the client polls changes.list from here forward. */
+export async function getStartPageToken(accessToken: string, driveId?: string): Promise<string> {
+  const u = new URL(`${DRIVE_API}/changes/startPageToken`);
+  u.searchParams.set("supportsAllDrives", "true");
+  if (driveId) u.searchParams.set("driveId", driveId);
+  const res = await driveFetch(accessToken, u, {}, "Couldn't start sync");
+  const json = (await res.json()) as { startPageToken?: string };
+  return json.startPageToken ?? "";
+}
+
+/** List changes since `pageToken`. Returns applied changes plus the token to poll from next. */
+export async function listChanges(
+  accessToken: string,
+  pageToken: string,
+  driveId?: string,
+): Promise<{ changes: DriveChange[]; newStartPageToken?: string; nextPageToken?: string }> {
+  const u = new URL(`${DRIVE_API}/changes`);
+  u.searchParams.set("pageToken", pageToken);
+  u.searchParams.set("fields", `newStartPageToken,nextPageToken,changes(changeType,removed,fileId,time,file(${FILE_FIELDS}))`);
+  u.searchParams.set("supportsAllDrives", "true");
+  u.searchParams.set("includeItemsFromAllDrives", "true");
+  u.searchParams.set("includeRemoved", "true");
+  u.searchParams.set("pageSize", "100");
+  u.searchParams.set("spaces", "drive");
+  if (driveId) u.searchParams.set("driveId", driveId);
+  const res = await driveFetch(accessToken, u, {}, "Couldn't sync changes");
+  const json = (await res.json()) as {
+    newStartPageToken?: string;
+    nextPageToken?: string;
+    changes?: { changeType?: string; removed?: boolean; fileId?: string; time?: string; file?: RawFile }[];
+  };
+  const changes: DriveChange[] = (json.changes ?? [])
+    .filter((c) => c.fileId)
+    .map((c) => ({ fileId: String(c.fileId), removed: !!c.removed, time: c.time, changeType: c.changeType, file: c.file ? toNode(c.file) : undefined }));
+  return { changes, newStartPageToken: json.newStartPageToken, nextPageToken: json.nextPageToken };
 }
 
 /* ── analytics scan (duplicates / largest / stale / storage breakdown) ── */
@@ -228,17 +305,18 @@ export async function scanFiles(accessToken: string, opts: { orderBy?: string; p
   }
 }
 
-export function listRecent(accessToken: string, pageToken?: string): Promise<ListResult> {
-  return listByQuery(accessToken, "trashed = false and mimeType != '" + FOLDER_MIME + "'", { orderBy: "modifiedTime desc", pageToken, pageSize: 50 });
+export function listRecent(accessToken: string, opts: ViewOpts = {}): Promise<ListResult> {
+  return listByQuery(accessToken, "trashed = false and mimeType != '" + FOLDER_MIME + "'", { ...opts, orderBy: "modifiedTime desc", pageSize: 50 });
 }
-export function listStarred(accessToken: string, pageToken?: string): Promise<ListResult> {
-  return listByQuery(accessToken, "starred = true and trashed = false", { pageToken });
+export function listStarred(accessToken: string, opts: ViewOpts = {}): Promise<ListResult> {
+  return listByQuery(accessToken, "starred = true and trashed = false", opts);
 }
-export function listTrash(accessToken: string, pageToken?: string): Promise<ListResult> {
-  return listByQuery(accessToken, "trashed = true", { orderBy: "modifiedTime desc", pageToken });
+export function listTrash(accessToken: string, opts: ViewOpts = {}): Promise<ListResult> {
+  return listByQuery(accessToken, "trashed = true", { ...opts, orderBy: "modifiedTime desc" });
 }
-export function listSharedWithMe(accessToken: string, pageToken?: string): Promise<ListResult> {
-  return listByQuery(accessToken, "sharedWithMe = true and trashed = false", { orderBy: "modifiedTime desc", pageToken });
+export function listSharedWithMe(accessToken: string, opts: ViewOpts = {}): Promise<ListResult> {
+  // "Shared with me" is a My-Drive concept — always the user's corpus, never a Shared Drive.
+  return listByQuery(accessToken, "sharedWithMe = true and trashed = false", { pageToken: opts.pageToken, orderBy: "modifiedTime desc" });
 }
 
 /* ── revisions (version history for binary files) ── */
@@ -264,6 +342,15 @@ export async function listRevisions(accessToken: string, fileId: string): Promis
 export async function deleteRevision(accessToken: string, fileId: string, revId: string): Promise<void> {
   const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}`);
   await driveFetch(accessToken, u, { method: "DELETE" }, "Couldn't delete that version");
+}
+
+/** Pin/unpin a revision so Drive never auto-prunes it ("keep forever"). */
+export async function updateRevision(accessToken: string, fileId: string, revId: string, keepForever: boolean): Promise<DriveRevision> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}`);
+  u.searchParams.set("fields", "id,modifiedTime,size,keepForever,originalFilename,lastModifyingUser(displayName)");
+  const res = await driveFetch(accessToken, u, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keepForever }) }, "Couldn't update that version");
+  const r = (await res.json()) as Omit<DriveRevision, "size"> & { size?: string };
+  return { ...r, size: r.size != null ? Number(r.size) : undefined };
 }
 
 /** One file's full metadata (details panel). */

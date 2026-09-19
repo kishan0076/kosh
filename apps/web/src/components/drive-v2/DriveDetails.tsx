@@ -55,7 +55,7 @@ export function DriveDetails({
   }
   if (!node) return null;
   const kind = kindOf(node);
-  const canPreview = !node.isFolder && (!!node.thumbnailLink || node.mimeType.startsWith("image/"));
+  const canPreview = !node.isFolder; // images render inline; everything else embeds via Drive's viewer
 
   return (
     <div className="flex h-full flex-col">
@@ -154,10 +154,24 @@ function QuickAction({ icon: Icon, label, onClick, href, danger, active }: { ico
   return <button onClick={onClick} className={cls} aria-label={label} title={label}><Icon size={16} /></button>;
 }
 
-/* ── full-screen preview (image / open-in-Drive; no iframe per CSP) ── */
+/** The Google embed URL for a node — native Docs/Sheets/Slides use docs.google.com; the rest use Drive. */
+function embedUrl(node: DriveNode): string | null {
+  const id = node.id;
+  switch (node.mimeType) {
+    case "application/vnd.google-apps.document": return `https://docs.google.com/document/d/${id}/preview`;
+    case "application/vnd.google-apps.spreadsheet": return `https://docs.google.com/spreadsheets/d/${id}/preview`;
+    case "application/vnd.google-apps.presentation": return `https://docs.google.com/presentation/d/${id}/preview`;
+    case "application/vnd.google-apps.folder": return null;
+    default: return `https://drive.google.com/file/d/${id}/preview`; // PDF, video, and most binary types
+  }
+}
+
+/* ── full-screen preview — images render inline; PDFs/Docs/Sheets/Slides/video embed via Drive (CSP frame-src) ── */
 export function PreviewOverlay({ node, onClose }: { node: DriveNode; onClose: () => void }) {
-  const src = node.thumbnailLink?.replace(/=s\d+$/, "=s1600") ?? node.webContentLink;
-  const isImage = node.mimeType.startsWith("image/") || !!node.thumbnailLink;
+  const isImage = node.mimeType.startsWith("image/");
+  const imgSrc = node.thumbnailLink?.replace(/=s\d+$/, "=s1600") ?? node.webContentLink;
+  const frame = isImage ? null : embedUrl(node);
+  const [loading, setLoading] = useState(!isImage && !!frame);
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-black/80 backdrop-blur-sm" onClick={onClose}>
       <div className="flex items-center gap-3 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>
@@ -169,13 +183,25 @@ export function PreviewOverlay({ node, onClose }: { node: DriveNode; onClose: ()
         )}
         <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md hover:bg-white/10" aria-label="Close preview"><X size={18} /></button>
       </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center p-6" onClick={(e) => e.stopPropagation()}>
-        {isImage && src ? (
-          <img src={src} alt={node.name} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" />
+      <div className="flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6" onClick={(e) => e.stopPropagation()}>
+        {isImage && imgSrc ? (
+          <img src={imgSrc} alt={node.name} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" />
+        ) : frame ? (
+          <div className="relative h-full w-full max-w-5xl">
+            {loading && <div className="absolute inset-0 grid place-items-center text-white/70"><span className="animate-pulse text-[13px]">Loading preview…</span></div>}
+            <iframe
+              src={frame}
+              title={node.name}
+              onLoad={() => setLoading(false)}
+              className="h-full w-full rounded-lg bg-white shadow-2xl"
+              allow="autoplay"
+              sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-downloads"
+            />
+          </div>
         ) : (
           <div className="text-center text-white/80">
             <div className="mb-2 text-[15px] font-medium">No inline preview</div>
-            <p className="text-[13px] text-white/60">Open it in Google Drive to view this file type.</p>
+            <p className="text-[13px] text-white/60">Open it in Google Drive to view this item.</p>
           </div>
         )}
       </div>

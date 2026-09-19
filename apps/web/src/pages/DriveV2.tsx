@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import {
+  Activity,
   ArrowUpDown,
   Bookmark,
   BookmarkPlus,
@@ -19,6 +20,7 @@ import {
   Pencil,
   Plug,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Share2,
@@ -45,10 +47,12 @@ import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components
 import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
+import { ActivityPanel } from "@/components/drive-v2/ActivityPanel";
 import { RevisionsModal } from "@/components/drive-v2/RevisionsModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
+import { ago } from "@/lib/time";
 
 const SAVED_KEY = "kosh.driveV2.savedSearches";
 
@@ -122,9 +126,19 @@ function Shell() {
   const dialog = useDriveV2((s) => s.dialog);
   const uploads = useDriveV2((s) => s.uploads);
   const insightsOpen = useDriveV2((s) => s.insightsOpen);
+  const activityOpen = useDriveV2((s) => s.activityOpen);
 
   const store = useDriveV2;
-  const currentFolderId = useDriveV2((s) => s.path.at(-1)?.id ?? "root");
+  const currentFolderId = useDriveV2((s) => s.path.at(-1)?.id ?? s.spaceId ?? "root");
+
+  // Live two-way sync: poll changes.list while the module is open; resume promptly on refocus.
+  useEffect(() => {
+    const start = store.getState().startSync;
+    start();
+    const onVis = () => { if (document.visibilityState === "visible") start(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { document.removeEventListener("visibilitychange", onVis); store.getState().stopSync(); };
+  }, [store]);
 
   const [menu, setMenu] = useState<{ ids: string[]; node: DriveNode; x: number; y: number } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -193,7 +207,9 @@ function Shell() {
       <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
         <DriveNav />
         <div className="min-w-0">
-          {insightsOpen ? (
+          {activityOpen ? (
+            <ActivityPanel onClose={() => store.getState().setActivity(false)} />
+          ) : insightsOpen ? (
             <InsightsPanel onClose={() => store.getState().setInsights(false)} />
           ) : (
           <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
@@ -297,6 +313,7 @@ function DriveNav() {
   const accountId = useDriveV2((s) => s.accountId);
   const view = useDriveV2((s) => s.view);
   const insightsOpen = useDriveV2((s) => s.insightsOpen);
+  const activityOpen = useDriveV2((s) => s.activityOpen);
   const quota = useDriveV2((s) => s.quota);
   const account = accounts.find((a) => a.id === accountId);
 
@@ -335,6 +352,7 @@ function DriveNav() {
           <MenuSeparator />
           <MenuItem icon={Plus} onClick={() => { window.location.href = driveApi.connectUrl(); }}>Connect account</MenuItem>
         </Menu>
+        <div className="mt-1.5"><SpacePicker /></div>
       </div>
 
       <nav className="rounded-[var(--radius-card)] border border-border bg-surface p-2">
@@ -357,6 +375,12 @@ function DriveNav() {
         >
           <Sparkles size={16} /> Insights
         </button>
+        <button
+          onClick={() => useDriveV2.getState().setActivity(true)}
+          className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors", activityOpen ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
+        >
+          <Activity size={16} /> Activity
+        </button>
       </nav>
 
       {quota && (
@@ -376,6 +400,65 @@ function DriveNav() {
   );
 }
 
+/* ── live-sync status pill ── */
+function SyncPill() {
+  const sync = useDriveV2((s) => s.sync);
+  const setActivity = useDriveV2((s) => s.setActivity);
+  const [, force] = useState(0);
+  // Keep the "synced x ago" label fresh without a store write.
+  useEffect(() => { const t = window.setInterval(() => force((n) => n + 1), 20_000); return () => window.clearInterval(t); }, []);
+
+  const label =
+    sync.status === "syncing" ? "Syncing…" :
+    sync.status === "error" ? "Sync error" :
+    sync.status === "off" ? "Sync off" :
+    sync.lastAt ? `Synced ${ago(new Date(sync.lastAt).toISOString())}` : "Live";
+  const dot =
+    sync.status === "error" ? "bg-danger" :
+    sync.status === "syncing" ? "bg-primary" :
+    sync.status === "live" ? "bg-ok" : "bg-faint";
+
+  return (
+    <button
+      onClick={() => setActivity(true)}
+      title="Live two-way sync with Google Drive — open activity"
+      className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[12px] text-muted hover:bg-surface-2"
+    >
+      {sync.status === "syncing" ? <RefreshCw size={13} className="animate-spin text-primary" /> : <span className={cn("h-1.5 w-1.5 rounded-full", dot)} />}
+      <span className="hidden md:inline">{label}</span>
+    </button>
+  );
+}
+
+/* ── Shared Drive (space) picker ── */
+function SpacePicker() {
+  const spaces = useDriveV2((s) => s.spaces);
+  const spaceId = useDriveV2((s) => s.spaceId);
+  const spaceName = useDriveV2((s) => s.spaceName);
+  if (!spaces.length) return null; // consumer accounts have no Shared Drives
+  return (
+    <Menu
+      align="start"
+      width={230}
+      trigger={({ toggle, ref }) => (
+        <button ref={ref} onClick={toggle} className="flex w-full items-center gap-2 rounded-[var(--radius-control)] border border-border px-2.5 py-2 text-left text-[13px] hover:bg-surface-2">
+          {spaceId ? <Users size={15} className="shrink-0 text-primary" /> : <HardDrive size={15} className="shrink-0 text-primary" />}
+          <span className="min-w-0 flex-1 truncate font-medium">{spaceId ? spaceName : "My Drive"}</span>
+          <ChevronRight size={14} className="shrink-0 text-faint" />
+        </button>
+      )}
+    >
+      <MenuLabel>Spaces</MenuLabel>
+      <MenuItem icon={spaceId === null ? Check : HardDrive} onClick={() => void useDriveV2.getState().selectSpace(null)}>My Drive</MenuItem>
+      {spaces.map((d) => (
+        <MenuItem key={d.id} icon={spaceId === d.id ? Check : Users} onClick={() => void useDriveV2.getState().selectSpace(d.id)}>
+          <span className="truncate">{d.name}</span>
+        </MenuItem>
+      ))}
+    </Menu>
+  );
+}
+
 /* ── toolbar ── */
 function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUpload: () => void }) {
   const view = useDriveV2((s) => s.view);
@@ -383,6 +466,8 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
   const prefs = useDriveV2((s) => s.prefs);
   const searchQuery = useDriveV2((s) => s.searchQuery);
   const emptyTrash = useDriveV2((s) => s.emptyTrash);
+  const spaceId = useDriveV2((s) => s.spaceId);
+  const spaceName = useDriveV2((s) => s.spaceName);
   const [q, setQ] = useState(searchQuery);
   const [saved, setSaved] = useState<{ query: string }[]>(() => { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; } });
   const persistSaved = (next: { query: string }[]) => { setSaved(next); try { localStorage.setItem(SAVED_KEY, JSON.stringify(next)); } catch { /* private mode */ } };
@@ -409,7 +494,7 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
       <div className="mr-auto flex min-w-0 items-center gap-1 text-[13px]">
         {view === "myDrive" ? (
           <>
-            <CrumbButton folderId="root" onClick={() => useDriveV2.getState().goRoot()} className="font-medium">My Drive</CrumbButton>
+            <CrumbButton folderId={spaceId ?? "root"} onClick={() => useDriveV2.getState().goRoot()} className="font-medium">{spaceName ?? "My Drive"}</CrumbButton>
             {path.map((f, i) => (
               <span key={f.id} className="flex min-w-0 items-center gap-0.5">
                 <ChevronRight size={13} className="shrink-0 text-faint" />
@@ -425,6 +510,8 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
           <span className="px-1.5 font-semibold capitalize">{view}</span>
         )}
       </div>
+
+      <SyncPill />
 
       <label className="flex h-9 min-w-0 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-2.5 focus-within:border-primary focus-within:ring-focus">
         <Search size={15} className="shrink-0 text-muted" />
@@ -529,6 +616,51 @@ function SelectionBar() {
   );
 }
 
+/* ── rubber-band (marquee) selection over the visible items ── */
+function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
+  const [box, setBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const anchor = useRef<{ x: number; y: number; base: string[]; add: boolean } | null>(null);
+
+  useEffect(() => {
+    function move(e: MouseEvent) {
+      const a = anchor.current;
+      if (!a) return;
+      const x = Math.min(a.x, e.clientX), y = Math.min(a.y, e.clientY);
+      const w = Math.abs(e.clientX - a.x), h = Math.abs(e.clientY - a.y);
+      if (w < 5 && h < 5) return; // still a click, not a drag
+      e.preventDefault();
+      setBox({ x, y, w, h });
+      const sel = { left: x, top: y, right: x + w, bottom: y + h };
+      const hits: string[] = [];
+      // Only rendered (virtualized) rows are hit — off-screen items can't be marquee-selected.
+      scrollRef.current?.querySelectorAll<HTMLElement>("[data-node-id]").forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < sel.right && r.right > sel.left && r.top < sel.bottom && r.bottom > sel.top) {
+          const id = el.getAttribute("data-node-id");
+          if (id) hits.push(id);
+        }
+      });
+      useDriveV2.getState().marqueeSelect(a.add ? [...new Set([...a.base, ...hits])] : hits);
+    }
+    function up() { anchor.current = null; setBox(null); }
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+  }, [scrollRef]);
+
+  const onMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement;
+    // Ignore drags that begin on an item card/row or any interactive control.
+    if (t.closest("[data-node-id]") || t.closest("button") || t.closest("a") || t.closest("input") || t.closest("textarea")) return;
+    const add = e.shiftKey || e.metaKey || e.ctrlKey;
+    anchor.current = { x: e.clientX, y: e.clientY, base: add ? [...useDriveV2.getState().selection] : [], add };
+    if (!add) useDriveV2.getState().clearSelection();
+  };
+
+  return { box, onMouseDown };
+}
+
 /* ── content area (grid/list + states + drop) ── */
 function DriveContentArea({
   view, visible, layout, selection, busyIds, renamingId, handlers, listLoading, listError, onUpload, onDropFiles,
@@ -550,6 +682,7 @@ function DriveContentArea({
   const scrollRef = useRef<HTMLDivElement>(null);
   const canDrop = view === "myDrive";
   const rowProps = (node: DriveNode): ItemRowProps => ({ node, selected: selection.has(node.id), busy: busyIds.has(node.id), renaming: renamingId === node.id, ...handlers });
+  const marquee = useMarqueeSelect(scrollRef);
 
   // The drop target wraps ALL states so external-file drag-and-drop upload works even in an empty
   // folder. It reacts ONLY to external files — internal node drags are handled by folder/breadcrumb
@@ -557,11 +690,13 @@ function DriveContentArea({
   return (
     <div
       ref={scrollRef}
+      onMouseDown={marquee.onMouseDown}
       onDragOver={canDrop ? (e) => { if (hasExternalFiles(e) && !hasDriveDrag(e)) { e.preventDefault(); setDrag(true); } } : undefined}
       onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
       onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
       className={cn("relative max-h-[calc(100dvh-14rem)] min-h-[320px] overflow-y-auto", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
     >
+      {marquee.box && <div className="pointer-events-none fixed z-30 rounded-[3px] border border-primary bg-primary/10" style={{ left: marquee.box.x, top: marquee.box.y, width: marquee.box.w, height: marquee.box.h }} />}
       {drag && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-primary-soft/40 text-[14px] font-semibold text-primary">Drop to upload here</div>}
       {listLoading ? (
         <DriveContentSkeleton layout={layout} />
@@ -636,18 +771,33 @@ function VirtualGrid({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HT
   );
 }
 
-/* ── upload tray ── */
+/* ── upload tray (per-file + aggregate real-time progress) ── */
 function UploadTray() {
   const uploads = useDriveV2((s) => s.uploads);
   const [open, setOpen] = useState(true);
-  const active = uploads.filter((u) => u.status === "uploading").length;
+  const active = uploads.filter((u) => u.status === "uploading");
+  const done = uploads.filter((u) => u.status === "done").length;
+  // Aggregate progress across everything in the tray (uploaded bytes / total bytes).
+  const totalBytes = uploads.reduce((a, u) => a + u.size, 0);
+  const doneBytes = uploads.reduce((a, u) => a + (u.status === "done" ? u.size : u.uploaded), 0);
+  const aggPct = totalBytes ? Math.round((doneBytes / totalBytes) * 100) : 0;
+
   return (
     <div className="fixed bottom-4 right-4 z-40 w-80 overflow-hidden rounded-[var(--radius-card)] border border-border bg-elevated shadow-[var(--shadow-pop)]">
       <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
-        {active > 0 ? <Spinner size={14} className="text-primary" /> : <Check size={15} className="text-ok" />}
-        <span className="flex-1 text-left">{active > 0 ? `Uploading ${active}…` : "Uploads complete"}</span>
+        {active.length > 0 ? <Spinner size={14} className="text-primary" /> : <Check size={15} className="text-ok" />}
+        <span className="flex-1 text-left">{active.length > 0 ? `Uploading ${active.length}…` : `${done} upload${done === 1 ? "" : "s"} complete`}</span>
         <ChevronRight size={15} className={cn("text-muted transition-transform", open && "rotate-90")} />
       </button>
+      {active.length > 0 && (
+        <div className="border-b border-border px-3.5 py-2">
+          <Progress value={aggPct} />
+          <div className="mt-1 flex justify-between text-[11px] text-muted">
+            <span>{formatBytes(doneBytes)} of {formatBytes(totalBytes)}</span>
+            <span>{aggPct}%</span>
+          </div>
+        </div>
+      )}
       {open && (
         <div className="max-h-64 overflow-y-auto">
           {uploads.slice(0, 30).map((u) => (
@@ -655,9 +805,12 @@ function UploadTray() {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[12.5px] font-medium">{u.name}</div>
                 {u.status === "uploading" ? (
-                  <Progress value={u.size ? Math.round((u.uploaded / u.size) * 100) : 0} className="mt-1" />
+                  <>
+                    <Progress value={u.size ? Math.round((u.uploaded / u.size) * 100) : 0} className="mt-1" />
+                    <div className="mt-0.5 text-[10.5px] text-faint">{formatBytes(u.uploaded)} / {formatBytes(u.size)}</div>
+                  </>
                 ) : (
-                  <div className={cn("text-[11px]", u.status === "done" ? "text-ok" : u.status === "error" ? "text-danger" : "text-muted")}>{u.status === "done" ? "Done" : u.status === "error" ? u.error ?? "Failed" : "Canceled"}</div>
+                  <div className={cn("text-[11px]", u.status === "done" ? "text-ok" : u.status === "error" ? "text-danger" : "text-muted")}>{u.status === "done" ? formatBytes(u.size) + " · Done" : u.status === "error" ? u.error ?? "Failed" : "Canceled"}</div>
                 )}
               </div>
               {u.status === "done" && <Check size={15} className="shrink-0 text-ok" />}

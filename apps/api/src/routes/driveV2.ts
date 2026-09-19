@@ -15,9 +15,12 @@ import {
   emptyTrash,
   folderPath,
   getFile,
+  getStartPageToken,
   GoogleBadRequestError,
   GoogleForbiddenError,
+  listChanges,
   listChildren,
+  listDrives,
   listPermissions,
   listRecent,
   listRevisions,
@@ -32,6 +35,8 @@ import {
   setTrashed,
   updateMeta,
   updatePermission,
+  updateRevision,
+  type ViewOpts,
 } from "../integrations/googleDriveV2.js";
 
 /**
@@ -90,6 +95,14 @@ const fileId = (v: string): string => {
   return v;
 };
 
+/** Optional `?driveId=` — scopes a read to a Shared Drive (validated like a file id). */
+const driveIdOf = (req: Request): string | undefined => {
+  const v = req.query.driveId;
+  if (typeof v !== "string" || !v) return undefined;
+  if (!FILE_ID.test(v)) throw badRequest("BAD_ID", "Invalid Shared Drive id.");
+  return v;
+};
+
 /* ── read: browse / search / recent / starred / trash / details / breadcrumb ── */
 
 driveV2Router.get(
@@ -100,7 +113,7 @@ driveV2Router.get(
     const parent = typeof req.query.parent === "string" && req.query.parent ? fileId(req.query.parent) : "root";
     const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
     const orderBy = typeof req.query.orderBy === "string" ? req.query.orderBy : undefined;
-    res.json(await driveCall(listChildren(token, parent, { pageToken, orderBy })));
+    res.json(await driveCall(listChildren(token, parent, { pageToken, orderBy, driveId: driveIdOf(req) })));
   }),
 );
 
@@ -121,6 +134,7 @@ driveV2Router.get(
           after: str(req.query.after, 40),
           starred: req.query.starred === "true",
           pageToken: str(req.query.pageToken, 4096),
+          driveId: driveIdOf(req),
         }),
       ),
     );
@@ -138,20 +152,51 @@ driveV2Router.get(
   }),
 );
 
-const viewRoute = (path: string, fn: (t: string, pageToken?: string) => Promise<unknown>) =>
+const viewRoute = (path: string, fn: (t: string, opts: ViewOpts) => Promise<unknown>) =>
   driveV2Router.get(
     path,
     ah(async (req, res) => {
       const uid = requireWrite(req);
       const token = await auth(req, uid);
       const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
-      res.json(await driveCall(fn(token, pageToken)));
+      res.json(await driveCall(fn(token, { pageToken, driveId: driveIdOf(req) })));
     }),
   );
 viewRoute("/drive-v2/accounts/:id/recent", listRecent);
 viewRoute("/drive-v2/accounts/:id/starred", listStarred);
 viewRoute("/drive-v2/accounts/:id/trash", listTrash);
 viewRoute("/drive-v2/accounts/:id/shared", listSharedWithMe);
+
+/* ── Shared Drives (space picker) ── */
+driveV2Router.get(
+  "/drive-v2/accounts/:id/drives",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
+    res.json(await driveCall(listDrives(token, pageToken)));
+  }),
+);
+
+/* ── change tracking (real-time two-way sync) ── */
+driveV2Router.get(
+  "/drive-v2/accounts/:id/changes/start",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    res.json({ startPageToken: await driveCall(getStartPageToken(token, driveIdOf(req))) });
+  }),
+);
+driveV2Router.get(
+  "/drive-v2/accounts/:id/changes",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken.slice(0, 4096) : "";
+    if (!pageToken) throw badRequest("BAD_TOKEN", "A pageToken is required to list changes.");
+    res.json(await driveCall(listChanges(token, pageToken, driveIdOf(req))));
+  }),
+);
 
 driveV2Router.get(
   "/drive-v2/accounts/:id/files/:fileId",
@@ -283,6 +328,16 @@ driveV2Router.get(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     res.json({ revisions: await driveCall(listRevisions(token, fileId(String(req.params.fileId)))) });
+  }),
+);
+
+driveV2Router.patch(
+  "/drive-v2/accounts/:id/files/:fileId/revisions/:revId",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const { keepForever } = z.object({ keepForever: z.boolean() }).parse(req.body);
+    res.json({ revision: await driveCall(updateRevision(token, fileId(String(req.params.fileId)), String(req.params.revId), keepForever)) });
   }),
 );
 
