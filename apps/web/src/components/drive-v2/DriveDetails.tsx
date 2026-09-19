@@ -1,4 +1,4 @@
-import { CornerUpRight, Download, ExternalLink, Eye, Pencil, Star, Trash2, User, Users, X } from "lucide-react";
+import { CornerUpRight, Download, ExternalLink, Eye, Pencil, Share2, Star, Trash2, User, Users, X } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
@@ -27,6 +27,7 @@ export function DriveDetails({
   onMove,
   onTrash,
   onPreview,
+  onShare,
 }: {
   node: DriveNode | null;
   count: number;
@@ -38,6 +39,7 @@ export function DriveDetails({
   onMove: (node: DriveNode) => void;
   onTrash: (node: DriveNode) => void;
   onPreview: (node: DriveNode) => void;
+  onShare: (node: DriveNode) => void;
 }) {
   // Multi-select aggregate
   if (count > 1) {
@@ -65,6 +67,7 @@ export function DriveDetails({
           <div className="flex flex-wrap justify-center gap-1.5">
             {canPreview && <QuickAction icon={Eye} label="Preview" onClick={() => onPreview(node)} />}
             <QuickAction icon={Star} label={node.starred ? "Unstar" : "Star"} active={node.starred} onClick={() => onStar(node)} />
+            {node.capabilities?.canShare !== false && <QuickAction icon={Share2} label="Share" onClick={() => onShare(node)} />}
             {node.capabilities?.canRename !== false && <QuickAction icon={Pencil} label="Rename" onClick={() => onRename(node)} />}
             {node.capabilities?.canMoveItemWithinDrive !== false && <QuickAction icon={CornerUpRight} label="Move" onClick={() => onMove(node)} />}
             {node.webViewLink && <QuickAction icon={ExternalLink} label="Open" href={node.webViewLink} />}

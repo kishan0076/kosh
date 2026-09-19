@@ -22,6 +22,8 @@ export type Dialog =
   | { kind: "newFolder"; parentId: string }
   | { kind: "delete"; ids: string[]; permanent: boolean }
   | { kind: "move"; ids: string[] }
+  | { kind: "share"; node: DriveNode }
+  | { kind: "rename-bulk"; ids: string[] }
   | null;
 
 export interface UploadTask {

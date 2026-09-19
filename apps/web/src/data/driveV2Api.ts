@@ -104,6 +104,18 @@ export function filterBucket(node: DriveNode): FilterKind | "other" {
   return k;
 }
 
+export interface DrivePermission {
+  id: string;
+  type: string;
+  role: string;
+  emailAddress?: string;
+  displayName?: string;
+  photoLink?: string;
+  domain?: string;
+  allowFileDiscovery?: boolean;
+  pendingOwner?: boolean;
+}
+
 const base = (accountId: string) => `/drive-v2/accounts/${accountId}`;
 
 export const driveV2Api = {
@@ -142,4 +154,12 @@ export const driveV2Api = {
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/copy`, { method: "POST", body: JSON.stringify(opts) }),
   deletePermanent: (accountId: string, fileId: string) => v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}`, { method: "DELETE" }),
   emptyTrash: (accountId: string) => v2req<{ ok: boolean }>(`${base(accountId)}/empty-trash`, { method: "POST" }),
+
+  listPermissions: (accountId: string, fileId: string) => v2req<{ permissions: DrivePermission[] }>(`${base(accountId)}/files/${fileId}/permissions`),
+  addPermission: (accountId: string, fileId: string, input: { role: string; type: string; emailAddress?: string; sendNotificationEmail?: boolean; message?: string }) =>
+    v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions`, { method: "POST", body: JSON.stringify(input) }),
+  updatePermission: (accountId: string, fileId: string, permId: string, role: string) =>
+    v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
+  removePermission: (accountId: string, fileId: string, permId: string) =>
+    v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "DELETE" }),
 };

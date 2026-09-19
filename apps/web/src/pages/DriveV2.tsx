@@ -18,6 +18,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Share2,
   Star,
   Trash2,
   Upload,
@@ -35,6 +36,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, type ItemHandlers } from "@/components/drive-v2/items";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
 import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components/drive-v2/modals";
+import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
@@ -235,6 +237,7 @@ function Shell() {
             onMove={(n) => store.getState().openDialog({ kind: "move", ids: [n.id] })}
             onTrash={(n) => store.getState().openDialog({ kind: "delete", ids: [n.id], permanent: view === "trash" })}
             onPreview={(n) => store.getState().setPreview(n)}
+            onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
           />
         </aside>
       )}
@@ -246,6 +249,7 @@ function Shell() {
       {dialog?.kind === "newFolder" && <CreateFolderModal parentId={dialog.parentId} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "delete" && <DeleteConfirmModal ids={dialog.ids} permanent={dialog.permanent} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "move" && <MoveToModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
+      {dialog?.kind === "share" && <ShareModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} onClose={() => store.getState().setPreview(null)} />}
     </div>
   );
@@ -268,6 +272,7 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
     if (node.webViewLink) a.push({ label: "Open in Drive", icon: ExternalLink, onClick: () => window.open(node.webViewLink, "_blank", "noopener") });
     if (node.webContentLink) a.push({ label: "Download", icon: Download, onClick: () => window.open(node.webContentLink, "_blank", "noopener") });
     if (node.capabilities?.canRename !== false) a.push({ label: "Rename", icon: Pencil, shortcut: "F2", onClick: () => ctx.setRenamingId(node.id) });
+    if (node.capabilities?.canShare !== false) a.push({ label: "Share…", icon: Share2, onClick: () => s.openDialog({ kind: "share", node }) });
     if (!node.isFolder && node.capabilities?.canCopy !== false) a.push({ label: "Make a copy", icon: Copy, onClick: () => void s.copy(node.id) });
   }
   a.push({ label: many ? `Star ${ids.length}` : node.starred ? "Unstar" : "Star", icon: Star, onClick: () => ids.forEach((id) => void s.toggleStar(id)) });

@@ -8,11 +8,14 @@ import { GoogleAuthError, GoogleTransientError, refreshAccessToken } from "../in
 import {
   copyNode,
   createFolderV2,
+  createPermission,
   deleteNode,
+  deletePermission,
   emptyTrash,
   folderPath,
   getFile,
   listChildren,
+  listPermissions,
   listRecent,
   listStarred,
   listTrash,
@@ -22,6 +25,7 @@ import {
   setStarred,
   setTrashed,
   updateMeta,
+  updatePermission,
 } from "../integrations/googleDriveV2.js";
 
 /**
@@ -237,6 +241,60 @@ driveV2Router.post(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     await driveCall(emptyTrash(token));
+    res.json({ ok: true });
+  }),
+);
+
+/* ── sharing / permissions ── */
+
+const ROLE = z.enum(["reader", "commenter", "writer", "fileOrganizer", "organizer", "owner"]);
+
+driveV2Router.get(
+  "/drive-v2/accounts/:id/files/:fileId/permissions",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    res.json({ permissions: await driveCall(listPermissions(token, fileId(String(req.params.fileId)))) });
+  }),
+);
+
+driveV2Router.post(
+  "/drive-v2/accounts/:id/files/:fileId/permissions",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const body = z
+      .object({
+        role: ROLE,
+        type: z.enum(["user", "group", "domain", "anyone"]),
+        emailAddress: z.string().email().max(320).optional(),
+        domain: z.string().max(255).optional(),
+        allowFileDiscovery: z.boolean().optional(),
+        sendNotificationEmail: z.boolean().optional(),
+        message: z.string().max(2000).optional(),
+      })
+      .parse(req.body);
+    if ((body.type === "user" || body.type === "group") && !body.emailAddress) throw badRequest("BAD_TARGET", "An email address is required to share with a person or group.");
+    res.status(201).json({ permission: await driveCall(createPermission(token, fileId(String(req.params.fileId)), body)) });
+  }),
+);
+
+driveV2Router.patch(
+  "/drive-v2/accounts/:id/files/:fileId/permissions/:permId",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const { role } = z.object({ role: ROLE }).parse(req.body);
+    res.json({ permission: await driveCall(updatePermission(token, fileId(String(req.params.fileId)), String(req.params.permId), role)) });
+  }),
+);
+
+driveV2Router.delete(
+  "/drive-v2/accounts/:id/files/:fileId/permissions/:permId",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    await driveCall(deletePermission(token, fileId(String(req.params.fileId)), String(req.params.permId)));
     res.json({ ok: true });
   }),
 );

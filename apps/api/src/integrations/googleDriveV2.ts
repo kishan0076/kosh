@@ -206,6 +206,66 @@ export async function createFolderV2(
   return toNode((await res.json()) as RawFile);
 }
 
+/* ── permissions / sharing ── */
+
+export interface DrivePermission {
+  id: string;
+  type: string; // user | group | domain | anyone
+  role: string; // owner | organizer | fileOrganizer | writer | commenter | reader
+  emailAddress?: string;
+  displayName?: string;
+  photoLink?: string;
+  domain?: string;
+  allowFileDiscovery?: boolean;
+  pendingOwner?: boolean;
+  deleted?: boolean;
+}
+
+const PERM_FIELDS = "id,type,role,emailAddress,displayName,photoLink,domain,allowFileDiscovery,pendingOwner,deleted";
+
+export async function listPermissions(accessToken: string, fileId: string): Promise<DrivePermission[]> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions`);
+  u.searchParams.set("fields", `permissions(${PERM_FIELDS})`);
+  u.searchParams.set("supportsAllDrives", "true");
+  u.searchParams.set("pageSize", "100");
+  const res = await driveFetch(accessToken, u, {}, "Couldn't load sharing");
+  const json = (await res.json()) as { permissions?: DrivePermission[] };
+  return json.permissions ?? [];
+}
+
+export async function createPermission(
+  accessToken: string,
+  fileId: string,
+  input: { role: string; type: string; emailAddress?: string; domain?: string; allowFileDiscovery?: boolean; sendNotificationEmail?: boolean; message?: string },
+): Promise<DrivePermission> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions`);
+  u.searchParams.set("fields", PERM_FIELDS);
+  u.searchParams.set("supportsAllDrives", "true");
+  // Notifications only make sense for user/group grants; default off for link (anyone/domain) shares.
+  u.searchParams.set("sendNotificationEmail", String(input.sendNotificationEmail ?? (input.type === "user" || input.type === "group")));
+  const body: Record<string, unknown> = { role: input.role, type: input.type };
+  if (input.emailAddress) body.emailAddress = input.emailAddress;
+  if (input.domain) body.domain = input.domain;
+  if (input.type === "anyone" || input.type === "domain") body.allowFileDiscovery = input.allowFileDiscovery ?? false;
+  if (input.message) u.searchParams.set("emailMessage", input.message);
+  const res = await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Couldn't share");
+  return (await res.json()) as DrivePermission;
+}
+
+export async function updatePermission(accessToken: string, fileId: string, permId: string, role: string): Promise<DrivePermission> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permId)}`);
+  u.searchParams.set("fields", PERM_FIELDS);
+  u.searchParams.set("supportsAllDrives", "true");
+  const res = await driveFetch(accessToken, u, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }) }, "Couldn't update access");
+  return (await res.json()) as DrivePermission;
+}
+
+export async function deletePermission(accessToken: string, fileId: string, permId: string): Promise<void> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permId)}`);
+  u.searchParams.set("supportsAllDrives", "true");
+  await driveFetch(accessToken, u, { method: "DELETE" }, "Couldn't remove access");
+}
+
 /** Resolve the ancestor chain (breadcrumb) for a folder id, walking `parents` up to root. */
 export async function folderPath(accessToken: string, folderId: string): Promise<{ id: string; name: string }[]> {
   if (!folderId || folderId === "root") return [];
