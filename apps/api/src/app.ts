@@ -61,6 +61,7 @@ export function createApp(): Express {
   api.use("/repos", limiter(20));
   api.use("/vault", limiter(60));
   api.use("/drive", limiter(120));
+  api.use("/drive-v2", limiter(240));
 
   api.use(attachUser);
   mountRoutes(api);
