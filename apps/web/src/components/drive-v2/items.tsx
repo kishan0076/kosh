@@ -5,8 +5,25 @@ import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { Spinner } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
-import type { DriveView } from "@/data/driveV2";
+import type { DriveView, SortKey } from "@/data/driveV2";
 import { getDragIds, hasDriveDrag } from "./dnd";
+
+/**
+ * Order nodes for display (folders always first, then by key). The single source of truth for the
+ * visible order — reused by the grid/list AND bulk rename so its sequential numbering matches what
+ * the user sees on screen.
+ */
+export function sortNodes(nodes: DriveNode[], key: SortKey, dir: "asc" | "desc"): DriveNode[] {
+  return [...nodes].sort((a, b) => {
+    if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1; // folders always first
+    let c = 0;
+    if (key === "name") c = a.name.localeCompare(b.name, undefined, { numeric: true });
+    else if (key === "modified") c = (a.modifiedTime ?? "").localeCompare(b.modifiedTime ?? "");
+    else if (key === "size") c = (a.size ?? 0) - (b.size ?? 0);
+    else c = kindOf(a).localeCompare(kindOf(b)) || a.name.localeCompare(b.name);
+    return dir === "asc" ? c : -c;
+  });
+}
 
 /** Shared internal-drag drop handlers for a folder node (move onto folder). */
 function useFolderDrop(node: DriveNode, onFolderDrop: (folder: DriveNode, ids: string[]) => void) {

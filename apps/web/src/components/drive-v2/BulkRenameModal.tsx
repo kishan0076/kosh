@@ -4,6 +4,7 @@ import { Button, Spinner } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { useUi } from "@/data/ui";
 import { useDriveV2 } from "@/data/driveV2";
+import { sortNodes } from "./items";
 
 /** Split "name.ext" into [base, ".ext"] for files (folders keep the whole name). */
 function splitExt(name: string, isFolder: boolean): [string, string] {
@@ -14,6 +15,7 @@ function splitExt(name: string, isFolder: boolean): [string, string] {
 
 export function BulkRenameModal({ ids, onClose }: { ids: string[]; onClose: () => void }) {
   const nodes = useDriveV2((s) => s.nodes);
+  const prefs = useDriveV2((s) => s.prefs);
   const rename = useDriveV2((s) => s.rename);
   const toast = useUi((s) => s.toast);
   const [find, setFind] = useState("");
@@ -22,7 +24,13 @@ export function BulkRenameModal({ ids, onClose }: { ids: string[]; onClose: () =
   const [start, setStart] = useState(1);
   const [busy, setBusy] = useState(false);
 
-  const targets = useMemo(() => nodes.filter((n) => ids.includes(n.id)), [nodes, ids]);
+  // Order targets by the SAME sort the user sees on screen so sequential numbering (1, 2, 3…)
+  // follows the visible list, not the store's arbitrary fetch order.
+  const idSet = useMemo(() => new Set(ids), [ids]);
+  const targets = useMemo(
+    () => sortNodes(nodes.filter((n) => idSet.has(n.id)), prefs.sortKey, prefs.sortDir),
+    [nodes, idSet, prefs.sortKey, prefs.sortDir],
+  );
 
   const rename1 = (name: string, isFolder: boolean, index: number): string => {
     let [b, ext] = splitExt(name, isFolder);

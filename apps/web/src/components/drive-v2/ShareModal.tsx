@@ -41,8 +41,11 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
   useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [accountId, node.id]);
 
-  const people = perms.filter((p) => p.type === "user" || p.type === "group");
+  // Include domain grants too — otherwise a file shared with a whole domain wrongly reads "only you".
+  const people = perms.filter((p) => p.type === "user" || p.type === "group" || p.type === "domain");
   const anyone = perms.find((p) => p.type === "anyone") ?? null;
+  const personName = (p: DrivePermission) =>
+    p.type === "domain" ? `Everyone at ${p.domain ?? "your organization"}` : p.displayName ?? p.emailAddress ?? "Unknown";
 
   async function addPerson() {
     const addr = email.trim();
@@ -65,8 +68,9 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
     try {
       await driveV2Api.updatePermission(accountId, node.id, perm.id, role);
       setPerms((ps) => ps.map((p) => (p.id === perm.id ? { ...p, role } : p)));
-    } catch {
-      toast({ message: "Couldn't update access", tone: "danger" });
+    } catch (err) {
+      // Surface Google's real reason (e.g. "you don't have permission…") instead of a generic line.
+      toast({ message: err instanceof Error ? err.message : "Couldn't update access", tone: "danger" });
     } finally {
       setBusy(null);
     }
@@ -77,8 +81,8 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
     try {
       await driveV2Api.removePermission(accountId, node.id, perm.id);
       setPerms((ps) => ps.filter((p) => p.id !== perm.id));
-    } catch {
-      toast({ message: "Couldn't remove access", tone: "danger" });
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't remove access", tone: "danger" });
     } finally {
       setBusy(null);
     }
@@ -146,25 +150,35 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
             <div className="py-3 text-[12.5px] text-danger">{error}</div>
           ) : (
             <div className="space-y-0.5">
-              {people.map((p) => (
+              {people.map((p) => {
+                const assignable = ASSIGNABLE.some((r) => r.role === p.role);
+                return (
                 <div key={p.id} className="flex items-center gap-2.5 rounded-[var(--radius-control)] px-1.5 py-1.5 hover:bg-surface-2">
-                  {p.photoLink ? <img src={p.photoLink} alt="" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[12px] font-semibold text-primary">{(p.displayName ?? p.emailAddress ?? "?").slice(0, 1).toUpperCase()}</span>}
+                  {p.photoLink ? <img src={p.photoLink} alt="" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[12px] font-semibold text-primary">{personName(p).slice(0, 1).toUpperCase()}</span>}
                   <div className="min-w-0 flex-1">
-                    <div className="truncate text-[13px] font-medium">{p.displayName ?? p.emailAddress ?? "Unknown"}{p.pendingOwner ? " (pending)" : ""}</div>
+                    <div className="truncate text-[13px] font-medium">{personName(p)}{p.pendingOwner ? " (pending)" : ""}</div>
                     {p.emailAddress && p.displayName && <div className="truncate text-[11.5px] text-muted">{p.emailAddress}</div>}
                   </div>
                   {busy === p.id ? (
                     <Spinner size={15} className="text-muted" />
                   ) : p.role === "owner" ? (
                     <span className="shrink-0 text-[12px] text-muted">Owner</span>
-                  ) : (
+                  ) : assignable ? (
                     <>
-                      <RoleSelect value={ASSIGNABLE.some((r) => r.role === p.role) ? p.role : "writer"} onChange={(r) => void changeRole(p, r)} compact />
+                      <RoleSelect value={p.role} onChange={(r) => void changeRole(p, r)} compact />
+                      <button onClick={() => void remove(p)} className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-3 hover:text-danger" aria-label="Remove access"><X size={15} /></button>
+                    </>
+                  ) : (
+                    // Manager (organizer/fileOrganizer) & domain grants can't be set to an assignable role —
+                    // show the TRUE role read-only (never a fabricated "Editor") but still allow revoking.
+                    <>
+                      <span className="shrink-0 text-[12px] text-muted">{ROLE_LABEL[p.role] ?? p.role}</span>
                       <button onClick={() => void remove(p)} className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-3 hover:text-danger" aria-label="Remove access"><X size={15} /></button>
                     </>
                   )}
                 </div>
-              ))}
+                );
+              })}
               {people.length === 0 && <div className="px-1.5 py-2 text-[12.5px] text-muted">Only you have access.</div>}
             </div>
           )}

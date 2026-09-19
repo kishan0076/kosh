@@ -87,7 +87,7 @@ interface DriveV2State {
 
   setView: (v: DriveView) => void;
   openFolder: (node: DriveNode) => void;
-  loadPath: (folderId: string) => Promise<void>;
+  loadPath: (folderId: string, name?: string) => Promise<void>;
   breadcrumbTo: (index: number) => void;
   goRoot: () => void;
 
@@ -180,7 +180,7 @@ export function parseSearch(query: string, ownerMe?: string): SearchParams {
       if (mt?.exact) params.mimeType = mt.exact;
       else if (mt?.contains) params.mimeContains = mt.contains;
       else free.push(tok);
-    } else if (key === "owner") params.owner = val.toLowerCase() === "me" ? ownerMe ?? val : val;
+    } else if (key === "owner") params.owner = val.toLowerCase() === "me" ? ownerMe ?? "me" : val;
     else if (key === "before") params.before = toDate(val);
     else if (key === "after") params.after = toDate(val);
     else if (key === "is" && val.toLowerCase() === "starred") params.starred = true;
@@ -354,11 +354,11 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         void load();
       } else {
         set({ view: "myDrive", selection: new Set(), detailsId: null });
-        void get().loadPath(node.id);
+        void get().loadPath(node.id, node.name);
       }
     },
 
-    loadPath: async (folderId) => {
+    loadPath: async (folderId, name) => {
       const accountId = get().accountId;
       if (!accountId) return;
       set({ view: "myDrive" });
@@ -366,7 +366,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         const { path } = await driveV2Api.path(accountId, folderId);
         set({ path });
       } catch {
-        set({ path: [] });
+        // Breadcrumb hydration failed — keep the user INSIDE the folder they opened (with its name if
+        // we have it) instead of silently dumping them back at My Drive root.
+        set({ path: folderId === "root" ? [] : [{ id: folderId, name: name ?? "Folder" }] });
       }
       void load(true);
     },
@@ -639,11 +641,20 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     updateMeta: async (id, patch) => {
       const accountId = get().accountId;
       if (!accountId) return;
-      await mutate([id], (nodes) => nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)), async () => {
-        const { file } = await driveV2Api.updateMeta(accountId, id, patch);
-        set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
-        invalidateFolderViews();
-      });
+      // Patch the open details panel optimistically too — otherwise saved notes flicker back to the
+      // old value until the server responds. Rolled back with the nodes on failure.
+      const beforeDetails = get().detailsNode;
+      if (get().detailsId === id && beforeDetails) set({ detailsNode: { ...beforeDetails, ...patch } });
+      await mutate(
+        [id],
+        (nodes) => nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
+        async () => {
+          const { file } = await driveV2Api.updateMeta(accountId, id, patch);
+          set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
+          invalidateFolderViews();
+        },
+        { onError: (m) => { if (get().detailsId === id) set({ detailsNode: beforeDetails }); toastErr(m); } },
+      );
     },
 
     emptyTrash: async () => {

@@ -36,10 +36,10 @@ import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from "@/components/overlays";
 import { driveApi } from "@/data/driveApi";
-import { filterBucket, kindOf, type DriveNode, type FilterKind } from "@/data/driveV2Api";
+import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, type ItemHandlers } from "@/components/drive-v2/items";
+import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, sortNodes, type ItemHandlers } from "@/components/drive-v2/items";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
 import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components/drive-v2/modals";
 import { ShareModal } from "@/components/drive-v2/ShareModal";
@@ -51,20 +51,6 @@ import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
 
 const SAVED_KEY = "kosh.driveV2.savedSearches";
-
-/* ── sorting / filtering (client-side over loaded pages) ── */
-function sortNodes(nodes: DriveNode[], key: SortKey, dir: "asc" | "desc"): DriveNode[] {
-  const s = [...nodes].sort((a, b) => {
-    if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1; // folders always first
-    let c = 0;
-    if (key === "name") c = a.name.localeCompare(b.name, undefined, { numeric: true });
-    else if (key === "modified") c = (a.modifiedTime ?? "").localeCompare(b.modifiedTime ?? "");
-    else if (key === "size") c = (a.size ?? 0) - (b.size ?? 0);
-    else c = kindOf(a).localeCompare(kindOf(b)) || a.name.localeCompare(b.name);
-    return dir === "asc" ? c : -c;
-  });
-  return s;
-}
 
 export function DriveV2() {
   const backend = useData((s) => s.backend);

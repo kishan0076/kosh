@@ -1,5 +1,20 @@
 import { GoogleAuthError, GoogleTransientError } from "./googleDrive.js";
 
+/** The caller lacks permission on this specific item (reconnecting won't help). */
+export class GoogleForbiddenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GoogleForbiddenError";
+  }
+}
+/** Google rejected the request as invalid (bad params) — a client error, not retriable. */
+export class GoogleBadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GoogleBadRequestError";
+  }
+}
+
 /**
  * Google Drive V2 — full-CRUD Drive API v3 helpers for the V2 "control center" module.
  *
@@ -21,9 +36,33 @@ function qval(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-/** Classify a non-ok Drive response: 401/403 → reconnect; anything else → transient. */
-function driveHttpError(status: number, ctx: string): Error {
-  if (status === 401 || status === 403) return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
+/** Google 403 `reason`s that mean "you lack permission on THIS item" — reconnecting won't help. */
+const PERMISSION_REASONS = new Set([
+  "insufficientFilePermissions",
+  "insufficientPermissions",
+  "cannotModifyInheritedPermission",
+  "cannotShareOutsideDomain",
+  "sharingRateLimitExceeded",
+  "domainPolicy",
+  "abuseIsBlockingDownload",
+]);
+
+/**
+ * Classify a non-ok Drive response using the HTTP status AND Google's error `reason`/`message`:
+ * - 401, or a 403 that's genuinely an auth/scope problem → GoogleAuthError (prompt reconnect).
+ * - 403 with a per-item permission reason → GoogleForbiddenError (reconnecting won't help).
+ * - 400 → GoogleBadRequestError (bad params — a client error, not retriable).
+ * - anything else → GoogleTransientError (retry).
+ */
+function driveHttpError(status: number, ctx: string, reason?: string, message?: string): Error {
+  if (status === 401) return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
+  if (status === 403) {
+    if (reason && PERMISSION_REASONS.has(reason)) {
+      return new GoogleForbiddenError(`${ctx} — you don't have permission to do that${message ? `: ${message}` : "."}`);
+    }
+    return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
+  }
+  if (status === 400) return new GoogleBadRequestError(`${ctx}${message ? `: ${message}` : "."}`);
   return new GoogleTransientError(`${ctx} (${status}).`);
 }
 
@@ -68,7 +107,18 @@ function toNode(f: RawFile): DriveNode {
 
 async function driveFetch(accessToken: string, url: string | URL, init: RequestInit, ctx: string): Promise<Response> {
   const res = await fetch(url, { ...init, headers: { Authorization: `Bearer ${accessToken}`, ...(init.headers ?? {}) } });
-  if (!res.ok) throw driveHttpError(res.status, ctx);
+  if (!res.ok) {
+    let reason: string | undefined;
+    let message: string | undefined;
+    try {
+      const body = (await res.clone().json()) as { error?: { message?: string; errors?: { reason?: string }[] } };
+      reason = body?.error?.errors?.[0]?.reason;
+      message = body?.error?.message;
+    } catch {
+      /* non-JSON error body — fall back to status-only classification */
+    }
+    throw driveHttpError(res.status, ctx, reason, message);
+  }
   return res;
 }
 

@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
-import { AppError, ah, badRequest, notFound } from "../errors.js";
+import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
 import { decryptSecret } from "../auth/crypto.js";
 import { GoogleAuthError, GoogleTransientError, refreshAccessToken } from "../integrations/googleDrive.js";
@@ -15,6 +15,8 @@ import {
   emptyTrash,
   folderPath,
   getFile,
+  GoogleBadRequestError,
+  GoogleForbiddenError,
   listChildren,
   listPermissions,
   listRecent,
@@ -51,6 +53,8 @@ async function ownedAccount(uid: string, id: string): Promise<DriveAccountDoc> {
 
 function mapGoogleError(err: unknown): never {
   if (err instanceof GoogleAuthError) throw badRequest("NEEDS_RECONNECT", err.message);
+  if (err instanceof GoogleForbiddenError) throw forbidden(err.message);
+  if (err instanceof GoogleBadRequestError) throw badRequest("DRIVE_BAD_REQUEST", err.message);
   if (err instanceof GoogleTransientError) throw new AppError("UPSTREAM", err.message, 502);
   throw err;
 }
