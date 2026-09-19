@@ -334,6 +334,7 @@ export async function listRevisions(accessToken: string, fileId: string): Promis
   const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions`);
   u.searchParams.set("fields", "revisions(id,modifiedTime,size,keepForever,originalFilename,lastModifyingUser(displayName))");
   u.searchParams.set("pageSize", "200");
+  u.searchParams.set("supportsAllDrives", "true");
   const res = await driveFetch(accessToken, u, {}, "Couldn't load version history");
   const json = (await res.json()) as { revisions?: (Omit<DriveRevision, "size"> & { size?: string })[] };
   return (json.revisions ?? []).map((r) => ({ ...r, size: r.size != null ? Number(r.size) : undefined }));
@@ -341,6 +342,7 @@ export async function listRevisions(accessToken: string, fileId: string): Promis
 
 export async function deleteRevision(accessToken: string, fileId: string, revId: string): Promise<void> {
   const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}`);
+  u.searchParams.set("supportsAllDrives", "true");
   await driveFetch(accessToken, u, { method: "DELETE" }, "Couldn't delete that version");
 }
 
@@ -348,6 +350,7 @@ export async function deleteRevision(accessToken: string, fileId: string, revId:
 export async function updateRevision(accessToken: string, fileId: string, revId: string, keepForever: boolean): Promise<DriveRevision> {
   const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}`);
   u.searchParams.set("fields", "id,modifiedTime,size,keepForever,originalFilename,lastModifyingUser(displayName)");
+  u.searchParams.set("supportsAllDrives", "true");
   const res = await driveFetch(accessToken, u, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ keepForever }) }, "Couldn't update that version");
   const r = (await res.json()) as Omit<DriveRevision, "size"> & { size?: string };
   return { ...r, size: r.size != null ? Number(r.size) : undefined };

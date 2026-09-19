@@ -654,8 +654,9 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
     // Ignore drags that begin on an item card/row or any interactive control.
     if (t.closest("[data-node-id]") || t.closest("button") || t.closest("a") || t.closest("input") || t.closest("textarea")) return;
     const add = e.shiftKey || e.metaKey || e.ctrlKey;
+    // Don't clear the selection yet — a plain click on empty space (or a scrollbar drag) must not wipe
+    // it. The clear happens implicitly once the drag crosses the threshold (marqueeSelect replaces it).
     anchor.current = { x: e.clientX, y: e.clientY, base: add ? [...useDriveV2.getState().selection] : [], add };
-    if (!add) useDriveV2.getState().clearSelection();
   };
 
   return { box, onMouseDown };

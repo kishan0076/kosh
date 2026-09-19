@@ -11,9 +11,12 @@ const ACTION_META: Record<ActivityEntry["action"], { label: string; icon: typeof
   removed: { label: "Removed", icon: RotateCcw, tone: "text-danger" },
 };
 
-/** Escape one CSV cell (RFC 4180: wrap in quotes, double embedded quotes). */
+/** Escape one CSV cell: neutralize spreadsheet formula injection, then RFC-4180-quote. */
 function csvCell(v: string): string {
-  return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+  // A Drive file name may legally start with =, +, -, @ (or a tab/CR) — prefix with ' so Excel/Sheets
+  // treat it as text, not a formula, in this "audit log".
+  const safe = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+  return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 export function ActivityPanel({ onClose }: { onClose: () => void }) {

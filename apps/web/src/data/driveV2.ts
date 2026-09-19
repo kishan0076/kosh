@@ -172,6 +172,8 @@ const ACTIVITY_CAP = 200;
 let syncActive = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let syncToken: string | null = null; // changes.list page token ("where we are")
+let syncGen = 0; // bumped on account/space switch + stop; a stale in-flight poll must not write state
+let syncInFlight = false; // re-entrancy guard so a refocus can't run two concurrent polls
 
 const PREFS_KEY = "kosh.driveV2.prefs";
 const DEFAULT_PREFS: ViewPrefs = { layout: "grid", sortKey: "name", sortDir: "asc", filterKind: null };
@@ -370,29 +372,39 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
   /** One sync poll: (re)establish a page token if needed, else fetch+apply changes and advance it. */
   async function syncTick(): Promise<void> {
+    if (syncInFlight) return; // a poll is already running; it reschedules itself when done
+    const gen = syncGen; // capture the corpus generation; discard writes if it changes mid-flight
     const { accountId, scopeOk, spaceId } = get();
     const visible = typeof document === "undefined" || document.visibilityState === "visible";
+    let nextDelay = SYNC_INTERVAL;
     if (syncActive && accountId && scopeOk && visible) {
+      syncInFlight = true;
       try {
         if (!syncToken) {
           // First tick after start / account / space switch — anchor at "now".
           const { startPageToken } = await driveV2Api.changesStart(accountId, spaceId ?? undefined);
-          syncToken = startPageToken;
-          set({ sync: { status: "live", lastAt: Date.now(), applied: get().sync.applied } });
+          if (gen === syncGen) {
+            syncToken = startPageToken;
+            set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied } }));
+          }
         } else {
           set((s) => ({ sync: { ...s.sync, status: "syncing" } }));
           const { changes, newStartPageToken, nextPageToken } = await driveV2Api.changes(accountId, syncToken, spaceId ?? undefined);
-          applyChanges(changes);
-          syncToken = nextPageToken ?? newStartPageToken ?? syncToken;
-          set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + changes.length } }));
-          // More pages queued? drain them promptly instead of waiting a full interval.
-          if (nextPageToken) { scheduleSync(300); return; }
+          // Account/space switched mid-flight → this batch + token belong to the old corpus. Drop them.
+          if (gen === syncGen) {
+            applyChanges(changes);
+            syncToken = nextPageToken ?? newStartPageToken ?? syncToken;
+            set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + changes.length } }));
+            if (nextPageToken) nextDelay = 300; // more pages queued — drain promptly
+          }
         }
       } catch {
-        set((s) => ({ sync: { ...s.sync, status: "error" } }));
+        if (gen === syncGen) set((s) => ({ sync: { ...s.sync, status: "error" } }));
+      } finally {
+        syncInFlight = false;
       }
     }
-    scheduleSync(SYNC_INTERVAL);
+    scheduleSync(nextDelay);
   }
 
   function scheduleSync(delay: number): void {
@@ -459,14 +471,14 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
     selectAccount: async (id) => {
       tokenCache = null;
-      syncToken = null; // new corpus → re-anchor sync
+      syncToken = null; syncGen++; // new corpus → re-anchor sync; invalidate any in-flight poll
       set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [] });
       set({ scopeOk: computeScopeOk() });
       if (get().scopeOk) await Promise.all([load(true), get().loadQuota(), loadSpaces()]);
     },
 
     selectSpace: async (id) => {
-      syncToken = null; // switching spaces re-anchors the change feed
+      syncToken = null; syncGen++; // switching spaces re-anchors the change feed; invalidate in-flight poll
       const space = id ? get().spaces.find((d) => d.id === id) ?? null : null;
       set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false });
       await load(true);
@@ -480,6 +492,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
     stopSync: () => {
       syncActive = false;
+      syncGen++; // any in-flight poll must discard its writes
       if (syncTimer) { clearTimeout(syncTimer); syncTimer = null; }
       set((s) => ({ sync: { ...s.sync, status: "off" } }));
     },
@@ -867,7 +880,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         // Bytes fetched browser→Google directly with a short-lived token (same path as uploads) —
         // the revision content never proxies through the API.
         const token = await ensureToken(accountId);
-        const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}?alt=media`;
+        const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/revisions/${encodeURIComponent(revId)}?alt=media&supportsAllDrives=true`;
         const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
         if (!res.ok) throw new Error(`Download failed (${res.status})`);
         const blob = await res.blob();
