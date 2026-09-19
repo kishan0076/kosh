@@ -300,7 +300,7 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
       a.push({ label: "Version history", icon: History, onClick: () => s.openDialog({ kind: "revisions", node }) });
     }
   }
-  a.push({ label: many ? `Star ${ids.length}` : node.starred ? "Unstar" : "Star", icon: Star, onClick: () => ids.forEach((id) => void s.toggleStar(id)) });
+  a.push({ label: many ? `Star ${ids.length}` : node.starred ? "Unstar" : "Star", icon: Star, onClick: () => void s.toggleStarMany(ids) });
   if (many) a.push({ label: `Bulk rename ${ids.length}`, icon: Type, onClick: () => s.openDialog({ kind: "rename-bulk", ids }) });
   a.push({ label: "Move to…", icon: CornerUpRight, onClick: () => s.openDialog({ kind: "move", ids }) });
   a.push({ label: many ? `Move ${ids.length} to trash` : "Move to trash", icon: Trash2, danger: true, separatorBefore: true, onClick: () => s.openDialog({ kind: "delete", ids, permanent: false }) });
@@ -606,7 +606,7 @@ function SelectionBar() {
           </>
         ) : (
           <>
-            <Button variant="ghost" size="sm" onClick={() => ids.forEach((id) => void s().toggleStar(id))}><Star size={14} /> Star</Button>
+            <Button variant="ghost" size="sm" onClick={() => void s().toggleStarMany(ids)}><Star size={14} /> Star</Button>
             {ids.length > 1 && <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "rename-bulk", ids })}><Type size={14} /> Rename</Button>}
             <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "move", ids })}><CornerUpRight size={14} /> Move</Button>
             <Button variant="ghost" size="sm" className="text-danger" onClick={() => s().openDialog({ kind: "delete", ids, permanent: false })}><Trash2 size={14} /> Trash</Button>

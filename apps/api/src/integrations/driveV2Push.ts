@@ -32,6 +32,7 @@ interface Channel {
 
 const CHANNEL_TTL_MS = 6 * 60 * 60 * 1000; // 6h (Drive caps ≈24h; renew well before)
 const RENEW_BUFFER_MS = 10 * 60 * 1000; // renew 10 min before expiry
+const RENEW_RETRY_MS = 60 * 1000; // retry a failed renewal after a minute (still inside the buffer)
 const TEARDOWN_GRACE_MS = 2 * 60 * 1000; // keep a channel briefly after the last tab leaves
 const MAX_DRAIN_PAGES = 10; // changes.list pages per notification burst
 
@@ -144,8 +145,20 @@ function scheduleRenew(ch: Channel): void {
   const delay = Math.max(60_000, ch.expiration - RENEW_BUFFER_MS - Date.now());
   const t = setTimeout(() => {
     // Only renew while someone is still listening; otherwise let it lapse.
-    if (subscribers.get(ch.accountId)?.size) void createWatch(ch.accountId, ch.userId).catch((e) => logger.warn({ e }, "drive-v2 push: renew failed"));
-    else void teardownAccount(ch.accountId).catch(() => {});
+    if (!subscribers.get(ch.accountId)?.size) {
+      void teardownAccount(ch.accountId).catch(() => {});
+      return;
+    }
+    void createWatch(ch.accountId, ch.userId).catch((e) => {
+      // A transient renewal failure must NOT permanently kill push — retry before the channel expires,
+      // as long as this is still the account's channel and someone is listening.
+      logger.warn({ e, accountId: ch.accountId }, "drive-v2 push: renew failed, retrying");
+      if (channelByAccount.get(ch.accountId) === ch.channelId && subscribers.get(ch.accountId)?.size) {
+        const retry = setTimeout(() => { if (subscribers.get(ch.accountId)?.size) void createWatch(ch.accountId, ch.userId).catch(() => {}); }, RENEW_RETRY_MS);
+        retry.unref?.();
+        renewTimers.set(ch.channelId, retry);
+      }
+    });
   }, delay);
   t.unref?.();
   renewTimers.set(ch.channelId, t);
@@ -208,6 +221,9 @@ export async function handleNotification(h: { channelId?: string; token?: string
 
 async function pollAndBroadcast(ch: Channel): Promise<void> {
   if (pollLocks.has(ch.channelId)) return; // coalesce concurrent notifications for the same channel
+  // No one is listening (e.g. during the teardown grace window) — don't drain, so the token isn't
+  // advanced past changes that would then be lost. The channel is torn down shortly anyway.
+  if (!subscribers.get(ch.accountId)?.size) return;
   pollLocks.add(ch.channelId);
   let morePending = false;
   try {

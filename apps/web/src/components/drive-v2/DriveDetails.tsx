@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Check, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, Share2, Star, Trash2, User, Users, X } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
@@ -172,6 +172,12 @@ export function PreviewOverlay({ node, onClose }: { node: DriveNode; onClose: ()
   const imgSrc = node.thumbnailLink?.replace(/=s\d+$/, "=s1600") ?? node.webContentLink;
   const frame = isImage ? null : embedUrl(node);
   const [loading, setLoading] = useState(!isImage && !!frame);
+  // Close the full-screen preview with Escape (matches every other overlay in the module).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-black/80 backdrop-blur-sm" onClick={onClose}>
       <div className="flex items-center gap-3 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>

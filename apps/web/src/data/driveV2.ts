@@ -68,6 +68,7 @@ interface DriveV2State {
   configured: boolean;
   fullAccess: boolean;
   pushSync: boolean; // server supports changes.watch push (SSE); else the poller is the only sync
+  rootFolderId: string | null; // the account's REAL My Drive root id (Drive never returns the "root" alias)
 
   accounts: DriveAccount[];
   accountId: string | null;
@@ -122,6 +123,7 @@ interface DriveV2State {
 
   setView: (v: DriveView) => void;
   openFolder: (node: DriveNode) => void;
+  openSearchedFolder: (node: DriveNode) => void;
   loadPath: (folderId: string, name?: string) => Promise<void>;
   breadcrumbTo: (index: number) => void;
   goRoot: () => void;
@@ -150,6 +152,7 @@ interface DriveV2State {
   createFolder: (input: { name: string; parentId: string; folderColorRgb?: string; description?: string }) => Promise<void>;
   rename: (id: string, name: string) => Promise<void>;
   toggleStar: (id: string) => Promise<void>;
+  toggleStarMany: (ids: string[]) => Promise<void>;
   trash: (ids: string[]) => Promise<void>;
   restore: (ids: string[]) => Promise<void>;
   deletePermanent: (ids: string[]) => Promise<void>;
@@ -180,7 +183,8 @@ let syncInFlight = false; // re-entrancy guard so a refocus can't run two concur
 let eventSource: EventSource | null = null; // push channel (changes.watch → SSE); null when polling
 let sseConnected = false; // true while the SSE stream is healthy — the poller idles then
 const SSE_IDLE_INTERVAL = 60_000; // reconcile cadence while push is delivering (catches a silent stall)
-const MAX_SSE_FAILURES = 4; // consecutive SSE errors without an open → give up, fall back to polling
+const MAX_SSE_FAILURES = 4; // SSE errors without a STABLE open → give up, fall back to polling
+const SSE_STABLE_MS = 30_000; // a stream open at least this long counts as healthy (resets the budget)
 
 const PREFS_KEY = "kosh.driveV2.prefs";
 const DEFAULT_PREFS: ViewPrefs = { layout: "grid", sortKey: "name", sortDir: "asc", filterKind: null };
@@ -345,6 +349,19 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     }
   }
 
+  /** Resolve the account's REAL My Drive root id (Drive returns it in parents, never the "root" alias),
+   *  so live-sync can recognize new files created directly in the root. Non-fatal. */
+  async function loadRootId(): Promise<void> {
+    const accountId = get().accountId;
+    if (!accountId || !get().scopeOk || get().rootFolderId) return;
+    try {
+      const { file } = await driveV2Api.getFile(accountId, "root");
+      if (get().accountId === accountId) set({ rootFolderId: file.id });
+    } catch {
+      /* falls back to the "root" alias comparison — only affects live-append of new root-level files */
+    }
+  }
+
   /**
    * Fold a batch of Drive changes into the live view + the activity timeline (two-way sync).
    * Returns the count of genuinely NEW timeline entries (after dedup) so the caller can advance the
@@ -358,6 +375,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       let nodes = s.nodes;
       let detailsNode = s.detailsNode;
       const folderId = currentFolderId(s.path, s.spaceId);
+      // Drive returns the REAL root folder id in a file's `parents`, never the "root" alias — so at My
+      // Drive root, match against the resolved root id (falls back to the alias until it's fetched).
+      const matchParent = folderId === "root" ? (s.rootFolderId ?? "root") : folderId;
       const now = new Date().toISOString();
       for (const c of changes) {
         const idx = nodes.findIndex((n) => n.id === c.fileId);
@@ -369,7 +389,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
           if (detailsNode?.id === c.fileId) detailsNode = null;
           entries.push({ fileId: c.fileId, name: known?.name ?? c.file?.name ?? "A file", action: c.removed ? "removed" : "trashed", time: c.time ?? now, isFolder: known?.isFolder ?? c.file?.isFolder ?? false });
         } else if (c.file) {
-          const isNewChild = idx === -1 && s.view === "myDrive" && (c.file.parents ?? []).includes(folderId);
+          const isNewChild = idx === -1 && s.view === "myDrive" && (c.file.parents ?? []).includes(matchParent);
           if (idx !== -1) nodes = nodes.map((n) => (n.id === c.fileId ? c.file! : n)); // external edit → reflect it
           else if (isNewChild) nodes = [c.file, ...nodes]; // a new child of the folder we're looking at
           if (detailsNode?.id === c.fileId) detailsNode = c.file;
@@ -448,11 +468,14 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const esAccount = accountId;
     const es = new EventSource(`${API_BASE}/drive-v2/accounts/${accountId}/events`, { withCredentials: true });
     let openedOnce = false;
-    let failures = 0; // consecutive errors without a successful open → give up (avoid a reconnect storm)
+    let failures = 0; // errors without a STABLE open → give up (avoid a reconnect storm)
+    let lastOpenAt = 0; // when the current connection opened — used to tell a stable run from a flap
     es.onopen = () => {
       if (get().accountId !== esAccount) return;
       sseConnected = true;
-      failures = 0;
+      lastOpenAt = Date.now();
+      // Don't reset `failures` here: a stream that opens then immediately drops (proxy/LB short idle
+      // timeout) must still count toward the give-up budget. The budget resets on a STABLE drop below.
       if (openedOnce) void load(true); // a RECONNECT may have missed pushes while down — refresh the view
       openedOnce = true;
       set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied, via: "push" } }));
@@ -471,16 +494,18 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     };
     es.onerror = () => {
       if (get().accountId !== esAccount) return;
-      failures++;
-      // A live stream just dropped: fall back to polling (re-anchored) while the browser reconnects.
+      // A run that stayed open past the stability window was genuinely healthy → reset the budget;
+      // a quick open→drop (flap) or a never-open counts as a failure.
+      const wasStable = sseConnected && Date.now() - lastOpenAt >= SSE_STABLE_MS;
       if (sseConnected) {
         sseConnected = false;
         syncToken = null;
         set((s) => ({ sync: { ...s.sync, status: "syncing", via: "poll" } }));
-        scheduleSync(0);
+        scheduleSync(0); // fall back to polling (re-anchored) while the browser reconnects
       }
-      // Never (re)connects — stop the 10s reconnect storm (each retry re-mints a token + Drive watch)
-      // and rely on the poller for the rest of the session.
+      failures = wasStable ? 0 : failures + 1;
+      // Never connects, or keeps flapping — stop the reconnect storm (each retry re-mints a token +
+      // Drive watch) and settle into stable polling for the rest of the session.
       if (failures >= MAX_SSE_FAILURES && eventSource === es) {
         closeEventSource();
         scheduleSync(0);
@@ -506,6 +531,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     configured: false,
     fullAccess: false,
     pushSync: false,
+    rootFolderId: null,
     accounts: [],
     accountId: null,
     scopeOk: false,
@@ -550,7 +576,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         if (first) {
           set({ accountId: first.id });
           set({ scopeOk: computeScopeOk() });
-          if (get().scopeOk) await Promise.all([load(), get().loadQuota(), loadSpaces()]);
+          if (get().scopeOk) await Promise.all([load(), get().loadQuota(), loadSpaces(), loadRootId()]);
         }
       } catch (err) {
         set({ status: "error", error: err instanceof Error ? err.message : "Couldn't reach the Drive service." });
@@ -560,10 +586,10 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     selectAccount: async (id) => {
       tokenCache = null;
       syncToken = null; syncGen++; // new corpus → re-anchor sync; invalidate any in-flight poll
-      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [] });
+      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [], rootFolderId: null });
       set({ scopeOk: computeScopeOk() });
       if (syncActive) openEventSource(); // re-point the push channel at the new account
-      if (get().scopeOk) await Promise.all([load(true), get().loadQuota(), loadSpaces()]);
+      if (get().scopeOk) await Promise.all([load(true), get().loadQuota(), loadSpaces(), loadRootId()]);
     },
 
     selectSpace: async (id) => {
@@ -610,6 +636,15 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         set({ view: "myDrive", selection: new Set(), detailsId: null });
         void get().loadPath(node.id, node.name);
       }
+    },
+
+    // Open a folder found via GLOBAL (⌘K) search: always hydrate its real breadcrumb from the server
+    // rather than appending onto the current path, and drop back to the My Drive corpus (the palette
+    // search is unscoped) so the listing isn't mis-scoped to a Shared Drive.
+    openSearchedFolder: (node) => {
+      if (get().spaceId !== null) { syncToken = null; syncGen++; set({ spaceId: null, spaceName: null }); }
+      set({ view: "myDrive", insightsOpen: false, activityOpen: false, selection: new Set(), detailsId: null, detailsNode: null });
+      void get().loadPath(node.id, node.name);
     },
 
     loadPath: async (folderId, name) => {
@@ -688,7 +723,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         const { file } = await driveV2Api.getFile(accountId, id);
         if (get().detailsId === id) set({ detailsNode: file, detailsLoading: false });
       } catch {
-        set({ detailsLoading: false });
+        // Only clear loading if this is still the open item — a newer selection owns the flag otherwise.
+        if (get().detailsId === id) set({ detailsLoading: false });
       }
     },
 
@@ -786,6 +822,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       );
     },
 
+    // Multi-select star: run SEQUENTIALLY. Each toggleStar snapshots the whole node list for rollback,
+    // so firing them concurrently lets one call's rollback resurrect a sibling another already removed.
+    toggleStarMany: async (ids) => {
+      for (const id of ids) await get().toggleStar(id);
+    },
+
     trash: async (ids) => {
       const accountId = get().accountId;
       if (!accountId) return;
@@ -804,7 +846,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const ok = await bulk(ids, (id) => driveV2Api.setTrash(accountId, id, false), (nodes, done) => nodes.filter((n) => !done.has(n.id)));
       invalidateFolderViews();
       set({ selection: new Set() });
-      if (get().view === "trash") void load(true);
+      // Reload the current view so restored items REAPPEAR (Undo from My Drive) — not just the trash
+      // list. bulk's apply only removes ids, so a non-trash view needs the authoritative refetch.
+      if (ok.done.length) void load(true);
       if (ok.done.length) pushToast({ message: `Restored ${ok.done.length} item${ok.done.length === 1 ? "" : "s"}`, tone: "ok" });
       if (ok.failed.length) toastErr(`${ok.failed.length} couldn't be restored.`);
     },
@@ -849,12 +893,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     copy: async (id) => {
       const accountId = get().accountId;
       if (!accountId) return;
-      await mutate([id], (nodes) => nodes, async () => {
+      const ok = await mutate([id], (nodes) => nodes, async () => {
         const { file } = await driveV2Api.copy(accountId, id, {});
         invalidateFolderViews();
         set((s) => ({ nodes: [file, ...s.nodes] }));
       }, { refreshQuota: true });
-      pushToast({ message: "Copy created", tone: "ok" });
+      if (ok) pushToast({ message: "Copy created", tone: "ok" }); // mutate() already toasts on failure
     },
 
     copyFolder: async (id) => {
@@ -863,13 +907,14 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const src = get().nodes.find((n) => n.id === id);
       if (!src) return;
       const destParent = currentFolderId(get().path, get().spaceId);
+      const driveId = get().spaceId ?? undefined; // scope the recursive listing to the active Shared Drive
       pushToast({ message: `Copying “${src.name}”…`, tone: "default" });
       let ops = 0;
       const CAP = 500; // safety ceiling so a huge tree can't run away
       async function copyInto(srcFolderId: string, destFolderId: string): Promise<void> {
         let pageToken: string | undefined;
         do {
-          const res = await driveV2Api.list(accountId!, srcFolderId, { pageToken });
+          const res = await driveV2Api.list(accountId!, srcFolderId, { pageToken, driveId });
           for (const child of res.files) {
             if (ops >= CAP) return;
             ops++;
@@ -917,9 +962,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     emptyTrash: async () => {
       const accountId = get().accountId;
       if (!accountId) return;
+      const seq = loadSeq;
       try {
         await driveV2Api.emptyTrash(accountId);
-        set({ nodes: [], selection: new Set() });
+        // Guard against clobbering a newer view: only blank the list if the user is still on Trash and
+        // hasn't navigated away during the (possibly slow) call.
+        if (seq === loadSeq && get().view === "trash") set({ nodes: [], selection: new Set() });
         void get().loadQuota();
         pushToast({ message: "Trash emptied", tone: "default" });
       } catch (err) {

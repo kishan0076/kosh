@@ -52,7 +52,10 @@ export function createApp(): Express {
 
   // Rate limits (§8). Generous global net + stricter caps on sensitive/expensive routes.
   const limiter = (limit: number) => rateLimit({ windowMs: 60_000, limit, standardHeaders: "draft-7", legacyHeaders: false });
-  api.use(limiter(600));
+  // Google's changes.watch webhook is unauthenticated and all pings share Google's source IPs — exempt
+  // it from BOTH the global and the /drive-v2 per-IP buckets (it's guarded by the per-channel token).
+  const isDriveWebhook = (path: string) => path.split("?")[0] === "/api/drive-v2/webhook/changes";
+  api.use(rateLimit({ windowMs: 60_000, limit: 600, standardHeaders: "draft-7", legacyHeaders: false, skip: (req) => isDriveWebhook(req.originalUrl) }));
   api.use("/auth", limiter(30));
   api.use("/settings", limiter(30));
   api.use("/mcp", limiter(120));
@@ -71,7 +74,7 @@ export function createApp(): Express {
       limit: 240,
       standardHeaders: "draft-7",
       legacyHeaders: false,
-      skip: (req) => req.originalUrl.split("?")[0] === "/api/drive-v2/webhook/changes",
+      skip: (req) => isDriveWebhook(req.originalUrl),
     }),
   );
 

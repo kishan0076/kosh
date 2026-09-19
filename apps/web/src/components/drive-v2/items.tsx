@@ -76,6 +76,9 @@ export function NodeIcon({ node, size = 20, thumb = false }: { node: DriveNode; 
   const kind = kindOf(node);
   const Icon = KIND_ICON[kind];
   const [broken, setBroken] = useState(false);
+  // Reset the broken flag when the source changes — the same NodeIcon instance is reused across
+  // selected files (e.g. in the details panel), so a stale "broken" would hide a valid thumbnail.
+  useEffect(() => { setBroken(false); }, [node.thumbnailLink]);
   const canThumb = thumb && !node.isFolder && !!node.thumbnailLink && !broken;
   if (canThumb) {
     return <img src={node.thumbnailLink} alt="" loading="lazy" onError={() => setBroken(true)} className="h-full w-full object-cover" />;

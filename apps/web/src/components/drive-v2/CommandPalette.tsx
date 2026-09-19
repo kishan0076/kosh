@@ -62,7 +62,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
       { id: "v-starred", label: "Go to Starred", icon: Star, run: () => s().setView("starred") },
       { id: "v-trash", label: "Go to Trash", icon: Trash2, run: () => s().setView("trash") },
       { id: "v-insights", label: "Open Insights", icon: Sparkles, keywords: "duplicates largest stale storage", run: () => s().setInsights(true) },
-      { id: "a-newfolder", label: "New folder", icon: FolderPlus, keywords: "create", run: () => s().openDialog({ kind: "newFolder", parentId: s().path.at(-1)?.id ?? "root" }) },
+      { id: "a-newfolder", label: "New folder", icon: FolderPlus, keywords: "create", run: () => s().openDialog({ kind: "newFolder", parentId: s().path.at(-1)?.id ?? s().spaceId ?? "root" }) },
       { id: "a-upload", label: "Upload files", icon: Upload, run: onUpload },
       { id: "a-grid", label: "Switch to grid view", icon: LayoutGrid, run: () => s().setLayout("grid") },
       { id: "a-list", label: "Switch to list view", icon: ListIcon, run: () => s().setLayout("list") },
@@ -75,7 +75,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
   const fileRows = results.map((node) => ({
     id: "f-" + node.id,
     node,
-    run: () => { if (node.isFolder) s().openFolder(node); else s().setPreview(node); },
+    run: () => { if (node.isFolder) s().openSearchedFolder(node); else s().setPreview(node); },
   }));
   const total = commands.length + fileRows.length;
 

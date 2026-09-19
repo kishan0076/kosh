@@ -29,7 +29,7 @@ export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /** Fields requested for every file/folder resource — enough to power the grid, list and details panel. */
 const FILE_FIELDS =
-  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension";
+  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren,canMoveItemWithinDrive),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension";
 
 /** Escape a value for a single-quoted Drive `q` literal — backslash FIRST, then quote. */
 function qval(value: string): string {
@@ -42,21 +42,34 @@ const PERMISSION_REASONS = new Set([
   "insufficientPermissions",
   "cannotModifyInheritedPermission",
   "cannotShareOutsideDomain",
-  "sharingRateLimitExceeded",
   "domainPolicy",
   "abuseIsBlockingDownload",
 ]);
 
+/** Google 403 `reason`s that are transient throttling (retriable), NOT auth/scope problems. */
+const THROTTLE_REASONS = new Set([
+  "userRateLimitExceeded",
+  "rateLimitExceeded",
+  "dailyLimitExceeded",
+  "sharingRateLimitExceeded",
+]);
+
 /**
- * Classify a non-ok Drive response using the HTTP status AND Google's error `reason`/`message`:
+ * Classify a non-ok Drive response using the HTTP status AND Google's error `reason`/`domain`/`message`:
  * - 401, or a 403 that's genuinely an auth/scope problem → GoogleAuthError (prompt reconnect).
+ * - 403 rate-limit/usage-limit → GoogleTransientError (retriable, NOT a reconnect).
  * - 403 with a per-item permission reason → GoogleForbiddenError (reconnecting won't help).
  * - 400 → GoogleBadRequestError (bad params — a client error, not retriable).
- * - anything else → GoogleTransientError (retry).
+ * - 429 / anything else → GoogleTransientError (retry).
  */
-function driveHttpError(status: number, ctx: string, reason?: string, message?: string): Error {
+function driveHttpError(status: number, ctx: string, reason?: string, message?: string, domain?: string): Error {
   if (status === 401) return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
+  if (status === 429) return new GoogleTransientError(`${ctx} — Drive is rate-limiting; retry shortly.`);
   if (status === 403) {
+    // Throttling (per-user QPS / daily quota) is transient — surface as retriable, never "reconnect".
+    if ((reason && THROTTLE_REASONS.has(reason)) || domain === "usageLimits") {
+      return new GoogleTransientError(`${ctx} — Drive is rate-limiting; retry shortly.`);
+    }
     if (reason && PERMISSION_REASONS.has(reason)) {
       return new GoogleForbiddenError(`${ctx} — you don't have permission to do that${message ? `: ${message}` : "."}`);
     }
@@ -110,14 +123,16 @@ async function driveFetch(accessToken: string, url: string | URL, init: RequestI
   if (!res.ok) {
     let reason: string | undefined;
     let message: string | undefined;
+    let domain: string | undefined;
     try {
-      const body = (await res.clone().json()) as { error?: { message?: string; errors?: { reason?: string }[] } };
+      const body = (await res.clone().json()) as { error?: { message?: string; errors?: { reason?: string; domain?: string }[] } };
       reason = body?.error?.errors?.[0]?.reason;
+      domain = body?.error?.errors?.[0]?.domain;
       message = body?.error?.message;
     } catch {
       /* non-JSON error body — fall back to status-only classification */
     }
-    throw driveHttpError(res.status, ctx, reason, message);
+    throw driveHttpError(res.status, ctx, reason, message, domain);
   }
   return res;
 }
@@ -302,7 +317,7 @@ export interface DriveScanFile {
 }
 
 /** Scan up to `pageCap` pages of non-folder files with the fields analytics panels need. */
-export async function scanFiles(accessToken: string, opts: { orderBy?: string; pageCap?: number } = {}): Promise<{ files: DriveScanFile[]; truncated: boolean }> {
+export async function scanFiles(accessToken: string, opts: { orderBy?: string; pageCap?: number; driveId?: string } = {}): Promise<{ files: DriveScanFile[]; truncated: boolean }> {
   const q = `trashed = false and mimeType != '${FOLDER_MIME}'`;
   const cap = Math.min(opts.pageCap ?? 10, 20); // 20 pages × 1000 = 20k files hard ceiling
   const out: DriveScanFile[] = [];
@@ -316,6 +331,12 @@ export async function scanFiles(accessToken: string, opts: { orderBy?: string; p
     u.searchParams.set("pageSize", "1000");
     u.searchParams.set("spaces", "drive");
     u.searchParams.set("supportsAllDrives", "true");
+    // Scope the analytics scan to a Shared Drive when one is selected (else the user's own corpus).
+    if (opts.driveId) {
+      u.searchParams.set("corpora", "drive");
+      u.searchParams.set("driveId", opts.driveId);
+      u.searchParams.set("includeItemsFromAllDrives", "true");
+    }
     if (pageToken) u.searchParams.set("pageToken", pageToken);
     const res = await driveFetch(accessToken, u, {}, "Couldn't scan Drive");
     const json = (await res.json()) as { files?: Record<string, unknown>[]; nextPageToken?: string };

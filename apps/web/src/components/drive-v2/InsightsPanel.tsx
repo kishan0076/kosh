@@ -31,6 +31,7 @@ type Tab = "overview" | "duplicates" | "largest" | "stale";
 
 export function InsightsPanel({ onClose }: { onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId)!;
+  const spaceId = useDriveV2((s) => s.spaceId);
   const loadQuota = useDriveV2((s) => s.loadQuota);
   const toast = useUi((s) => s.toast);
 
@@ -45,7 +46,8 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     let live = true;
     setLoading(true);
-    Promise.all([driveV2Api.scan(accountId, { orderBy: "quotaBytesUsed desc", cap: 10 }), driveV2Api.scan(accountId, { orderBy: "viewedByMeTime", cap: 2 })])
+    const driveId = spaceId ?? undefined; // scope insights to the active Shared Drive when one is selected
+    Promise.all([driveV2Api.scan(accountId, { orderBy: "quotaBytesUsed desc", cap: 10, driveId }), driveV2Api.scan(accountId, { orderBy: "viewedByMeTime", cap: 2, driveId })])
       .then(([main, staleScan]) => {
         if (!live) return;
         setScan(main.files);
@@ -56,7 +58,7 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
       .catch((err) => { if (live) setError(err instanceof Error ? err.message : "Couldn't analyze your Drive."); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [accountId]);
+  }, [accountId, spaceId]);
 
   const breakdown = useMemo(() => {
     const map = new Map<Bucket, { count: number; bytes: number }>();

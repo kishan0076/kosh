@@ -149,7 +149,7 @@ driveV2Router.get(
     const token = await auth(req, uid);
     const orderBy = typeof req.query.orderBy === "string" ? req.query.orderBy.slice(0, 60) : undefined;
     const pageCap = Math.min(Math.max(Number(req.query.cap) || 10, 1), 20);
-    res.json(await driveCall(scanFiles(token, { orderBy, pageCap })));
+    res.json(await driveCall(scanFiles(token, { orderBy, pageCap, driveId: driveIdOf(req) })));
   }),
 );
 

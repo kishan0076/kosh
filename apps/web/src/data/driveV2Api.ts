@@ -199,10 +199,11 @@ export const driveV2Api = {
     if (params.driveId) q.set("driveId", params.driveId);
     return v2req<ListResult>(`${base(accountId)}/search?${q}`);
   },
-  scan: (accountId: string, opts: { orderBy?: string; cap?: number } = {}) => {
+  scan: (accountId: string, opts: { orderBy?: string; cap?: number; driveId?: string } = {}) => {
     const q = new URLSearchParams();
     if (opts.orderBy) q.set("orderBy", opts.orderBy);
     if (opts.cap) q.set("cap", String(opts.cap));
+    if (opts.driveId) q.set("driveId", opts.driveId);
     return v2req<{ files: DriveScanFile[]; truncated: boolean }>(`${base(accountId)}/scan?${q}`);
   },
   recent: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/recent${viewQuery(opts)}`),
