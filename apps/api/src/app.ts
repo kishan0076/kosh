@@ -61,7 +61,19 @@ export function createApp(): Express {
   api.use("/repos", limiter(20));
   api.use("/vault", limiter(60));
   api.use("/drive", limiter(120));
-  api.use("/drive-v2", limiter(240));
+  // Google's changes.watch webhook is unauthenticated and all pings share Google's source IPs, so it
+  // must NOT share the per-IP user bucket (a burst would 429 and drop change notifications). The route
+  // itself is guarded by the per-channel token, and it only ever returns a fast 200.
+  api.use(
+    "/drive-v2",
+    rateLimit({
+      windowMs: 60_000,
+      limit: 240,
+      standardHeaders: "draft-7",
+      legacyHeaders: false,
+      skip: (req) => req.originalUrl.split("?")[0] === "/api/drive-v2/webhook/changes",
+    }),
+  );
 
   api.use(attachUser);
   mountRoutes(api);

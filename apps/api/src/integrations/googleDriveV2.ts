@@ -272,7 +272,10 @@ export async function watchChanges(
   if (opts.ttlMs) body.expiration = String(Date.now() + opts.ttlMs);
   const res = await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Couldn't start push sync");
   const json = (await res.json()) as { resourceId?: string; expiration?: string };
-  return { resourceId: String(json.resourceId), expiration: json.expiration ? Number(json.expiration) : undefined };
+  // A channel with no resourceId can never be stopped (channels.stop needs it) — treat as a failure
+  // rather than registering a bogus "undefined" resourceId that would leak the channel until it expires.
+  if (!json.resourceId) throw new GoogleTransientError("Couldn't start push sync — Drive returned no channel resource id.");
+  return { resourceId: json.resourceId, expiration: json.expiration ? Number(json.expiration) : undefined };
 }
 
 /** Close a previously-opened watch channel (best-effort; expired channels 404 harmlessly). */

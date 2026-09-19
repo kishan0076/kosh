@@ -113,7 +113,10 @@ async function createWatch(accountId: string, userId: string): Promise<void> {
     const minted = await mintFor(accountId);
     if (!minted) return;
     const oldId = channelByAccount.get(accountId);
-    const startToken = await getStartPageToken(minted.token); // user corpus — includes Shared-Drive changes
+    const old = oldId ? channelsById.get(oldId) : undefined;
+    // On RENEWAL continue from where the old channel left off so nothing is dropped; on a FRESH watch
+    // (no prior channel) anchor at "now" (user corpus — includes Shared-Drive changes).
+    const startToken = old?.pageToken ?? (await getStartPageToken(minted.token));
     const channelId = randomUUID();
     const token = randomUUID();
     const watch = await watchChanges(minted.token, startToken, { channelId, address: config.google.webhookUrl!, token, ttlMs: CHANNEL_TTL_MS });
@@ -123,12 +126,14 @@ async function createWatch(accountId: string, userId: string): Promise<void> {
     scheduleRenew(ch);
     // Stop the previous channel (if any) now that the replacement is live.
     if (oldId && oldId !== channelId) {
-      const old = channelsById.get(oldId);
       channelsById.delete(oldId);
       clearRenew(oldId);
       if (old) void stopChannel(minted.token, old.channelId, old.resourceId).catch(() => {});
     }
     logger.info({ accountId, channelId }, "drive-v2 push: watch started");
+    // A renewal carried the token forward — the new channel only pings on FUTURE changes, so drain
+    // anything that happened since (incl. pages the old channel hadn't finished) right away.
+    if (old) void pollAndBroadcast(ch);
   } finally {
     pendingWatch.delete(accountId);
   }
