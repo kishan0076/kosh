@@ -63,6 +63,19 @@ export function driveUrlFromState(s: DriveUrlState): string {
   return `${DRIVE_V2_BASE}/${VIEW_SLUG[s.view]}${qs ? `?${qs}` : ""}`;
 }
 
+/** The canonical URL for the store's CURRENT state (read live from the store). */
+function canonicalUrlFromStore(): string {
+  const s = useDriveV2.getState();
+  return driveUrlFromState({
+    view: s.view,
+    insightsOpen: s.insightsOpen,
+    activityOpen: s.activityOpen,
+    searchQuery: s.searchQuery,
+    spaceId: s.spaceId,
+    folderId: s.path.at(-1)?.id ?? null,
+  });
+}
+
 /** Apply the state a location implies to the store. Idempotent: only genuine diffs call a setter. */
 async function applyUrlToStore(pathname: string, search: string): Promise<void> {
   const s = useDriveV2.getState();
@@ -138,8 +151,17 @@ export function useDriveV2UrlSync(): void {
     applying.current = true;
     void applyUrlToStore(location.pathname, location.search).finally(() => {
       applying.current = false;
+      // Reconcile: the store can't always represent the applied URL (a `?folder=` link while a Shared
+      // Drive is active, or the bare `/drive-v2` path). Snap the URL to the store's canonical URL so the
+      // address bar never lies and Back always lands somewhere truthful. No loop: `lastApplied` makes the
+      // inbound effect skip this push, and the outbound effect sees `desiredUrl === current`.
+      const canonical = canonicalUrlFromStore();
+      if (canonical !== location.pathname + location.search) {
+        lastApplied.current = canonical;
+        navigate(canonical, { replace: true });
+      }
     });
-  }, [location.pathname, location.search]);
+  }, [location.pathname, location.search, navigate]);
 
   // store → URL. Suppressed while an inbound apply runs so the two directions never ping-pong.
   useEffect(() => {
