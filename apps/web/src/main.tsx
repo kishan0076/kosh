@@ -11,6 +11,7 @@ import { Skills } from "@/pages/Skills";
 import { SkillEditor } from "@/components/skills/SkillEditor";
 import { ItemPage } from "@/pages/ItemPage";
 import { PublishRepo } from "@/pages/PublishRepo";
+import { GithubV2 } from "@/pages/GithubV2";
 import { Drive } from "@/pages/Drive";
 import { DriveV2 } from "@/pages/DriveV2";
 import { Vault } from "@/pages/Vault";
@@ -42,6 +43,8 @@ createRoot(document.getElementById("root")!).render(
           <Route path="add" element={<Add />} />
           <Route path="items/:id" element={<ItemPage />} />
           <Route path="publish" element={<PublishRepo />} />
+          {/* Wildcard: the GitHub module owns its sub-routes (list + :owner/:repo detail). */}
+          <Route path="github/*" element={<GithubV2 />} />
           <Route path="drive" element={<Drive />} />
           {/* Wildcard: Drive V2 owns its sub-routes (my-drive / recent / starred / … / insights / activity). */}
           <Route path="drive-v2/*" element={<DriveV2 />} />

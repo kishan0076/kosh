@@ -3,6 +3,7 @@ import {
   Blocks,
   ChevronLeft,
   FolderOpen,
+  Github,
   HardDrive,
   HelpCircle,
   Home,
@@ -60,6 +61,7 @@ export function Sidebar({
     { to: "/library", label: "Library", icon: LibraryBig },
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },
     { to: "/prompts", label: "Prompts", icon: Quote, badge: promptCount },
+    { to: "/github", label: "GitHub", icon: Github },
     { to: "/drive", label: "Google Drive", icon: UploadCloud },
     { to: "/drive-v2", label: "Drive", icon: HardDrive },
   ];

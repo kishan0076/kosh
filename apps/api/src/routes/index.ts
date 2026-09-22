@@ -10,6 +10,7 @@ import { filesRouter } from "./files.js";
 import { uploadsRouter } from "./uploads.js";
 import { publishRouter } from "./publish.js";
 import { githubAuthRouter } from "./githubAuth.js";
+import { githubV2Router } from "./githubV2.js";
 import { vaultRouter } from "./vault.js";
 import { driveRouter } from "./drive.js";
 import { driveV2Router } from "./driveV2.js";
@@ -31,6 +32,7 @@ export function mountRoutes(api: Router): void {
   api.use(uploadsRouter);
   api.use(publishRouter);
   api.use(githubAuthRouter);
+  api.use(githubV2Router);
   api.use(vaultRouter);
   api.use(driveRouter);
   api.use(driveV2Router);
