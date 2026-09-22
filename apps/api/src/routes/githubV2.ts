@@ -10,6 +10,7 @@ import {
   commitFiles,
   createRepo,
   deleteRepo,
+  getFileContent,
   getReadmeMarkdown,
   getRepoDetail,
   getRepoTree,
@@ -142,6 +143,17 @@ githubV2Router.get(
     const token = await requireGithubToken(uid);
     const { owner, repo } = ownerRepo(req);
     res.json({ readme: await ghCall(getReadmeMarkdown(token, owner, repo)) });
+  }),
+);
+
+githubV2Router.get(
+  "/github/repos/:owner/:repo/content",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const token = await requireGithubToken(uid);
+    const { owner, repo } = ownerRepo(req);
+    const q = z.object({ path: z.string().min(1).max(400), branch: z.string().max(255).optional() }).parse(req.query);
+    res.json(await ghCall(getFileContent(token, owner, repo, q.path, q.branch)));
   }),
 );
 

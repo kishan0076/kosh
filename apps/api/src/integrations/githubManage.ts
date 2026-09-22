@@ -188,6 +188,24 @@ export async function getRepoDetail(token: string, owner: string, repo: string):
   return { ...toSummary(r), parent: r.parent?.full_name, network: r.network_count, subscribers: r.subscribers_count };
 }
 
+/** Read a single text file's content for the in-app editor. Missing file → an empty new file. */
+export async function getFileContent(token: string, owner: string, repo: string, path: string, branch?: string): Promise<{ content: string; sha: string | null; isNew: boolean }> {
+  const gh = githubClient(token);
+  try {
+    const res = await gh.rest.repos.getContent({ owner, repo, path, ...(branch ? { ref: branch } : {}) });
+    if (Array.isArray(res.data) || (res.data as { type?: string }).type !== "file") {
+      throw new Error("That path is a directory, not a file.");
+    }
+    const data = res.data as { content?: string; encoding?: string; sha?: string };
+    const buf = Buffer.from(data.content ?? "", (data.encoding as BufferEncoding) ?? "base64");
+    if (buf.includes(0)) throw new Error("That file is binary and can't be edited here.");
+    return { content: buf.toString("utf8"), sha: data.sha ?? null, isNew: false };
+  } catch (err) {
+    if ((err as { status?: number }).status === 404) return { content: "", sha: null, isNew: true };
+    throw err;
+  }
+}
+
 export async function getReadmeMarkdown(token: string, owner: string, repo: string): Promise<string | null> {
   try {
     const gh = githubClient(token);

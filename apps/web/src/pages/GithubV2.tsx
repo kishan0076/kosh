@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
+  Activity,
   Archive,
   ArrowLeft,
   ArrowUpDown,
   Book,
   Check,
+  CheckSquare,
   ChevronRight,
   CircleDot,
   Clock,
@@ -20,14 +22,17 @@ import {
   LayoutGrid,
   List as ListIcon,
   Lock,
+  Pencil,
   Play,
   Plug,
   Plus,
   RefreshCw,
   Search,
   Settings2,
+  Square,
   Star,
   Tag,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -37,15 +42,17 @@ import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { api, ApiError } from "@/data/api";
 import { githubV2Api, type BranchLite, type CommitLite, type IssueLite, type PullLite, type ReleaseLite, type RepoDetail, type RepoSummary, type WorkflowRunLite } from "@/data/githubV2Api";
-import { useGithubV2, visibleRepos, type RepoFilter } from "@/data/githubV2";
+import { useGithubV2, visibleRepos, ghToast, type RepoFilter } from "@/data/githubV2";
 import { GitHubMark } from "@/lib/icons";
 import { Button, Spinner } from "@/components/ui";
-import { Menu, MenuItem, MenuLabel } from "@/components/overlays";
+import { Menu, MenuItem, MenuLabel, Modal } from "@/components/overlays";
 import { Markdown } from "@/components/markdown";
 import { FadeSwap } from "@/components/motion";
 import { GithubNew } from "./GithubNew";
 import { GithubUpload } from "./GithubUpload";
 import { GithubSettings } from "./GithubSettings";
+import { GithubHealth } from "./GithubHealth";
+import { GithubEdit } from "./GithubEdit";
 
 /* ── module root: connect gate + nested routes ── */
 
@@ -81,8 +88,10 @@ export function GithubV2() {
     <Routes>
       <Route index element={<RepoList />} />
       <Route path="new" element={<GithubNew />} />
+      <Route path="health" element={<GithubHealth />} />
       <Route path="upload" element={<GithubUpload />} />
       <Route path=":owner/:repo/upload" element={<GithubUpload />} />
+      <Route path=":owner/:repo/edit" element={<GithubEdit />} />
       <Route path=":owner/:repo/settings" element={<GithubSettings />} />
       <Route path=":owner/:repo" element={<RepoDetail />} />
       <Route path=":owner/:repo/:tab" element={<RepoDetail />} />
@@ -155,12 +164,19 @@ function RepoList() {
   const prefs = useGithubV2((s) => s.prefs);
   const load = useGithubV2((s) => s.load);
   const navigate = useNavigate();
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulk, setBulk] = useState<BulkAction | null>(null);
 
   useEffect(() => {
     if (useGithubV2.getState().status === "idle") void load();
   }, [load]);
 
   const visible = useMemo(() => visibleRepos(repos, query, prefs), [repos, query, prefs]);
+  const selectedRepos = useMemo(() => visible.filter((r) => selected.has(r.id)), [visible, selected]);
+  const toggleSel = (id: number) => setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const exitSelect = () => { setSelectMode(false); setSelected(new Set()); };
+  const onCardClick = (r: RepoSummary) => (selectMode ? toggleSel(r.id) : navigate(`/github/${r.owner}/${r.name}`));
   const stats = useMemo(() => ({
     total: repos.length,
     private: repos.filter((r) => r.private).length,
@@ -180,6 +196,8 @@ function RepoList() {
         <Button variant="ghost" size="sm" onClick={() => void load(true)} disabled={status === "loading"} aria-label="Refresh">
           <RefreshCw size={15} className={cn(status === "loading" && "animate-spin")} />
         </Button>
+        <Button variant="ghost" size="sm" onClick={() => navigate("/github/health")}><Activity size={15} /> Health</Button>
+        <Button variant={selectMode ? "secondary" : "ghost"} size="sm" onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}><CheckSquare size={15} /> {selectMode ? "Done" : "Select"}</Button>
         <Button variant="outline" size="sm" onClick={() => navigate("/github/upload")}><Upload size={15} /> Upload folder</Button>
         <Button variant="primary" size="sm" onClick={() => navigate("/github/new")}><Plus size={15} /> New repository</Button>
       </header>
@@ -202,16 +220,121 @@ function RepoList() {
         </div>
       ) : prefs.layout === "grid" ? (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {visible.map((r) => <RepoCard key={r.id} repo={r} onOpen={() => navigate(`/github/${r.owner}/${r.name}`)} />)}
+          {visible.map((r) => <RepoCard key={r.id} repo={r} onOpen={() => onCardClick(r)} selectMode={selectMode} selected={selected.has(r.id)} />)}
         </div>
       ) : (
         <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-          {visible.map((r) => <RepoRow key={r.id} repo={r} onOpen={() => navigate(`/github/${r.owner}/${r.name}`)} />)}
+          {visible.map((r) => <RepoRow key={r.id} repo={r} onOpen={() => onCardClick(r)} selectMode={selectMode} selected={selected.has(r.id)} />)}
         </div>
       )}
 
       {truncated && <p className="text-center text-[12px] text-faint">Showing the first {repos.length} repositories. Refine your search to find others.</p>}
+
+      {selectMode && selectedRepos.length > 0 && <SelectionBar repos={selectedRepos} onAction={setBulk} onClear={() => setSelected(new Set())} />}
+      {bulk && <BulkModal action={bulk} repos={selectedRepos} onClose={() => setBulk(null)} onDone={() => { setBulk(null); exitSelect(); }} />}
     </div>
+  );
+}
+
+type BulkAction = "archive" | "unarchive" | "makePrivate" | "makePublic" | "delete";
+const BULK_META: Record<BulkAction, { label: string; icon: typeof Archive; verb: string; danger?: boolean }> = {
+  archive: { label: "Archive", icon: Archive, verb: "Archive" },
+  unarchive: { label: "Unarchive", icon: Archive, verb: "Unarchive" },
+  makePrivate: { label: "Make private", icon: Lock, verb: "Make private" },
+  makePublic: { label: "Make public", icon: Globe, verb: "Make public" },
+  delete: { label: "Delete", icon: Trash2, verb: "Delete", danger: true },
+};
+
+function SelectionBar({ repos, onAction, onClear }: { repos: RepoSummary[]; onAction: (a: BulkAction) => void; onClear: () => void }) {
+  const admin = repos.every((r) => r.canAdmin);
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
+      <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-full border border-border bg-elevated px-3 py-2 shadow-[var(--shadow-pop)]">
+        <span className="px-1 text-[13px] font-semibold">{repos.length} selected</span>
+        <span className="h-4 w-px bg-border" />
+        <Button variant="ghost" size="sm" onClick={() => onAction("archive")}><Archive size={14} /> Archive</Button>
+        <Button variant="ghost" size="sm" onClick={() => onAction("makePrivate")}><Lock size={14} /> Private</Button>
+        <Button variant="ghost" size="sm" onClick={() => onAction("makePublic")}><Globe size={14} /> Public</Button>
+        {admin && <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={() => onAction("delete")}><Trash2 size={14} /> Delete</Button>}
+        <span className="h-4 w-px bg-border" />
+        <button onClick={onClear} className="rounded-full p-1.5 text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Clear selection"><X size={15} /></button>
+      </div>
+    </div>
+  );
+}
+
+/** Run a bulk action across the selected repos with a small concurrency pool + partial-failure report. */
+function BulkModal({ action, repos, onClose, onDone }: { action: BulkAction; repos: RepoSummary[]; onClose: () => void; onDone: () => void }) {
+  const meta = BULK_META[action];
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [results, setResults] = useState<{ repo: RepoSummary; ok: boolean; error?: string }[] | null>(null);
+  const needsType = action === "delete";
+  const ready = !needsType || confirm.trim().toLowerCase() === "delete";
+
+  async function run() {
+    if (!ready || busy) return;
+    setBusy(true);
+    const out: { repo: RepoSummary; ok: boolean; error?: string }[] = [];
+    let i = 0;
+    const worker = async () => {
+      while (i < repos.length) {
+        const r = repos[i++]!;
+        try {
+          if (action === "delete") { await githubV2Api.deleteRepo(r.owner, r.name, r.fullName); useGithubV2.getState().removeRepo(r.fullName); }
+          else {
+            const patch = action === "archive" ? { archived: true } : action === "unarchive" ? { archived: false } : action === "makePrivate" ? { private: true } : { private: false };
+            const { repo: d } = await githubV2Api.updateRepo(r.owner, r.name, patch);
+            useGithubV2.getState().upsertRepo(d);
+          }
+          out.push({ repo: r, ok: true });
+        } catch (err) {
+          out.push({ repo: r, ok: false, error: err instanceof ApiError ? err.message : "failed" });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(4, repos.length) }, worker));
+    setBusy(false);
+    const failed = out.filter((o) => !o.ok);
+    ghToast(`${meta.verb}: ${out.length - failed.length} succeeded${failed.length ? `, ${failed.length} failed` : ""}`, failed.length ? "warn" : "ok");
+    if (failed.length === 0) onDone();
+    else setResults(out);
+  }
+
+  return (
+    <Modal open onClose={busy ? () => {} : onClose} className="w-full max-w-md" labelledBy="bulk-title">
+      <div className="p-5">
+        <h2 id="bulk-title" className={cn("flex items-center gap-2 text-[16px] font-semibold", meta.danger && "text-danger")}><meta.icon size={17} /> {meta.verb} {repos.length} {repos.length === 1 ? "repository" : "repositories"}</h2>
+        {results ? (
+          <div className="mt-3 max-h-64 space-y-1 overflow-y-auto">
+            {results.map((o) => (
+              <div key={o.repo.id} className="flex items-center gap-2 text-[12.5px]">
+                <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", o.ok ? "bg-ok" : "bg-danger")} />
+                <span className="min-w-0 flex-1 truncate font-mono">{o.repo.fullName}</span>
+                <span className="shrink-0 text-faint">{o.ok ? "done" : o.error}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            <p className="mt-2 text-[13px] text-muted">This applies to {repos.length} selected {repos.length === 1 ? "repository" : "repositories"}{meta.danger ? " and cannot be undone" : ""}.</p>
+            <div className="mt-3 max-h-40 space-y-0.5 overflow-y-auto rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2">
+              {repos.map((r) => <div key={r.id} className="truncate font-mono text-[12px] text-muted">{r.fullName}</div>)}
+            </div>
+            {needsType && (
+              <div className="mt-3">
+                <label htmlFor="bulk-confirm" className="mb-1 block text-[12px] font-medium text-muted">Type <span className="font-mono text-foreground">delete</span> to confirm</label>
+                <input id="bulk-confirm" autoFocus value={confirm} onChange={(e) => setConfirm(e.target.value)} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none focus:border-danger focus:ring-focus" />
+              </div>
+            )}
+          </>
+        )}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={busy}>{results ? "Close" : "Cancel"}</Button>
+          {!results && <Button variant={meta.danger ? "danger" : "primary"} onClick={run} disabled={!ready || busy}>{busy ? <Spinner size={15} /> : <meta.icon size={15} />} {meta.verb}</Button>}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -272,10 +395,11 @@ function RepoMeta({ repo }: { repo: RepoSummary }) {
   );
 }
 
-function RepoCard({ repo, onOpen }: { repo: RepoSummary; onOpen: () => void }) {
+function RepoCard({ repo, onOpen, selectMode, selected }: { repo: RepoSummary; onOpen: () => void; selectMode?: boolean; selected?: boolean }) {
   return (
-    <button onClick={onOpen} className="card-hover flex h-full flex-col gap-2 rounded-[var(--radius-card)] border border-border bg-surface p-4 text-left">
+    <button onClick={onOpen} className={cn("card-hover flex h-full flex-col gap-2 rounded-[var(--radius-card)] border bg-surface p-4 text-left", selected ? "border-primary ring-2 ring-primary/40" : "border-border")}>
       <div className="flex items-center gap-2">
+        {selectMode && (selected ? <CheckSquare size={16} className="shrink-0 text-primary" /> : <Square size={16} className="shrink-0 text-faint" />)}
         <GitHubMark size={16} className="shrink-0 text-muted" />
         <span className="min-w-0 flex-1 truncate text-[14px] font-semibold text-foreground">{repo.name}</span>
         {repo.archived && <Archive size={13} className="shrink-0 text-warn" />}
@@ -287,9 +411,10 @@ function RepoCard({ repo, onOpen }: { repo: RepoSummary; onOpen: () => void }) {
   );
 }
 
-function RepoRow({ repo, onOpen }: { repo: RepoSummary; onOpen: () => void }) {
+function RepoRow({ repo, onOpen, selectMode, selected }: { repo: RepoSummary; onOpen: () => void; selectMode?: boolean; selected?: boolean }) {
   return (
-    <button onClick={onOpen} className="flex w-full items-center gap-3 border-b border-border px-4 py-3 text-left last:border-0 hover:bg-surface-2">
+    <button onClick={onOpen} className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-3 text-left last:border-0 hover:bg-surface-2", selected && "bg-primary-soft/40")}>
+      {selectMode && (selected ? <CheckSquare size={16} className="shrink-0 text-primary" /> : <Square size={16} className="shrink-0 text-faint" />)}
       <GitHubMark size={16} className="shrink-0 text-muted" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -391,6 +516,7 @@ function RepoDetail() {
 }
 
 function OverviewTab({ repo }: { repo: RepoDetail }) {
+  const navigate = useNavigate();
   const [readme, setReadme] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
@@ -403,9 +529,12 @@ function OverviewTab({ repo }: { repo: RepoDetail }) {
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-start">
       <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-[13px] font-semibold"><Book size={15} className="text-muted" /> README</div>
+        <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2 text-[13px] font-semibold">
+          <span className="flex items-center gap-2"><Book size={15} className="text-muted" /> README</span>
+          {repo.canPush && <Button variant="ghost" size="sm" onClick={() => navigate(`/github/${repo.owner}/${repo.name}/edit?path=README.md`)}><Pencil size={13} /> {readme ? "Edit" : "Add"}</Button>}
+        </div>
         <div className="px-5 py-4">
-          {loading ? <div className="grid h-24 place-items-center"><Spinner size={18} className="text-primary" /></div> : readme ? <Markdown>{readme}</Markdown> : <p className="text-[13px] text-muted">This repository has no README.</p>}
+          {loading ? <div className="grid h-24 place-items-center"><Spinner size={18} className="text-primary" /></div> : readme ? <Markdown>{readme}</Markdown> : <p className="text-[13px] text-muted">This repository has no README. <button onClick={() => navigate(`/github/${repo.owner}/${repo.name}/edit?path=README.md`)} className="font-medium text-primary hover:underline">Add one</button>.</p>}
         </div>
       </section>
       <aside className="space-y-3">

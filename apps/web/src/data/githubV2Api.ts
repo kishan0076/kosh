@@ -150,6 +150,8 @@ export const githubV2Api = {
   },
   getRepo: (owner: string, repo: string) => greq<{ repo: RepoDetail }>(`/github/repos/${enc(owner)}/${enc(repo)}`),
   getReadme: (owner: string, repo: string) => greq<{ readme: string | null }>(`/github/repos/${enc(owner)}/${enc(repo)}/readme`),
+  getContent: (owner: string, repo: string, path: string, branch?: string) =>
+    greq<{ content: string; sha: string | null; isNew: boolean }>(`/github/repos/${enc(owner)}/${enc(repo)}/content?path=${enc(path)}${branch ? `&branch=${enc(branch)}` : ""}`),
   branches: (owner: string, repo: string) => greq<{ branches: BranchLite[] }>(`/github/repos/${enc(owner)}/${enc(repo)}/branches`),
   commits: (owner: string, repo: string, branch?: string) => greq<{ commits: CommitLite[] }>(`/github/repos/${enc(owner)}/${enc(repo)}/commits${branch ? `?branch=${enc(branch)}` : ""}`),
   releases: (owner: string, repo: string) => greq<{ releases: ReleaseLite[] }>(`/github/repos/${enc(owner)}/${enc(repo)}/releases`),

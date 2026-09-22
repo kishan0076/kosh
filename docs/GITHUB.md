@@ -8,9 +8,27 @@ Kosh has three GitHub surfaces that all use the same OAuth App:
 3. **The GitHub module** (`/github`) — a full repository manager: list, create, edit,
    delete, push, and browse commits / branches / releases / issues / PRs / Actions.
 
-There's also a **Publish** page (`/publish`) for turning a local project folder into a new
-repo in one commit, and a **local-folder scan** (Chromium only) that checks a folder on your
-computer for a `.git` repo and a `.gitignore`.
+The module owns its own routed pages (no more cramped pop-ups):
+
+- **New repository** (`/github/new`) — owner/organization selector, live name-availability,
+  description, visibility, README/`.gitignore`/license templates, homepage, topics, and an
+  optional **Start from a folder** seed that pushes a local project as the first commit
+  (this replaces the old `/publish` page, which now redirects here).
+- **Upload a folder** (`/github/upload`, or `/github/:owner/:repo/upload` for a pre-selected
+  repo) — drag-drop or pick a folder, include/exclude files, a dry-run **Added / Overwrites /
+  Unchanged** diff, an existing-or-new **target branch**, a destination subpath, a secret gate,
+  and an optional **open a pull request** instead of committing directly.
+- **Repository settings** (`/github/:owner/:repo/settings`) — rename, description, homepage,
+  visibility, default branch, topics, archive, and an inline Danger Zone (type-to-confirm delete).
+- **Edit a file** (`/github/:owner/:repo/edit?path=README.md`) — edit any text file with a live
+  sanitized Markdown preview, then commit or open a PR.
+- **Health dashboard** (`/github/health`) — scores every repo for missing description / topics /
+  license, staleness and size, each finding one click from the page that fixes it.
+- The repo list supports **multi-select bulk actions** (archive, visibility, delete) with a
+  partial-failure report, and the repo-detail **tabs are deep-linked** (`/github/:owner/:repo/:tab`).
+
+There's also a **local-folder scan** (Chromium only) that checks a folder on your computer for a
+`.git` repo and a `.gitignore`, offered on the New repository page's "Start from a folder" step.
 
 ---
 
@@ -97,12 +115,12 @@ those features). Fine-grained tokens work too — they need *Contents: write*,
 
 ## 6. Local-folder scan (Chromium only)
 
-The Publish page can scan a folder **on your computer** (via the File System Access API) to
-check for a `.git` repo and a `.gitignore`. A missing `.gitignore` can be written directly to
-the folder, tailored to the detected stacks. A browser can't run `git init`, so a missing
-`.git` is surfaced with a copyable command and a nudge to publish. This works in Chrome / Edge
-and other Chromium browsers; Firefox and Safari show a fallback note and can still publish via
-the folder picker.
+The New repository page's "Start from a folder" step can scan a folder **on your computer** (via
+the File System Access API) to check for a `.git` repo and a `.gitignore`. A missing `.gitignore`
+can be written directly to the folder, tailored to the detected stacks. A browser can't run
+`git init`, so a missing `.git` is surfaced with a copyable command. This works in Chrome / Edge
+and other Chromium browsers; Firefox and Safari show a fallback note and can still upload via the
+folder picker.
 
 ## 7. Sandbox caveat
 
