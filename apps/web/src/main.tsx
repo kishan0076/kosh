@@ -43,7 +43,8 @@ createRoot(document.getElementById("root")!).render(
           <Route path="items/:id" element={<ItemPage />} />
           <Route path="publish" element={<PublishRepo />} />
           <Route path="drive" element={<Drive />} />
-          <Route path="drive-v2" element={<DriveV2 />} />
+          {/* Wildcard: Drive V2 owns its sub-routes (my-drive / recent / starred / … / insights / activity). */}
+          <Route path="drive-v2/*" element={<DriveV2 />} />
           <Route path="vault" element={<Vault />} />
           <Route path="inbox" element={<Inbox />} />
           <Route path="library" element={<Library />} />

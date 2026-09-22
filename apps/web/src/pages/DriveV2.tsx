@@ -52,6 +52,8 @@ import { RevisionsModal } from "@/components/drive-v2/RevisionsModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
+import { drivePaneKey, useDriveV2UrlSync } from "@/data/driveV2Url";
+import { FadeSwap } from "@/components/motion";
 import { ago } from "@/lib/time";
 
 const SAVED_KEY = "kosh.driveV2.savedSearches";
@@ -131,6 +133,10 @@ function Shell() {
   const store = useDriveV2;
   const currentFolderId = useDriveV2((s) => s.path.at(-1)?.id ?? s.spaceId ?? "root");
 
+  // Deep-linkable routing: mirror view/folder/overlay state to the URL and apply it back on Back/refresh.
+  useDriveV2UrlSync();
+  const paneKey = drivePaneKey({ view, insightsOpen, activityOpen });
+
   // Live two-way sync: poll changes.list while the module is open; resume promptly on refocus.
   useEffect(() => {
     const start = store.getState().startSync;
@@ -206,7 +212,7 @@ function Shell() {
       <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => { void store.getState().uploadFiles(Array.from(e.target.files ?? [])); if (fileInputRef.current) fileInputRef.current.value = ""; }} />
       <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
         <DriveNav />
-        <div className="min-w-0">
+        <FadeSwap k={paneKey} className="min-w-0">
           {activityOpen ? (
             <ActivityPanel onClose={() => store.getState().setActivity(false)} />
           ) : insightsOpen ? (
@@ -238,7 +244,7 @@ function Shell() {
             )}
           </div>
           )}
-        </div>
+        </FadeSwap>
       </div>
 
       {/* Details panel — a fixed right drawer (control-center feel). */}
