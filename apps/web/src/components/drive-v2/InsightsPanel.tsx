@@ -127,6 +127,7 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
     setStale((s) => s.filter((f) => !done.has(f.id)));
     setBusy((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n; });
     useDriveV2.setState({ bulkOp: null });
+    useDriveV2.getState().invalidateViews(); // so the source folders + Trash refetch, not show stale copies
     void loadQuota();
     toast({ message: `Moved ${doneIds.length} item${doneIds.length === 1 ? "" : "s"} to trash`, tone: doneIds.length ? "ok" : "warn" });
   }

@@ -163,6 +163,8 @@ interface DriveV2State {
   copyFolder: (id: string) => Promise<void>;
   updateMeta: (id: string, patch: { description?: string; folderColorRgb?: string }) => Promise<void>;
   emptyTrash: () => Promise<void>;
+  /** Drop cached folder views so the next navigation refetches (used after out-of-band mutations). */
+  invalidateViews: () => void;
   uploadFiles: (files: File[]) => Promise<void>;
   downloadRevision: (fileId: string, revId: string, filename: string) => Promise<void>;
 }
@@ -559,7 +561,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     dialog: null,
     uploads: [],
     insightsOpen: false,
-    setInsights: (v) => set(v ? { insightsOpen: true, activityOpen: false } : { insightsOpen: false }),
+    setInsights: (v) => {
+      const closing = !v && get().insightsOpen;
+      set(v ? { insightsOpen: true, activityOpen: false } : { insightsOpen: false });
+      // Trashing/moving happens inside the panel, so refetch the underlying view on close to stay live.
+      if (closing) void load(true);
+    },
 
     spaces: [],
     spaceId: null,
@@ -567,7 +574,11 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     sync: { status: "off", lastAt: null, applied: 0, via: null },
     activity: [],
     activityOpen: false,
-    setActivity: (v) => set(v ? { activityOpen: true, insightsOpen: false } : { activityOpen: false }),
+    setActivity: (v) => {
+      const closing = !v && get().activityOpen;
+      set(v ? { activityOpen: true, insightsOpen: false } : { activityOpen: false });
+      if (closing) void load(true);
+    },
     clearActivity: () => set({ activity: [] }),
 
     init: async () => {
@@ -620,12 +631,18 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     reconnectUrl: () => driveApi.connectUrl("drive-v2"),
 
     setView: (v) => {
+      const fromOverlay = get().insightsOpen || get().activityOpen;
       set({ insightsOpen: false, activityOpen: false });
-      if (v === get().view && v !== "search") return;
+      const sameView = v === get().view && v !== "search";
+      // Time-sensitive views (recent/trash/starred/shared/search) drift as items are mutated, and an
+      // overlay (Storage/Activity) may have trashed/moved things — in both cases refetch even when the
+      // view didn't change, so re-opening Trash after trashing shows the new items without a hard refresh.
+      const timeSensitive = v !== "myDrive";
+      if (sameView && !fromOverlay && !timeSensitive) return;
       // path is preserved across views so returning to My Drive restores the last folder.
       set({ view: v, selection: new Set(), detailsId: null, detailsNode: null });
       if (v !== "search") set({ searchQuery: "" });
-      void load();
+      void load(fromOverlay || timeSensitive);
     },
 
     openFolder: (node) => {
@@ -982,6 +999,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         set({ bulkOp: null });
       }
     },
+
+    invalidateViews: () => invalidateFolderViews(),
 
     uploadFiles: async (files) => {
       const accountId = get().accountId;
