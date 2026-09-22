@@ -272,7 +272,7 @@ export function GithubUpload() {
   }));
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-5">
+    <div className="w-full space-y-5">
       <button onClick={() => navigate(deepLinked ? `/github/${params.owner}/${params.repo}` : "/github")} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground">
         <ArrowLeft size={15} /> {deepLinked ? "Back to repository" : "All repositories"}
       </button>

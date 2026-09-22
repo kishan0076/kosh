@@ -118,7 +118,7 @@ export function GithubSettings() {
   const branchOptions = (branches.length ? branches.map((b) => b.name) : [defaultBranch].filter(Boolean)).map((n) => ({ value: n, label: <span className="font-mono">{n}</span> }));
 
   return (
-    <div className="mx-auto w-full max-w-3xl space-y-5">
+    <div className="w-full space-y-5">
       <button onClick={() => navigate(`/github/${owner}/${repo}`)} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground"><ArrowLeft size={15} /> Back to repository</button>
 
       <header className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">

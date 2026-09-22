@@ -79,7 +79,7 @@ export function GithubHealth() {
   if (status === "loading" && repos.length === 0) return <div className="grid min-h-[40vh] place-items-center"><Spinner size={24} className="text-primary" /></div>;
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-5">
+    <div className="w-full space-y-5">
       <button onClick={() => navigate("/github")} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground"><ArrowLeft size={15} /> All repositories</button>
 
       <header className="flex flex-wrap items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">

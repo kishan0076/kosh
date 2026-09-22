@@ -109,7 +109,7 @@ export function GithubEdit() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-4">
+    <div className="w-full space-y-4">
       <button onClick={() => navigate(`/github/${owner}/${repo}`)} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground"><ArrowLeft size={15} /> Back to repository</button>
 
       <header className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
