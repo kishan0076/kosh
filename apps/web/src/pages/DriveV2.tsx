@@ -49,6 +49,8 @@ import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
 import { drivePaneKey, useDriveV2UrlSync } from "@/data/driveV2Url";
 import { FadeSwap } from "@/components/motion";
+import { AnimatePresence, motion } from "motion/react";
+import { DUR, EASE } from "@/lib/motion";
 import { ago } from "@/lib/time";
 
 const SAVED_KEY = "kosh.driveV2.savedSearches";
@@ -259,25 +261,45 @@ function Shell() {
         </FadeSwap>
       </div>
 
-      {/* Details panel — a fixed right drawer (control-center feel). */}
-      {detailsId && (
-        <aside className="fixed inset-y-0 right-0 z-40 w-[86vw] max-w-[340px] border-l border-border bg-surface shadow-[var(--shadow-pop)]">
-          <DriveDetails
-            node={detailsNode}
-            count={selection.size}
-            totalBytes={[...selection].reduce((a, id) => a + (nodes.find((n) => n.id === id)?.size ?? 0), 0)}
-            loading={detailsLoading}
-            onClose={() => void store.getState().loadDetails(null)}
-            onRename={(n) => setRenamingId(n.id)}
-            onStar={(n) => void store.getState().toggleStar(n.id)}
-            onMove={(n) => store.getState().openDialog({ kind: "move", ids: [n.id] })}
-            onTrash={(n) => store.getState().openDialog({ kind: "delete", ids: [n.id], permanent: view === "trash" })}
-            onPreview={(n) => store.getState().setPreview(n)}
-            onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
-            onUpdateMeta={(n, patch) => void store.getState().updateMeta(n.id, patch)}
-          />
-        </aside>
-      )}
+      {/* Inspector — an animated right drawer with a light scrim. */}
+      <AnimatePresence>
+        {detailsId && (
+          <>
+            <motion.div
+              key="inspector-scrim"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: DUR.base }}
+              onClick={() => void store.getState().loadDetails(null)}
+              className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]"
+            />
+            <motion.aside
+              key="inspector-panel"
+              initial={{ x: "100%" }}
+              animate={{ x: 0 }}
+              exit={{ x: "100%" }}
+              transition={{ duration: DUR.slow, ease: EASE.emphasized }}
+              className="fixed inset-y-0 right-0 z-40 flex w-[88vw] max-w-[380px] flex-col border-l border-border bg-surface shadow-[var(--shadow-pop)]"
+            >
+              <DriveDetails
+                node={detailsNode}
+                count={selection.size}
+                totalBytes={[...selection].reduce((a, id) => a + (nodes.find((n) => n.id === id)?.size ?? 0), 0)}
+                loading={detailsLoading}
+                onClose={() => void store.getState().loadDetails(null)}
+                onRename={(n) => setRenamingId(n.id)}
+                onStar={(n) => void store.getState().toggleStar(n.id)}
+                onMove={(n) => store.getState().openDialog({ kind: "move", ids: [n.id] })}
+                onTrash={(n) => store.getState().openDialog({ kind: "delete", ids: [n.id], permanent: view === "trash" })}
+                onPreview={(n) => store.getState().setPreview(n)}
+                onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
+                onUpdateMeta={(n, patch) => void store.getState().updateMeta(n.id, patch)}
+              />
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
 
       {uploads.length > 0 && <UploadTray />}
 
