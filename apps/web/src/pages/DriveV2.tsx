@@ -334,7 +334,7 @@ function DriveNav() {
           width={240}
           trigger={({ toggle, ref }) => (
             <button ref={ref} onClick={toggle} className="flex w-full items-center gap-2 rounded-[var(--radius-control)] p-1.5 text-left hover:bg-surface-2">
-              {account?.picture ? <img src={account.picture} alt="" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={15} /></span>}
+              {account?.picture ? <img src={account.picture} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={15} /></span>}
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[12.5px] font-semibold">{account?.name ?? "Account"}</span>
                 <span className="block truncate text-[11px] text-muted">{account?.email}</span>

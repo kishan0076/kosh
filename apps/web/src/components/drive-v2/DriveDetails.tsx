@@ -191,7 +191,7 @@ export function PreviewOverlay({ node, onClose }: { node: DriveNode; onClose: ()
       </div>
       <div className="flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6" onClick={(e) => e.stopPropagation()}>
         {isImage && imgSrc ? (
-          <img src={imgSrc} alt={node.name} className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" />
+          <img src={imgSrc} alt={node.name} referrerPolicy="no-referrer" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" />
         ) : frame ? (
           <div className="relative h-full w-full max-w-5xl">
             {loading && <div className="absolute inset-0 grid place-items-center text-white/70"><span className="animate-pulse text-[13px]">Loading preview…</span></div>}

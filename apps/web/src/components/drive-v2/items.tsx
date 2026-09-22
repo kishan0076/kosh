@@ -81,7 +81,7 @@ export function NodeIcon({ node, size = 20, thumb = false }: { node: DriveNode; 
   useEffect(() => { setBroken(false); }, [node.thumbnailLink]);
   const canThumb = thumb && !node.isFolder && !!node.thumbnailLink && !broken;
   if (canThumb) {
-    return <img src={node.thumbnailLink} alt="" loading="lazy" onError={() => setBroken(true)} className="h-full w-full object-cover" />;
+    return <img src={node.thumbnailLink} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="h-full w-full object-cover" />;
   }
   return <Icon size={size} className={cn("shrink-0", KIND_TINT[kind])} />;
 }

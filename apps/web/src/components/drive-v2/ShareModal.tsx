@@ -154,7 +154,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
                 const assignable = ASSIGNABLE.some((r) => r.role === p.role);
                 return (
                 <div key={p.id} className="flex items-center gap-2.5 rounded-[var(--radius-control)] px-1.5 py-1.5 hover:bg-surface-2">
-                  {p.photoLink ? <img src={p.photoLink} alt="" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[12px] font-semibold text-primary">{personName(p).slice(0, 1).toUpperCase()}</span>}
+                  {p.photoLink ? <img src={p.photoLink} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[12px] font-semibold text-primary">{personName(p).slice(0, 1).toUpperCase()}</span>}
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[13px] font-medium">{personName(p)}{p.pendingOwner ? " (pending)" : ""}</div>
                     {p.emailAddress && p.displayName && <div className="truncate text-[11.5px] text-muted">{p.emailAddress}</div>}
