@@ -614,7 +614,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       set((s) => ({ sync: { ...s.sync, status: "off", via: null } }));
     },
 
-    reconnectUrl: () => driveApi.connectUrl(),
+    reconnectUrl: () => driveApi.connectUrl("drive-v2"),
 
     setView: (v) => {
       set({ insightsOpen: false, activityOpen: false });

@@ -81,13 +81,19 @@ driveRouter.get(
   }),
 );
 
-/** Start the consent flow — redirects the browser to Google. State binds the flow to the user. */
+// Which app pages may be returned to after OAuth (prevents an open-redirect via a crafted `from`).
+const RETURN_PATHS = new Set(["drive", "drive-v2"]);
+const returnPathOf = (v: unknown): string => (typeof v === "string" && RETURN_PATHS.has(v) ? v : "drive");
+
+/** Start the consent flow — redirects the browser to Google. State binds the flow to the user and
+ *  records which module (V1 `drive` / V2 `drive-v2`) it began in, so we return there afterward. */
 driveRouter.get(
   "/drive/auth",
   ah(async (req, res) => {
     const uid = requireUser(req);
     requireConfigured();
-    const state = await signState(uid, OAUTH_PURPOSE);
+    const from = returnPathOf(req.query.from);
+    const state = await signState(uid, OAUTH_PURPOSE, from);
     res.redirect(driveAuthUrl(state));
   }),
 );
@@ -96,15 +102,17 @@ driveRouter.get(
 driveRouter.get(
   "/drive/auth/callback",
   ah(async (req: Request, res) => {
-    const back = (params: Record<string, string>) => res.redirect(`${config.appUrl}/drive?${new URLSearchParams(params)}`);
+    let returnPath = "drive"; // resolved from the signed state once verified; errors fall back to V1
+    const back = (params: Record<string, string>) => res.redirect(`${config.appUrl}/${returnPath}?${new URLSearchParams(params)}`);
     try {
       const { code, state, error } = req.query as { code?: string; state?: string; error?: string };
       if (error) return back({ error });
       if (!code || !state) return back({ error: "missing_code" });
 
       const uid = req.userId ?? null; // session cookie is sent on this top-level GET (sameSite=lax)
-      const stateUid = await verifyState(state, OAUTH_PURPOSE);
-      if (!uid || !stateUid || stateUid !== uid) return back({ error: "state_mismatch" });
+      const verified = await verifyState(state, OAUTH_PURPOSE);
+      if (!uid || !verified || verified.uid !== uid) return back({ error: "state_mismatch" });
+      returnPath = returnPathOf(verified.from); // send the user back to the module they started in
 
       const tokens = await exchangeCode(code);
       const info = await getUserInfo(tokens.access_token);
@@ -139,7 +147,7 @@ driveRouter.get(
       }
       return back({ connected: info.email });
     } catch {
-      return res.redirect(`${config.appUrl}/drive?error=connect_failed`);
+      return back({ error: "connect_failed" });
     }
   }),
 );

@@ -26,20 +26,22 @@ export async function verifySession(token: string): Promise<string | null> {
 
 export const SESSION_COOKIE = "kosh_session";
 
-/** Sign a short-lived, purpose-scoped token for an OAuth `state` (CSRF binding to the user). */
-export async function signState(userId: string, purpose: string): Promise<string> {
-  return new SignJWT({ uid: userId, purpose })
+/** Sign a short-lived, purpose-scoped token for an OAuth `state` (CSRF binding to the user).
+ *  `from` optionally records where the flow began, so the callback can return there. */
+export async function signState(userId: string, purpose: string, from?: string): Promise<string> {
+  return new SignJWT({ uid: userId, purpose, ...(from ? { from } : {}) })
     .setProtectedHeader({ alg: ALG })
     .setIssuedAt()
     .setExpirationTime("10m")
     .sign(secret);
 }
 
-/** Verify an OAuth `state` token; returns the userId only if the purpose matches. */
-export async function verifyState(token: string, purpose: string): Promise<string | null> {
+/** Verify an OAuth `state` token; returns the bound userId (+ optional `from`) only if the purpose matches. */
+export async function verifyState(token: string, purpose: string): Promise<{ uid: string; from?: string } | null> {
   try {
     const { payload } = await jwtVerify(token, secret, { algorithms: [ALG] });
-    return payload.purpose === purpose && typeof payload.uid === "string" ? payload.uid : null;
+    if (payload.purpose !== purpose || typeof payload.uid !== "string") return null;
+    return { uid: payload.uid, from: typeof payload.from === "string" ? payload.from : undefined };
   } catch {
     return null;
   }

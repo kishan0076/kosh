@@ -103,7 +103,7 @@ function ScopeGate({ reason }: { reason: "not-configured" | "no-account" | "reco
       icon={Plug}
       title={copy.title}
       body={copy.body}
-      action={copy.cta ? <a href={driveApi.connectUrl()}><Button variant="primary"><Plug size={15} /> {copy.cta}</Button></a> : undefined}
+      action={copy.cta ? <a href={driveApi.connectUrl("drive-v2")}><Button variant="primary"><Plug size={15} /> {copy.cta}</Button></a> : undefined}
     />
   );
 }
@@ -350,7 +350,7 @@ function DriveNav() {
             </MenuItem>
           ))}
           <MenuSeparator />
-          <MenuItem icon={Plus} onClick={() => { window.location.href = driveApi.connectUrl(); }}>Connect account</MenuItem>
+          <MenuItem icon={Plus} onClick={() => { window.location.href = driveApi.connectUrl("drive-v2"); }}>Connect account</MenuItem>
         </Menu>
         <div className="mt-1.5"><SpacePicker /></div>
       </div>
