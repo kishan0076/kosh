@@ -141,8 +141,10 @@ export async function getReadmeMarkdown(token: string, owner: string, repo: stri
     const gh = githubClient(token);
     const rd = await gh.rest.repos.getReadme({ owner, repo });
     return Buffer.from(rd.data.content, "base64").toString("utf8");
-  } catch {
-    return null; // no README is not an error
+  } catch (err) {
+    // "No README" is a 404. Anything else (auth, rate limit) must surface, not masquerade as empty.
+    if ((err as { status?: number }).status === 404) return null;
+    throw err;
   }
 }
 
@@ -170,7 +172,14 @@ export interface CommitLite {
 }
 export async function listCommits(token: string, owner: string, repo: string, opts: { perPage?: number; sha?: string } = {}): Promise<CommitLite[]> {
   const gh = githubClient(token);
-  const res = await gh.rest.repos.listCommits({ owner, repo, per_page: Math.min(opts.perPage ?? 30, 100), ...(opts.sha ? { sha: opts.sha } : {}) });
+  let res;
+  try {
+    res = await gh.rest.repos.listCommits({ owner, repo, per_page: Math.min(opts.perPage ?? 30, 100), ...(opts.sha ? { sha: opts.sha } : {}) });
+  } catch (err) {
+    // A brand-new/empty repo returns 409 "Git Repository is empty" — that's just no commits yet.
+    if ((err as { status?: number }).status === 409) return [];
+    throw err;
+  }
   return res.data.map((c) => ({
     sha: c.sha,
     message: c.commit.message,
@@ -362,19 +371,41 @@ export async function commitFiles(
   const gh = githubClient(token);
 
   const info = await gh.rest.repos.get({ owner, repo });
-  const branch = opts.branch || info.data.default_branch || "main";
+  const defaultBranch = info.data.default_branch || "main";
+  const branch = opts.branch || defaultBranch;
 
-  // Current branch head + base tree (absent for an empty repo).
+  // Resolve the commit this push builds on:
+  //  - existing branch → its head (base_tree preserves the branch's existing files)
+  //  - a NEW branch on a repo that has commits → fork from the default branch (never orphan it)
+  //  - empty repo (the default branch has no commits yet) → a root commit with no parent
+  const isNotFound = (e: unknown) => (e as { status?: number }).status === 404;
+  const headOf = async (ref: string): Promise<{ sha: string; tree: string }> => {
+    const r = await gh.rest.git.getRef({ owner, repo, ref });
+    const c = await gh.rest.git.getCommit({ owner, repo, commit_sha: r.data.object.sha });
+    return { sha: r.data.object.sha, tree: c.data.tree.sha };
+  };
+
   let parentSha: string | undefined;
   let baseTree: string | undefined;
+  let branchExists = false;
   try {
-    const ref = await gh.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
-    parentSha = ref.data.object.sha;
-    const parentCommit = await gh.rest.git.getCommit({ owner, repo, commit_sha: parentSha });
-    baseTree = parentCommit.data.tree.sha;
-  } catch {
-    parentSha = undefined; // empty repo / new branch
-    baseTree = undefined;
+    const head = await headOf(`heads/${branch}`);
+    parentSha = head.sha;
+    baseTree = head.tree;
+    branchExists = true;
+  } catch (err) {
+    if (!isNotFound(err)) throw err; // never mask a real failure (auth/5xx) as "empty repo"
+    if (branch !== defaultBranch) {
+      // A brand-new branch: base it on the default branch so existing files aren't dropped.
+      try {
+        const head = await headOf(`heads/${defaultBranch}`);
+        parentSha = head.sha;
+        baseTree = head.tree;
+      } catch (e2) {
+        if (!isNotFound(e2)) throw e2; // default missing only when the repo is genuinely empty
+      }
+    }
+    // else: empty repo (default branch has no commits) → root commit, no parent / base tree
   }
 
   const tree: { path: string; mode: "100644"; type: "blob"; sha?: string; content?: string }[] = [];
@@ -397,7 +428,7 @@ export async function commitFiles(
     parents: parentSha ? [parentSha] : [],
   });
 
-  if (parentSha) {
+  if (branchExists) {
     await gh.rest.git.updateRef({ owner, repo, ref: `heads/${branch}`, sha: commit.data.sha });
   } else {
     await gh.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: commit.data.sha });

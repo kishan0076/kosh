@@ -72,6 +72,9 @@ export function PushFilesModal({ repo, onClose }: { repo: RepoDetail; onClose: (
       onClose();
     } catch (err) {
       if (err instanceof ApiError && err.code === "SECRETS_FOUND") {
+        // Surface the SERVER's findings so the confirm checkbox appears even if the client scan was clean.
+        const serverFindings = (err.details as { findings?: { path: string; line: number; text: string }[] } | undefined)?.findings;
+        if (serverFindings?.length) setFindings(serverFindings);
         setError("Possible secrets were found. Review the warnings and tick the box to push anyway.");
         setConfirmSecrets(false);
       } else {

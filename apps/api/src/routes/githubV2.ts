@@ -46,11 +46,13 @@ function mapGithubError(err: unknown): never {
   const status = (err as { status?: number }).status;
   const message = (err as { message?: string }).message ?? "GitHub request failed.";
   if (status === 401) throw badRequest("NEEDS_RECONNECT", "Your GitHub connection is invalid or expired. Reconnect GitHub.");
+  if (status === 429) throw new AppError("RATE_LIMITED", "GitHub's rate limit was hit. Try again shortly.", 429);
   if (status === 403) {
     if (/rate limit/i.test(message)) throw new AppError("RATE_LIMITED", "GitHub's rate limit was hit. Try again shortly.", 429);
     throw new AppError("FORBIDDEN", "Your GitHub token doesn't have permission for that action.", 403);
   }
   if (status === 404) throw notFound("That repository wasn't found (or your token can't see it).");
+  if (status === 409) throw new AppError("CONFLICT", message || "That request conflicts with the repository's current state.", 409);
   if (status === 422) throw new AppError("VALIDATION", message, 422);
   throw err;
 }
