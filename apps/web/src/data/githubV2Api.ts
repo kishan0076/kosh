@@ -124,11 +124,18 @@ export interface PushResult {
   commitSha: string;
   htmlUrl: string;
   branch: string;
+  pullRequestUrl?: string;
+  pullRequestNumber?: number;
 }
 export interface PushFileInput {
   path: string;
   content: string;
   encoding?: "utf-8" | "base64";
+}
+export interface OwnerLite {
+  login: string;
+  type: "user" | "org";
+  avatarUrl?: string;
 }
 
 const enc = encodeURIComponent;
@@ -150,12 +157,20 @@ export const githubV2Api = {
   pulls: (owner: string, repo: string, state = "open") => greq<{ pulls: PullLite[] }>(`/github/repos/${enc(owner)}/${enc(repo)}/pulls?state=${state}`),
   actions: (owner: string, repo: string) => greq<{ runs: WorkflowRunLite[] }>(`/github/repos/${enc(owner)}/${enc(repo)}/actions`),
 
-  createRepo: (input: { name: string; description?: string; private?: boolean; autoInit?: boolean; gitignoreTemplate?: string; licenseTemplate?: string; homepage?: string }) =>
+  owners: () => greq<{ owners: OwnerLite[] }>("/github/owners"),
+  nameAvailable: (owner: string, name: string) =>
+    greq<{ available: boolean; invalid?: boolean }>(`/github/name-available?owner=${enc(owner)}&name=${enc(name)}`),
+  tree: (owner: string, repo: string, branch?: string) =>
+    greq<{ paths: string[]; truncated: boolean }>(`/github/repos/${enc(owner)}/${enc(repo)}/tree${branch ? `?branch=${enc(branch)}` : ""}`),
+
+  createRepo: (input: { name: string; description?: string; private?: boolean; autoInit?: boolean; gitignoreTemplate?: string; licenseTemplate?: string; homepage?: string; org?: string }) =>
     greq<{ repo: RepoDetail }>("/github/repos", { method: "POST", body: JSON.stringify(input) }),
   updateRepo: (owner: string, repo: string, patch: { name?: string; description?: string; private?: boolean; defaultBranch?: string; homepage?: string; archived?: boolean }) =>
     greq<{ repo: RepoDetail }>(`/github/repos/${enc(owner)}/${enc(repo)}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteRepo: (owner: string, repo: string, confirm: string) =>
     greq<{ ok: boolean }>(`/github/repos/${enc(owner)}/${enc(repo)}`, { method: "DELETE", body: JSON.stringify({ confirm }) }),
-  pushFiles: (owner: string, repo: string, input: { files: PushFileInput[]; message: string; branch?: string; allowSecrets?: boolean }) =>
+  setTopics: (owner: string, repo: string, topics: string[]) =>
+    greq<{ topics: string[] }>(`/github/repos/${enc(owner)}/${enc(repo)}/topics`, { method: "PUT", body: JSON.stringify({ topics }) }),
+  pushFiles: (owner: string, repo: string, input: { files: PushFileInput[]; message: string; branch?: string; allowSecrets?: boolean; pullRequest?: { base?: string; title: string; body?: string } }) =>
     greq<{ push: PushResult }>(`/github/repos/${enc(owner)}/${enc(repo)}/push`, { method: "POST", body: JSON.stringify(input) }),
 };

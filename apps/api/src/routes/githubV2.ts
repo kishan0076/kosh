@@ -12,13 +12,17 @@ import {
   deleteRepo,
   getReadmeMarkdown,
   getRepoDetail,
+  getRepoTreePaths,
   listBranches,
   listCommits,
   listIssues,
+  listOwners,
   listPulls,
   listReleases,
   listRepos,
   listWorkflowRuns,
+  repoNameAvailable,
+  setTopics,
   updateRepo,
   type RepoSort,
 } from "../integrations/githubManage.js";
@@ -86,6 +90,29 @@ githubV2Router.get(
   }),
 );
 
+// Possible owners for a new repo (the authed user + orgs). Placed before "/github/repos/:owner/:repo"
+// so the static segments win react-router-style ordering isn't relevant on the server, but keep it tidy.
+githubV2Router.get(
+  "/github/owners",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const token = await requireGithubToken(uid);
+    res.json({ owners: await ghCall(listOwners(token)) });
+  }),
+);
+
+// Is a repo name free for a given owner? (debounced availability check on the New Repository page)
+githubV2Router.get(
+  "/github/name-available",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const token = await requireGithubToken(uid);
+    const q = z.object({ owner: z.string().min(1).max(120), name: z.string().min(1).max(100) }).parse(req.query);
+    if (!isValidRepoName(q.name)) return res.json({ available: false, invalid: true });
+    res.json({ available: await ghCall(repoNameAvailable(token, q.owner, q.name)) });
+  }),
+);
+
 githubV2Router.get(
   "/github/repos/:owner/:repo",
   ah(async (req, res) => {
@@ -93,6 +120,18 @@ githubV2Router.get(
     const token = await requireGithubToken(uid);
     const { owner, repo } = ownerRepo(req);
     res.json({ repo: await ghCall(getRepoDetail(token, owner, repo)) });
+  }),
+);
+
+// Existing blob paths on a branch — the base for the upload dry-run diff.
+githubV2Router.get(
+  "/github/repos/:owner/:repo/tree",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const token = await requireGithubToken(uid);
+    const { owner, repo } = ownerRepo(req);
+    const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
+    res.json(await ghCall(getRepoTreePaths(token, owner, repo, branch)));
   }),
 );
 
@@ -185,6 +224,7 @@ githubV2Router.post(
         gitignoreTemplate: z.string().max(60).optional(),
         licenseTemplate: z.string().max(60).optional(),
         homepage: z.string().max(500).optional(),
+        org: z.string().max(120).optional(),
       })
       .parse(req.body);
     if (!isValidRepoName(body.name)) throw badRequest("INVALID_REPO_NAME", "Repository name may only contain letters, numbers, '.', '_' and '-'.");
@@ -227,6 +267,17 @@ githubV2Router.delete(
   }),
 );
 
+githubV2Router.put(
+  "/github/repos/:owner/:repo/topics",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await requireGithubToken(uid);
+    const { owner, repo } = ownerRepo(req);
+    const { topics } = z.object({ topics: z.array(z.string().max(50)).max(20) }).parse(req.body);
+    res.json({ topics: await ghCall(setTopics(token, owner, repo, topics)) });
+  }),
+);
+
 const pushFileSchema = z.object({
   path: z.string().min(1).max(400),
   content: z.string(),
@@ -245,6 +296,13 @@ githubV2Router.post(
         message: z.string().min(1).max(500).default("Update from Kosh"),
         branch: z.string().max(255).optional(),
         allowSecrets: z.boolean().default(false),
+        pullRequest: z
+          .object({
+            base: z.string().max(255).optional(),
+            title: z.string().min(1).max(255),
+            body: z.string().max(10000).optional(),
+          })
+          .optional(),
       })
       .parse(req.body);
 
@@ -270,6 +328,6 @@ githubV2Router.post(
       if (scan.risky) throw new AppError("SECRETS_FOUND", "Possible secrets found in these files. Review them, then push again to confirm.", 422, { findings: scan.findings });
     }
 
-    res.status(201).json({ push: await ghCall(commitFiles(token, owner, repo, { files: body.files, message: body.message, branch: body.branch })) });
+    res.status(201).json({ push: await ghCall(commitFiles(token, owner, repo, { files: body.files, message: body.message, branch: body.branch, pullRequest: body.pullRequest })) });
   }),
 );

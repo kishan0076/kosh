@@ -129,6 +129,55 @@ export interface RepoDetail extends RepoSummary {
   subscribers?: number;
 }
 
+/* ── owners (the authed user + orgs they can create repos in) ── */
+
+export interface OwnerLite {
+  login: string;
+  type: "user" | "org";
+  avatarUrl?: string;
+}
+
+/** The authenticated user plus every org they belong to — the possible owners for a new repo. */
+export async function listOwners(token: string): Promise<OwnerLite[]> {
+  const gh = githubClient(token);
+  const [me, orgs] = await Promise.all([
+    gh.rest.users.getAuthenticated(),
+    gh.rest.orgs.listForAuthenticatedUser({ per_page: 100 }),
+  ]);
+  const owners: OwnerLite[] = [{ login: me.data.login, type: "user", avatarUrl: me.data.avatar_url ?? undefined }];
+  for (const o of orgs.data) owners.push({ login: o.login, type: "org", avatarUrl: o.avatar_url ?? undefined });
+  return owners;
+}
+
+/** Is `owner/name` free? true = available, false = already exists. */
+export async function repoNameAvailable(token: string, owner: string, name: string): Promise<boolean> {
+  const gh = githubClient(token);
+  try {
+    await gh.rest.repos.get({ owner, repo: name });
+    return false; // a 200 means it exists
+  } catch (err) {
+    if ((err as { status?: number }).status === 404) return true;
+    throw err; // auth / rate-limit must surface, never masquerade as "available"
+  }
+}
+
+/** The blob paths already on a branch (for the upload dry-run diff). Empty for a new/empty repo. */
+export async function getRepoTreePaths(token: string, owner: string, repo: string, branch?: string): Promise<{ paths: string[]; truncated: boolean }> {
+  const gh = githubClient(token);
+  const info = await gh.rest.repos.get({ owner, repo });
+  const ref = branch || info.data.default_branch || "main";
+  try {
+    const res = await gh.rest.git.getTree({ owner, repo, tree_sha: ref, recursive: "1" });
+    const paths = (res.data.tree ?? []).filter((t) => t.type === "blob" && t.path).map((t) => t.path as string);
+    return { paths, truncated: res.data.truncated ?? false };
+  } catch (err) {
+    // 404 (branch/repo empty) or 409 (empty repo) → nothing exists yet, which is a valid diff base.
+    const status = (err as { status?: number }).status;
+    if (status === 404 || status === 409) return { paths: [], truncated: false };
+    throw err;
+  }
+}
+
 export async function getRepoDetail(token: string, owner: string, repo: string): Promise<RepoDetail> {
   const gh = githubClient(token);
   const res = await gh.rest.repos.get({ owner, repo });
@@ -302,25 +351,29 @@ export async function listWorkflowRuns(token: string, owner: string, repo: strin
 
 export async function createRepo(
   token: string,
-  opts: { name: string; description?: string; private?: boolean; autoInit?: boolean; gitignoreTemplate?: string; licenseTemplate?: string; homepage?: string },
+  opts: { name: string; description?: string; private?: boolean; autoInit?: boolean; gitignoreTemplate?: string; licenseTemplate?: string; homepage?: string; org?: string },
 ): Promise<RepoDetail> {
   const gh = githubClient(token);
+  const common = {
+    name: opts.name,
+    description: opts.description,
+    private: opts.private ?? true,
+    auto_init: opts.autoInit ?? false,
+    gitignore_template: opts.gitignoreTemplate || undefined,
+    license_template: opts.licenseTemplate || undefined,
+    homepage: opts.homepage || undefined,
+  };
   try {
-    const res = await gh.rest.repos.createForAuthenticatedUser({
-      name: opts.name,
-      description: opts.description,
-      private: opts.private ?? true,
-      auto_init: opts.autoInit ?? false,
-      gitignore_template: opts.gitignoreTemplate || undefined,
-      license_template: opts.licenseTemplate || undefined,
-      homepage: opts.homepage || undefined,
-    });
+    // An org owner uses createInOrg; otherwise the repo lands on the authenticated user.
+    const res = opts.org
+      ? await gh.rest.repos.createInOrg({ org: opts.org, ...common })
+      : await gh.rest.repos.createForAuthenticatedUser(common);
     const r = res.data as unknown as RepoLike;
     return { ...toSummary(r) };
   } catch (err) {
     const status = (err as { status?: number }).status;
     if (status === 422) throw new RepoNameTakenError(opts.name);
-    if (status === 401 || status === 403) throw new GithubAuthError("This GitHub token can't create repositories — reconnect with the 'repo' scope.");
+    if (status === 401 || status === 403) throw new GithubAuthError(opts.org ? `This token can't create repositories in ${opts.org} — you need repo-creation rights in that organization.` : "This GitHub token can't create repositories — reconnect with the 'repo' scope.");
     throw err;
   }
 }
@@ -350,22 +403,33 @@ export async function deleteRepo(token: string, owner: string, repo: string): Pr
   await gh.rest.repos.delete({ owner, repo });
 }
 
+/** Replace a repo's topics (lowercased, GitHub's own rule). Returns the stored list. */
+export async function setTopics(token: string, owner: string, repo: string, names: string[]): Promise<string[]> {
+  const gh = githubClient(token);
+  const clean = [...new Set(names.map((t) => t.trim().toLowerCase()).filter(Boolean))].slice(0, 20);
+  const res = await gh.rest.repos.replaceAllTopics({ owner, repo, names: clean });
+  return res.data.names ?? clean;
+}
+
 export interface PushResult {
   commitSha: string;
   htmlUrl: string;
   branch: string;
+  pullRequestUrl?: string;
+  pullRequestNumber?: number;
 }
 
 /**
  * Push a set of files to an EXISTING repo as one commit on top of `branch` (default: the repo's default
  * branch). Builds a tree on the branch's current tree so existing files are preserved unless overwritten.
- * Handles the empty-repo case (no commits yet) by committing with no parent.
+ * Handles the empty-repo case (no commits yet) by committing with no parent. When `pullRequest` is set
+ * (and `branch` differs from its base), opens a PR from the pushed branch back to the base.
  */
 export async function commitFiles(
   token: string,
   owner: string,
   repo: string,
-  opts: { files: PublishInputFile[]; message: string; branch?: string },
+  opts: { files: PublishInputFile[]; message: string; branch?: string; pullRequest?: { base?: string; title: string; body?: string } },
 ): Promise<PushResult> {
   if (!opts.files.length) throw new Error("Refusing to push an empty file list.");
   const gh = githubClient(token);
@@ -434,5 +498,22 @@ export async function commitFiles(
     await gh.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: commit.data.sha });
   }
 
-  return { commitSha: commit.data.sha, htmlUrl: `${info.data.html_url}/commit/${commit.data.sha}`, branch };
+  // Optionally open a PR from the pushed branch back to a base (commit-as-PR for protected branches).
+  let pullRequestUrl: string | undefined;
+  let pullRequestNumber: number | undefined;
+  const prBase = opts.pullRequest?.base || defaultBranch;
+  if (opts.pullRequest && branch !== prBase) {
+    const pr = await gh.rest.pulls.create({
+      owner,
+      repo,
+      head: branch,
+      base: prBase,
+      title: opts.pullRequest.title || opts.message,
+      body: opts.pullRequest.body,
+    });
+    pullRequestUrl = pr.data.html_url;
+    pullRequestNumber = pr.data.number;
+  }
+
+  return { commitSha: commit.data.sha, htmlUrl: `${info.data.html_url}/commit/${commit.data.sha}`, branch, pullRequestUrl, pullRequestNumber };
 }

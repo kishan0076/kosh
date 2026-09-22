@@ -44,7 +44,8 @@ import { Button, Spinner } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, Modal } from "@/components/overlays";
 import { Markdown } from "@/components/markdown";
 import { FadeSwap } from "@/components/motion";
-import { PushFilesModal } from "@/components/github/PushFilesModal";
+import { GithubNew } from "./GithubNew";
+import { GithubUpload } from "./GithubUpload";
 
 /* ── module root: connect gate + nested routes ── */
 
@@ -79,6 +80,9 @@ export function GithubV2() {
   return (
     <Routes>
       <Route index element={<RepoList />} />
+      <Route path="new" element={<GithubNew />} />
+      <Route path="upload" element={<GithubUpload />} />
+      <Route path=":owner/:repo/upload" element={<GithubUpload />} />
       <Route path=":owner/:repo" element={<RepoDetail />} />
       <Route path="*" element={<Navigate to="/github" replace />} />
     </Routes>
@@ -149,7 +153,6 @@ function RepoList() {
   const prefs = useGithubV2((s) => s.prefs);
   const load = useGithubV2((s) => s.load);
   const navigate = useNavigate();
-  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (useGithubV2.getState().status === "idle") void load();
@@ -175,7 +178,8 @@ function RepoList() {
         <Button variant="ghost" size="sm" onClick={() => void load(true)} disabled={status === "loading"} aria-label="Refresh">
           <RefreshCw size={15} className={cn(status === "loading" && "animate-spin")} />
         </Button>
-        <Button variant="primary" size="sm" onClick={() => setCreating(true)}><Plus size={15} /> New repository</Button>
+        <Button variant="outline" size="sm" onClick={() => navigate("/github/upload")}><Upload size={15} /> Upload folder</Button>
+        <Button variant="primary" size="sm" onClick={() => navigate("/github/new")}><Plus size={15} /> New repository</Button>
       </header>
 
       <RepoToolbar />
@@ -205,8 +209,6 @@ function RepoList() {
       )}
 
       {truncated && <p className="text-center text-[12px] text-faint">Showing the first {repos.length} repositories. Refine your search to find others.</p>}
-
-      {creating && <CreateRepoModal onClose={() => setCreating(false)} onCreated={(r) => navigate(`/github/${r.owner}/${r.name}`)} />}
     </div>
   );
 }
@@ -301,65 +303,7 @@ function RepoRow({ repo, onOpen }: { repo: RepoSummary; onOpen: () => void }) {
   );
 }
 
-/* ── create repo ── */
-
-function CreateRepoModal({ onClose, onCreated }: { onClose: () => void; onCreated: (r: RepoDetail) => void }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [isPrivate, setIsPrivate] = useState(true);
-  const [autoInit, setAutoInit] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const valid = /^[A-Za-z0-9._-]+$/.test(name.trim());
-
-  const submit = async () => {
-    if (!valid || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const { repo } = await githubV2Api.createRepo({ name: name.trim(), description: description.trim() || undefined, private: isPrivate, autoInit });
-      useGithubV2.getState().upsertRepo(repo);
-      ghToast(`Created ${repo.fullName}`, "ok");
-      onCreated(repo);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't create the repository.");
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal open onClose={onClose} className="w-full max-w-md" labelledBy="create-repo-title">
-      <div className="p-5">
-        <h2 id="create-repo-title" className="text-[16px] font-semibold">New repository</h2>
-        <div className="mt-4 space-y-3.5">
-          <div>
-            <label htmlFor="cr-name" className="mb-1.5 block text-[12px] font-medium text-muted">Repository name</label>
-            <input id="cr-name" autoFocus value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} placeholder="my-project" className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[14px] outline-none focus:border-primary focus:ring-focus" />
-            {name.trim() && !valid && <p className="mt-1 text-[11.5px] text-danger">Only letters, numbers, '.', '_' and '-' are allowed.</p>}
-          </div>
-          <div>
-            <label htmlFor="cr-desc" className="mb-1.5 block text-[12px] font-medium text-muted">Description <span className="text-faint">(optional)</span></label>
-            <input id="cr-desc" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="What is this project?" className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus" />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <VisButton icon={Lock} label="Private" selected={isPrivate} onClick={() => setIsPrivate(true)} />
-            <VisButton icon={Globe} label="Public" selected={!isPrivate} onClick={() => setIsPrivate(false)} />
-          </div>
-          <label className="flex cursor-pointer items-center gap-2 text-[13px]">
-            <input type="checkbox" checked={autoInit} onChange={(e) => setAutoInit(e.target.checked)} className="h-4 w-4 accent-[var(--primary)]" />
-            Initialize with a README
-          </label>
-          {error && <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="primary" onClick={submit} disabled={!valid || busy}>{busy ? <Spinner size={15} /> : <Plus size={15} />} Create</Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
+/* ── visibility toggle (used by the settings modal) ── */
 
 function VisButton({ icon: Icon, label, selected, onClick }: { icon: typeof Lock; label: string; selected: boolean; onClick: () => void }) {
   return (
@@ -391,7 +335,6 @@ function RepoDetail() {
   const [tab, setTab] = useState<Tab>("overview");
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [pushing, setPushing] = useState(false);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -433,7 +376,7 @@ function RepoDetail() {
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="outline" size="sm"><ExternalLink size={14} /> Open</Button></a>
-            {detail.canPush && <Button variant="secondary" size="sm" onClick={() => setPushing(true)}><Upload size={14} /> Push files</Button>}
+            {detail.canPush && <Button variant="secondary" size="sm" onClick={() => navigate(`/github/${detail.owner}/${detail.name}/upload`)}><Upload size={14} /> Upload folder</Button>}
             {detail.canAdmin && <Button variant="ghost" size="sm" onClick={() => setEditing(true)}><Settings2 size={14} /> Settings</Button>}
           </div>
         </div>
@@ -454,7 +397,6 @@ function RepoDetail() {
 
       {editing && <EditRepoModal repo={detail} onClose={() => setEditing(false)} onSaved={(d) => { setDetail(d); useGithubV2.getState().upsertRepo(d); }} onRenamed={(d) => { useGithubV2.getState().upsertRepo(d); navigate(`/github/${d.owner}/${d.name}`, { replace: true }); }} onDelete={() => { setEditing(false); setDeleting(true); }} />}
       {deleting && <DeleteRepoModal repo={detail} onClose={() => setDeleting(false)} onDeleted={() => { useGithubV2.getState().removeRepo(detail.fullName); navigate("/github"); }} />}
-      {pushing && <PushFilesModal repo={detail} onClose={() => setPushing(false)} />}
     </div>
   );
 }
