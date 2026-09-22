@@ -28,7 +28,6 @@ import {
   Settings2,
   Star,
   Tag,
-  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -38,14 +37,15 @@ import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { api, ApiError } from "@/data/api";
 import { githubV2Api, type BranchLite, type CommitLite, type IssueLite, type PullLite, type ReleaseLite, type RepoDetail, type RepoSummary, type WorkflowRunLite } from "@/data/githubV2Api";
-import { useGithubV2, visibleRepos, ghToast, type RepoFilter } from "@/data/githubV2";
+import { useGithubV2, visibleRepos, type RepoFilter } from "@/data/githubV2";
 import { GitHubMark } from "@/lib/icons";
 import { Button, Spinner } from "@/components/ui";
-import { Menu, MenuItem, MenuLabel, Modal } from "@/components/overlays";
+import { Menu, MenuItem, MenuLabel } from "@/components/overlays";
 import { Markdown } from "@/components/markdown";
 import { FadeSwap } from "@/components/motion";
 import { GithubNew } from "./GithubNew";
 import { GithubUpload } from "./GithubUpload";
+import { GithubSettings } from "./GithubSettings";
 
 /* ── module root: connect gate + nested routes ── */
 
@@ -83,7 +83,9 @@ export function GithubV2() {
       <Route path="new" element={<GithubNew />} />
       <Route path="upload" element={<GithubUpload />} />
       <Route path=":owner/:repo/upload" element={<GithubUpload />} />
+      <Route path=":owner/:repo/settings" element={<GithubSettings />} />
       <Route path=":owner/:repo" element={<RepoDetail />} />
+      <Route path=":owner/:repo/:tab" element={<RepoDetail />} />
       <Route path="*" element={<Navigate to="/github" replace />} />
     </Routes>
   );
@@ -303,16 +305,6 @@ function RepoRow({ repo, onOpen }: { repo: RepoSummary; onOpen: () => void }) {
   );
 }
 
-/* ── visibility toggle (used by the settings modal) ── */
-
-function VisButton({ icon: Icon, label, selected, onClick }: { icon: typeof Lock; label: string; selected: boolean; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} aria-pressed={selected} className={cn("flex items-center gap-2 rounded-[var(--radius-control)] border px-3 py-2 text-[13px]", selected ? "border-primary bg-primary-soft text-primary" : "border-border bg-surface-2 text-muted hover:border-border-strong")}>
-      <Icon size={14} /> {label}
-    </button>
-  );
-}
-
 /* ── repo detail (tabbed) ── */
 
 type Tab = "overview" | "commits" | "branches" | "releases" | "issues" | "pulls" | "actions";
@@ -327,14 +319,14 @@ const TABS: { k: Tab; label: string; icon: typeof Book }[] = [
 ];
 
 function RepoDetail() {
-  const { owner = "", repo = "" } = useParams();
+  const { owner = "", repo = "", tab: tabParam } = useParams();
   const navigate = useNavigate();
   const [detail, setDetail] = useState<RepoDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("overview");
-  const [editing, setEditing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
+  // The active tab lives in the URL (/github/:owner/:repo/:tab) so it bookmarks and survives refresh.
+  const tab: Tab = (TABS.some((t) => t.k === tabParam) ? tabParam : "overview") as Tab;
+  const goTab = (k: Tab) => navigate(k === "overview" ? `/github/${owner}/${repo}` : `/github/${owner}/${repo}/${k}`);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -377,7 +369,7 @@ function RepoDetail() {
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="outline" size="sm"><ExternalLink size={14} /> Open</Button></a>
             {detail.canPush && <Button variant="secondary" size="sm" onClick={() => navigate(`/github/${detail.owner}/${detail.name}/upload`)}><Upload size={14} /> Upload folder</Button>}
-            {detail.canAdmin && <Button variant="ghost" size="sm" onClick={() => setEditing(true)}><Settings2 size={14} /> Settings</Button>}
+            {detail.canAdmin && <Button variant="ghost" size="sm" onClick={() => navigate(`/github/${detail.owner}/${detail.name}/settings`)}><Settings2 size={14} /> Settings</Button>}
           </div>
         </div>
       </header>
@@ -385,7 +377,7 @@ function RepoDetail() {
       {/* tabs */}
       <div className="flex gap-1 overflow-x-auto rounded-[var(--radius-card)] border border-border bg-surface p-1">
         {TABS.map(({ k, label, icon: Icon }) => (
-          <button key={k} onClick={() => setTab(k)} className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium transition-colors", tab === k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}>
+          <button key={k} onClick={() => goTab(k)} className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium transition-colors", tab === k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}>
             <Icon size={15} /> {label}
           </button>
         ))}
@@ -394,9 +386,6 @@ function RepoDetail() {
       <FadeSwap k={tab}>
         {tab === "overview" ? <OverviewTab repo={detail} /> : <ListTab repo={detail} tab={tab} />}
       </FadeSwap>
-
-      {editing && <EditRepoModal repo={detail} onClose={() => setEditing(false)} onSaved={(d) => { setDetail(d); useGithubV2.getState().upsertRepo(d); }} onRenamed={(d) => { useGithubV2.getState().upsertRepo(d); navigate(`/github/${d.owner}/${d.name}`, { replace: true }); }} onDelete={() => { setEditing(false); setDeleting(true); }} />}
-      {deleting && <DeleteRepoModal repo={detail} onClose={() => setDeleting(false)} onDeleted={() => { useGithubV2.getState().removeRepo(detail.fullName); navigate("/github"); }} />}
     </div>
   );
 }
@@ -535,137 +524,3 @@ function RunDot({ conclusion, status }: { conclusion?: string; status?: string }
   const tone = conclusion === "success" ? "bg-ok" : conclusion === "failure" ? "bg-danger" : status === "in_progress" || status === "queued" ? "bg-warn" : "bg-faint";
   return <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", tone)} />;
 }
-
-/* ── edit + delete ── */
-
-function EditRepoModal({ repo, onClose, onSaved, onRenamed, onDelete }: { repo: RepoDetail; onClose: () => void; onSaved: (d: RepoDetail) => void; onRenamed: (d: RepoDetail) => void; onDelete: () => void }) {
-  const [name, setName] = useState(repo.name);
-  const [description, setDescription] = useState(repo.description ?? "");
-  const [isPrivate, setIsPrivate] = useState(repo.private);
-  const [homepage, setHomepage] = useState(repo.homepage ?? "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const nameValid = /^[A-Za-z0-9._-]+$/.test(name.trim());
-
-  const save = async () => {
-    if (!nameValid || busy) return;
-    setBusy(true);
-    setError(null);
-    const renamed = name.trim() !== repo.name;
-    try {
-      const { repo: d } = await githubV2Api.updateRepo(repo.owner, repo.name, {
-        name: renamed ? name.trim() : undefined,
-        description,
-        private: isPrivate,
-        homepage,
-      });
-      ghToast("Repository updated", "ok");
-      if (renamed) onRenamed(d); else onSaved(d);
-      onClose();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't update the repository.");
-      setBusy(false);
-    }
-  };
-
-  const toggleArchive = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const { repo: d } = await githubV2Api.updateRepo(repo.owner, repo.name, { archived: !repo.archived });
-      ghToast(d.archived ? "Repository archived" : "Repository unarchived", "ok");
-      onSaved(d);
-      onClose();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't change archive state.");
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal open onClose={onClose} className="w-full max-w-md" labelledBy="edit-repo-title">
-      <div className="p-5">
-        <h2 id="edit-repo-title" className="text-[16px] font-semibold">Repository settings</h2>
-        <div className="mt-4 space-y-3.5">
-          <div>
-            <label htmlFor="er-name" className="mb-1.5 block text-[12px] font-medium text-muted">Name</label>
-            <input id="er-name" value={name} onChange={(e) => setName(e.target.value)} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[14px] outline-none focus:border-primary focus:ring-focus" />
-            {name.trim() && !nameValid && <p className="mt-1 text-[11.5px] text-danger">Only letters, numbers, '.', '_' and '-' are allowed.</p>}
-            {nameValid && name.trim() !== repo.name && <p className="mt-1 text-[11.5px] text-warn">Renaming changes the repository URL.</p>}
-          </div>
-          <div>
-            <label htmlFor="er-desc" className="mb-1.5 block text-[12px] font-medium text-muted">Description</label>
-            <input id="er-desc" value={description} onChange={(e) => setDescription(e.target.value)} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus" />
-          </div>
-          <div>
-            <label htmlFor="er-home" className="mb-1.5 block text-[12px] font-medium text-muted">Homepage <span className="text-faint">(optional)</span></label>
-            <input id="er-home" value={homepage} onChange={(e) => setHomepage(e.target.value)} placeholder="https://…" className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus" />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <VisButton icon={Lock} label="Private" selected={isPrivate} onClick={() => setIsPrivate(true)} />
-            <VisButton icon={Globe} label="Public" selected={!isPrivate} onClick={() => setIsPrivate(false)} />
-          </div>
-          {error && <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
-        </div>
-
-        <div className="mt-4 flex items-center justify-between">
-          <Button variant="ghost" size="sm" onClick={toggleArchive} disabled={busy}><Archive size={14} /> {repo.archived ? "Unarchive" : "Archive"}</Button>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-            <Button variant="primary" onClick={save} disabled={!nameValid || busy}>{busy ? <Spinner size={15} /> : <Check size={15} />} Save</Button>
-          </div>
-        </div>
-
-        {repo.canAdmin && (
-          <div className="mt-5 rounded-[var(--radius-control)] border border-danger/30 bg-danger-soft/40 px-3.5 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[13px] font-semibold text-danger">Delete this repository</div>
-                <div className="text-[11.5px] text-muted">This cannot be undone.</div>
-              </div>
-              <Button variant="outline" size="sm" className="border-danger/40 text-danger hover:bg-danger-soft" onClick={onDelete}><Trash2 size={14} /> Delete</Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </Modal>
-  );
-}
-
-function DeleteRepoModal({ repo, onClose, onDeleted }: { repo: RepoDetail; onClose: () => void; onDeleted: () => void }) {
-  const [confirm, setConfirm] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const match = confirm === repo.fullName;
-
-  const del = async () => {
-    if (!match || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await githubV2Api.deleteRepo(repo.owner, repo.name, confirm);
-      ghToast(`Deleted ${repo.fullName}`, "warn");
-      onDeleted();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't delete the repository.");
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal open onClose={onClose} className="w-full max-w-md" labelledBy="del-repo-title">
-      <div className="p-5">
-        <h2 id="del-repo-title" className="text-[16px] font-semibold text-danger">Delete repository</h2>
-        <p className="mt-2 text-[13px] text-muted">This permanently deletes <span className="font-mono font-medium text-foreground">{repo.fullName}</span>, its code, issues, PRs and releases. This cannot be undone.</p>
-        <label htmlFor="del-confirm" className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Type <span className="font-mono text-foreground">{repo.fullName}</span> to confirm</label>
-        <input id="del-confirm" autoFocus value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && del()} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-danger focus:ring-focus" />
-        {error && <div className="mt-3 rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="danger" onClick={del} disabled={!match || busy}>{busy ? <Spinner size={15} /> : <Trash2 size={15} />} Delete forever</Button>
-        </div>
-      </div>
-    </Modal>
-  );
-}
-

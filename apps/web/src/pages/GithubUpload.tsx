@@ -10,6 +10,7 @@ import {
   FolderInput,
   FolderUp,
   GitBranch,
+  GitPullRequest,
   Github,
   RefreshCw,
   Sparkles,
@@ -22,7 +23,7 @@ import { githubV2Api, type BranchLite, type PushResult, type RepoSummary } from 
 import { useGithubV2, ghToast } from "@/data/githubV2";
 import { readFolderPlan, readDropPlan, gitBlobSha, type LoadedRepoFile } from "@/lib/repoFolder";
 import { GitHubMark } from "@/lib/icons";
-import { Button, Input, Spinner } from "@/components/ui";
+import { Button, Input, Spinner, Toggle } from "@/components/ui";
 import { SelectMenu } from "@/components/overlays";
 import { SecretFindings, type SecretFinding } from "@/components/github/RepoForm";
 
@@ -73,6 +74,9 @@ export function GithubUpload() {
   const [subpath, setSubpath] = useState("");
   const [message, setMessage] = useState("Update from Kosh");
   const [confirmSecrets, setConfirmSecrets] = useState(false);
+  const [openPr, setOpenPr] = useState(false);
+  const [prTitle, setPrTitle] = useState("");
+  const [prBody, setPrBody] = useState("");
 
   // Dry-run: git blob shas of picked files + the target-branch tree, compared to label each file.
   const [blobShas, setBlobShas] = useState<Map<string, string>>(new Map());
@@ -169,6 +173,8 @@ export function GithubUpload() {
 
   const effectiveBranch = (branchMode === "new" ? newBranch : branch).trim();
   const diffBranch = branchMode === "new" ? target?.defaultBranch : branch.trim();
+  // A PR needs a head branch that differs from the base (default branch).
+  const prBaseSameAsHead = openPr && !!target && effectiveBranch === target.defaultBranch;
 
   // Fetch the target branch's tree for the dry-run.
   const treeSeq = useRef(0);
@@ -212,7 +218,7 @@ export function GithubUpload() {
 
   const canPush =
     !!target && target.canPush && included.length > 0 && !reading && phase === "idle" &&
-    !!effectiveBranch && !!message.trim() && !subpathInvalid && (findings.length === 0 || confirmSecrets);
+    !!effectiveBranch && !!message.trim() && !subpathInvalid && !prBaseSameAsHead && (findings.length === 0 || confirmSecrets);
 
   async function push() {
     if (!canPush || !target) return;
@@ -227,9 +233,10 @@ export function GithubUpload() {
         message: message.trim(),
         branch: effectiveBranch,
         allowSecrets: confirmSecrets,
+        ...(openPr && !prBaseSameAsHead ? { pullRequest: { base: target.defaultBranch, title: prTitle.trim() || message.trim(), body: prBody.trim() || undefined } } : {}),
       });
       setResult({ ...push, count: out.length });
-      ghToast(`Pushed ${out.length} file${out.length === 1 ? "" : "s"} to ${target.owner}/${target.name}`, "ok");
+      ghToast(push.pullRequestUrl ? `Opened a pull request on ${target.name}` : `Pushed ${out.length} file${out.length === 1 ? "" : "s"} to ${target.owner}/${target.name}`, "ok");
     } catch (err) {
       setPhase("idle");
       if (err instanceof ApiError && err.code === "SECRETS_FOUND") {
@@ -272,14 +279,21 @@ export function GithubUpload() {
           <div className="flex items-start gap-3 border-b border-border bg-ok-soft/40 px-5 py-4">
             <span className="mt-0.5 grid h-11 w-11 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><CheckCircle2 size={22} /></span>
             <div className="min-w-0">
-              <h2 className="text-lg font-semibold">Pushed {result.count} file{result.count === 1 ? "" : "s"} 🎉</h2>
-              <p className="mt-0.5 text-[13px] text-muted">Committed to <span className="font-mono">{result.branch}</span> on {target?.owner}/{target?.name}.</p>
+              <h2 className="text-lg font-semibold">{result.pullRequestUrl ? "Pull request opened 🎉" : `Pushed ${result.count} file${result.count === 1 ? "" : "s"} 🎉`}</h2>
+              <p className="mt-0.5 text-[13px] text-muted">{result.count} file{result.count === 1 ? "" : "s"} committed to <span className="font-mono">{result.branch}</span> on {target?.owner}/{target?.name}.</p>
             </div>
           </div>
           <div className="flex flex-wrap justify-end gap-2 px-5 py-3.5">
             <Button variant="ghost" onClick={reset}>Upload another folder</Button>
             {target && <Button variant="outline" onClick={() => navigate(`/github/${target.owner}/${target.name}`)}>Open repository</Button>}
-            <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="primary"><ExternalLink size={15} /> View commit</Button></a>
+            {result.pullRequestUrl ? (
+              <>
+                <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="outline"><ExternalLink size={15} /> Commit</Button></a>
+                <a href={result.pullRequestUrl} target="_blank" rel="noreferrer noopener"><Button variant="primary"><GitPullRequest size={15} /> View pull request</Button></a>
+              </>
+            ) : (
+              <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="primary"><ExternalLink size={15} /> View commit</Button></a>
+            )}
           </div>
         </div>
       ) : (
@@ -433,6 +447,22 @@ export function GithubUpload() {
                           </div>
                           <p className="mt-1 text-[11px] text-faint">Branches off <span className="font-mono">{target.defaultBranch}</span>.</p>
                         </>
+                      )}
+                    </div>
+
+                    {/* commit as PR */}
+                    <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+                      <label className="flex cursor-pointer items-center justify-between gap-2 text-[12.5px]">
+                        <span className="inline-flex items-center gap-1.5"><GitPullRequest size={14} className="text-muted" /> Open a pull request instead</span>
+                        <Toggle checked={openPr} onChange={(on) => { setOpenPr(on); if (on && branchMode === "existing" && branch === target.defaultBranch) setBranchMode("new"); }} label="Open a pull request instead" />
+                      </label>
+                      {openPr && (
+                        <div className="mt-2.5 space-y-2">
+                          {prBaseSameAsHead && <p className="text-[11.5px] text-danger">Pick a branch other than {target.defaultBranch} to open a PR against it.</p>}
+                          <Input value={prTitle} onChange={(e) => setPrTitle(e.target.value)} placeholder={`PR title (defaults to the commit message)`} />
+                          <textarea value={prBody} onChange={(e) => setPrBody(e.target.value)} rows={2} placeholder="Description (optional)" className="w-full resize-none rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none focus:border-primary focus:ring-focus placeholder:text-faint" />
+                          <p className="text-[11px] text-faint">Opens <span className="font-mono">{effectiveBranch || "…"} → {target.defaultBranch}</span>.</p>
+                        </div>
                       )}
                     </div>
 

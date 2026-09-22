@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Book, FileText, Github, Globe, Lock, Plus, Scale, Sparkles, Tag, X } from "lucide-react";
-import { isValidRepoName, sanitizeRepoName } from "@kosh/shared";
+import { ArrowLeft, Book, FileCode2, FileText, FolderUp, Github, Globe, Lock, Plus, RefreshCw, Scale, Sparkles, Tag } from "lucide-react";
+import { formatBytes, isValidRepoName } from "@kosh/shared";
+import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { ApiError } from "@/data/api";
 import { githubV2Api, type OwnerLite } from "@/data/githubV2Api";
 import { useGithubV2, ghToast } from "@/data/githubV2";
 import { GITIGNORE_TEMPLATES, LICENSE_TEMPLATES } from "@/lib/githubTemplates";
+import { readFolderPlan, readDropPlan, type LoadedRepoFile } from "@/lib/repoFolder";
 import { GitHubMark } from "@/lib/icons";
 import { Button, Input, Spinner, Toggle } from "@/components/ui";
 import { SelectMenu } from "@/components/overlays";
-import { RepoNameField, VisibilityPicker, type NameStatus } from "@/components/github/RepoForm";
+import { GitScanCard } from "@/components/github/GitScanCard";
+import { RepoNameField, SecretFindings, TopicsInput, VisibilityPicker, type NameStatus, type SecretFinding } from "@/components/github/RepoForm";
 
 /**
  * Dedicated "New repository" page (replaces the cramped create modal). Exposes the full create surface
@@ -35,9 +38,45 @@ export function GithubNew() {
   const [topics, setTopics] = useState<string[]>([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
+  // Optional: seed the new repo from a local folder (folds in the old /publish flow).
+  const seedInputRef = useRef<HTMLInputElement>(null);
+  const [showSeed, setShowSeed] = useState(false);
+  const [seedFiles, setSeedFiles] = useState<LoadedRepoFile[]>([]);
+  const [seedFolder, setSeedFolder] = useState("");
+  const [seedFindings, setSeedFindings] = useState<SecretFinding[]>([]);
+  const [seedConfirm, setSeedConfirm] = useState(false);
+  const [seedReading, setSeedReading] = useState(false);
+  const [seedDrag, setSeedDrag] = useState(false);
+
   const [nameStatus, setNameStatus] = useState<NameStatus>("idle");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const el = seedInputRef.current;
+    if (el) { el.setAttribute("webkitdirectory", ""); el.setAttribute("directory", ""); }
+  }, [showSeed]);
+
+  async function seedIngest(plan: Awaited<ReturnType<typeof readFolderPlan>>) {
+    setSeedFolder(plan.topFolder);
+    setSeedFiles(plan.files);
+    setSeedFindings(plan.findings);
+    setSeedConfirm(false);
+  }
+  async function onSeedPick(list: FileList | null) {
+    if (!list || list.length === 0) return;
+    setSeedReading(true);
+    try { await seedIngest(await readFolderPlan(list)); } catch { /* ignore */ }
+    finally { setSeedReading(false); if (seedInputRef.current) seedInputRef.current.value = ""; }
+  }
+  async function onSeedDrop(e: React.DragEvent) {
+    e.preventDefault(); setSeedDrag(false);
+    if (!e.dataTransfer.items.length) return;
+    setSeedReading(true);
+    try { await seedIngest(await readDropPlan(e.dataTransfer)); } catch { /* ignore */ }
+    finally { setSeedReading(false); }
+  }
+  const seedBytes = useMemo(() => seedFiles.reduce((a, f) => a + f.size, 0), [seedFiles]);
 
   // Load possible owners (user + orgs). Degrade to the connected login if the call fails (sandbox proxy).
   useEffect(() => {
@@ -74,7 +113,8 @@ export function GithubNew() {
   }, [trimmedName, nameValid, owner]);
 
   const autoInit = initReadme || !!gitignore || !!license;
-  const canCreate = nameValid && nameStatus !== "taken" && nameStatus !== "checking" && !busy;
+  const seedBlocked = seedFiles.length > 0 && seedFindings.length > 0 && !seedConfirm;
+  const canCreate = nameValid && nameStatus !== "taken" && nameStatus !== "checking" && !busy && !seedBlocked;
 
   const initFiles = useMemo(() => {
     const f: string[] = [];
@@ -106,6 +146,19 @@ export function GithubNew() {
           const { topics: saved } = await githubV2Api.setTopics(repo.owner, repo.name, topics);
           repo.topics = saved;
         } catch { /* non-fatal */ }
+      }
+      // Optional seed: push the picked folder as the first content commit.
+      if (seedFiles.length > 0) {
+        try {
+          await githubV2Api.pushFiles(repo.owner, repo.name, {
+            files: seedFiles.map((f) => ({ path: f.path, content: f.content, encoding: f.encoding })),
+            message: `Add ${seedFolder} contents`,
+            branch: repo.defaultBranch,
+            allowSecrets: seedConfirm,
+          });
+        } catch {
+          ghToast(`${repo.fullName} created, but pushing the folder failed — upload it from the repo.`, "warn");
+        }
       }
       useGithubV2.getState().upsertRepo(repo);
       ghToast(`Created ${repo.fullName}`, "ok");
@@ -185,6 +238,53 @@ export function GithubNew() {
             </div>
           </div>
 
+          {/* seed from a folder (folds in the old /publish flow) */}
+          <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3.5">
+            <label className="flex cursor-pointer items-center justify-between gap-2">
+              <span className="flex items-center gap-2 text-[13px]"><FolderUp size={15} className="text-muted" /> Start from a folder <span className="text-faint">(optional)</span></span>
+              <Toggle checked={showSeed} onChange={(on) => { setShowSeed(on); if (!on) { setSeedFiles([]); setSeedFolder(""); setSeedFindings([]); } }} label="Start from a folder" />
+            </label>
+            {showSeed && (
+              <div className="mt-3 space-y-3">
+                <p className="text-[12px] text-muted">Push a local project as the repository's first commit. Build files, dependencies and secrets are filtered out in your browser.</p>
+                <input ref={seedInputRef} type="file" multiple hidden onChange={(e) => onSeedPick(e.target.files)} />
+                <GitScanCard />
+                {seedFiles.length === 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => seedInputRef.current?.click()}
+                    onDragOver={(e) => { e.preventDefault(); setSeedDrag(true); }}
+                    onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setSeedDrag(false); }}
+                    onDrop={onSeedDrop}
+                    disabled={seedReading}
+                    className={cn("flex min-h-[120px] w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-control)] border-2 border-dashed px-4 py-6 text-center transition-colors", seedDrag ? "border-primary bg-primary-soft/50" : "border-border hover:border-primary hover:bg-primary-soft/20")}
+                  >
+                    <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">{seedReading ? <Spinner size={18} /> : <FolderUp size={20} />}</span>
+                    <span className="text-[13px] font-medium">{seedReading ? "Reading folder…" : "Drop a folder, or choose one"}</span>
+                  </button>
+                ) : (
+                  <div className="overflow-hidden rounded-[var(--radius-control)] border border-border">
+                    <div className="flex items-center gap-2 border-b border-border px-3 py-2 text-[12.5px]">
+                      <FileCode2 size={15} className="shrink-0 text-primary" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{seedFolder}</span>
+                      <span className="text-faint">{seedFiles.length} file{seedFiles.length === 1 ? "" : "s"} · {formatBytes(seedBytes)}</span>
+                      <Button variant="ghost" size="sm" onClick={() => seedInputRef.current?.click()}><RefreshCw size={13} /> Change</Button>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto">
+                      {seedFiles.slice(0, 200).map((f) => (
+                        <div key={f.path} className="flex items-center gap-2 border-b border-border px-3 py-1 font-mono text-[11.5px] last:border-0">
+                          <span className="min-w-0 flex-1 truncate">{f.path}</span>
+                          <span className="shrink-0 text-faint">{formatBytes(f.size)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <SecretFindings findings={seedFindings} confirmed={seedConfirm} onConfirm={setSeedConfirm} confirmLabel="I've reviewed these and want to push anyway" />
+              </div>
+            )}
+          </div>
+
           {/* advanced */}
           <button onClick={() => setShowAdvanced((v) => !v)} className="text-[12.5px] font-medium text-primary hover:underline">
             {showAdvanced ? "Hide" : "Show"} advanced options
@@ -246,37 +346,6 @@ export function GithubNew() {
           <p className="px-1 text-[11.5px] text-faint">Want to push an existing folder instead? Use <button onClick={() => navigate("/github/upload")} className="font-medium text-primary hover:underline">Upload a folder</button>.</p>
         </aside>
       </div>
-    </div>
-  );
-}
-
-/** A compact chip input for repo topics (add on Enter / comma, remove with ×). */
-function TopicsInput({ topics, onChange }: { topics: string[]; onChange: (t: string[]) => void }) {
-  const [draft, setDraft] = useState("");
-  const add = (raw: string) => {
-    const t = sanitizeRepoName(raw).toLowerCase();
-    if (t && !topics.includes(t) && topics.length < 20) onChange([...topics, t]);
-    setDraft("");
-  };
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1.5 focus-within:border-primary focus-within:ring-focus">
-      {topics.map((t) => (
-        <span key={t} className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[12px] text-muted">
-          #{t}
-          <button onClick={() => onChange(topics.filter((x) => x !== t))} className="hover:text-danger" aria-label={`Remove ${t}`}><X size={11} /></button>
-        </span>
-      ))}
-      <input
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === ",") { e.preventDefault(); if (draft.trim()) add(draft); }
-          else if (e.key === "Backspace" && !draft && topics.length) onChange(topics.slice(0, -1));
-        }}
-        onBlur={() => draft.trim() && add(draft)}
-        placeholder={topics.length ? "" : "react, cli, typescript…"}
-        className="min-w-[8ch] flex-1 bg-transparent px-1 py-0.5 text-[13px] outline-none placeholder:text-faint"
-      />
     </div>
   );
 }

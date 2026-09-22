@@ -1,6 +1,6 @@
-import { type ReactNode } from "react";
-import { AlertTriangle, Check, Globe, Lock } from "lucide-react";
-import { isValidRepoName } from "@kosh/shared";
+import { useState, type ReactNode } from "react";
+import { AlertTriangle, Check, Globe, Lock, X } from "lucide-react";
+import { isValidRepoName, sanitizeRepoName } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/ui";
 
@@ -194,5 +194,37 @@ export function SecretFindings({
         </div>
       </div>
     </section>
+  );
+}
+
+/* ── Topics chip input ── */
+
+export function TopicsInput({ topics, onChange }: { topics: string[]; onChange: (t: string[]) => void }) {
+  const [draft, setDraft] = useState("");
+  const add = (raw: string) => {
+    const t = sanitizeRepoName(raw).toLowerCase();
+    if (t && !topics.includes(t) && topics.length < 20) onChange([...topics, t]);
+    setDraft("");
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1.5 focus-within:border-primary focus-within:ring-focus">
+      {topics.map((t) => (
+        <span key={t} className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[12px] text-muted">
+          #{t}
+          <button onClick={() => onChange(topics.filter((x) => x !== t))} className="hover:text-danger" aria-label={`Remove ${t}`}><X size={11} /></button>
+        </span>
+      ))}
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === ",") { e.preventDefault(); if (draft.trim()) add(draft); }
+          else if (e.key === "Backspace" && !draft && topics.length) onChange(topics.slice(0, -1));
+        }}
+        onBlur={() => draft.trim() && add(draft)}
+        placeholder={topics.length ? "" : "react, cli, typescript…"}
+        className="min-w-[8ch] flex-1 bg-transparent px-1 py-0.5 text-[13px] outline-none placeholder:text-faint"
+      />
+    </div>
   );
 }

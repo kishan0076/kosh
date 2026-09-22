@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { MotionConfig } from "motion/react";
 import "./index.css";
 import { initTheme } from "@/lib/theme";
@@ -10,7 +10,6 @@ import { Library } from "@/pages/Library";
 import { Skills } from "@/pages/Skills";
 import { SkillEditor } from "@/components/skills/SkillEditor";
 import { ItemPage } from "@/pages/ItemPage";
-import { PublishRepo } from "@/pages/PublishRepo";
 import { GithubV2 } from "@/pages/GithubV2";
 import { Drive } from "@/pages/Drive";
 import { DriveV2 } from "@/pages/DriveV2";
@@ -42,8 +41,9 @@ createRoot(document.getElementById("root")!).render(
           <Route index element={<Home />} />
           <Route path="add" element={<Add />} />
           <Route path="items/:id" element={<ItemPage />} />
-          <Route path="publish" element={<PublishRepo />} />
-          {/* Wildcard: the GitHub module owns its sub-routes (list + :owner/:repo detail). */}
+          {/* The old folder→new-repo page folded into /github/new (Start from a folder). */}
+          <Route path="publish" element={<Navigate to="/github/new" replace />} />
+          {/* Wildcard: the GitHub module owns its sub-routes (list, new, upload, :owner/:repo/*). */}
           <Route path="github/*" element={<GithubV2 />} />
           <Route path="drive" element={<Drive />} />
           {/* Wildcard: Drive V2 owns its sub-routes (my-drive / recent / starred / … / insights / activity). */}
