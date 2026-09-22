@@ -226,20 +226,20 @@ function Shell() {
   const menuActions = menu ? buildMenuActions(menu.node, menu.ids, view, { setRenamingId, close: () => setMenu(null) }) : [];
 
   return (
-    <div className="w-full" onKeyDown={onKeyDown}>
+    <div className="w-full lg:h-[calc(100dvh-7rem)] lg:overflow-hidden" onKeyDown={onKeyDown}>
       <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => { void store.getState().uploadFiles(Array.from(e.target.files ?? [])); if (fileInputRef.current) fileInputRef.current.value = ""; }} />
-      <div className="grid gap-6 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-start">
+      <div className="grid gap-6 lg:h-full lg:min-h-0 lg:grid-cols-[auto_minmax(0,1fr)]">
         <DriveRail
           onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
           onUpload={() => fileInputRef.current?.click()}
         />
-        <FadeSwap k={paneKey} className="min-w-0">
+        <FadeSwap k={paneKey} className="min-w-0 lg:h-full lg:min-h-0">
           {activityOpen ? (
             <ActivityPanel onClose={() => store.getState().setActivity(false)} />
           ) : insightsOpen ? (
             <InsightsPanel onClose={() => store.getState().setInsights(false)} />
           ) : (
-          <div className="flex min-w-0 flex-col">
+          <div className="flex min-w-0 flex-col lg:h-full lg:min-h-0">
             <PageHeader
               stats={headerStats}
               onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
@@ -578,7 +578,7 @@ function DriveContentArea({
       onDragOver={canDrop ? (e) => { if (hasExternalFiles(e) && !hasDriveDrag(e)) { e.preventDefault(); setDrag(true); } } : undefined}
       onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
       onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
-      className={cn("relative min-h-[360px] overflow-y-auto overflow-x-hidden rounded-[var(--radius-card)] lg:h-[calc(100dvh-15rem)]", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
+      className={cn("relative max-h-[calc(100dvh-13rem)] min-h-[360px] overflow-y-auto overflow-x-hidden rounded-[var(--radius-card)] lg:max-h-none lg:min-h-0 lg:flex-1", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
     >
       {marquee.box && <div className="pointer-events-none fixed z-30 rounded-[3px] border border-primary bg-primary/10" style={{ left: marquee.box.x, top: marquee.box.y, width: marquee.box.w, height: marquee.box.h }} />}
       {drag && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-primary-soft/40 text-[14px] font-semibold text-primary">Drop to upload here</div>}

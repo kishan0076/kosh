@@ -114,7 +114,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
   };
 
   return (
-    <aside className={cn("flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface p-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)]", collapsed ? "w-[68px]" : "w-full lg:w-[248px]")}>
+    <aside className={cn("flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface p-3 lg:h-full lg:overflow-y-auto", collapsed ? "w-[68px]" : "w-full lg:w-[248px]")}>
       {/* WorkspaceCrest */}
       <Menu
         align="start"

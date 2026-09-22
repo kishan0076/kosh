@@ -133,7 +133,7 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface lg:h-[calc(100dvh-7.5rem)]">
+    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface lg:h-full">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <Sparkles size={17} className="text-primary" />
         <span className="text-[14px] font-semibold">Insights</span>
@@ -151,9 +151,9 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {loading ? (
-          <div className="grid place-items-center py-16"><Spinner size={24} className="text-primary" /></div>
+          <div className="grid h-full min-h-[50vh] place-items-center"><Spinner size={26} className="text-primary" /></div>
         ) : error ? (
-          <div className="grid place-items-center py-16 text-center">
+          <div className="grid h-full min-h-[50vh] place-items-center text-center">
             <div><div className="text-[14px] font-semibold">Couldn't analyze</div><p className="mt-1 text-[13px] text-muted">{error}</p></div>
           </div>
         ) : tab === "overview" ? (

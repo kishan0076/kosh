@@ -40,7 +40,7 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface lg:h-[calc(100dvh-7.5rem)]">
+    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface lg:h-full">
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary-soft text-primary"><Activity size={18} /></span>
         <div className="min-w-0 flex-1">
