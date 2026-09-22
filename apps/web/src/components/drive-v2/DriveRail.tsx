@@ -120,7 +120,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
         align="start"
         width={248}
         trigger={({ toggle, ref }) => (
-          <button ref={ref} onClick={toggle} className={cn("relative flex items-center gap-2.5 overflow-hidden rounded-[var(--radius-control)] border border-gold/25 p-1.5 text-left transition-colors hover:bg-surface-2", collapsed && "justify-center border-transparent")}>
+          <button ref={ref} onClick={toggle} className={cn("relative flex shrink-0 items-center gap-2.5 overflow-hidden rounded-[var(--radius-control)] border border-gold/25 p-1.5 text-left transition-colors hover:bg-surface-2", collapsed && "justify-center border-transparent")}>
             <span className="pointer-events-none absolute inset-0 -z-10 mesh opacity-30" />
             <StorageRing pct={pct}>
               <Avatar name={account?.name ?? "Account"} src={account?.picture} size={34} />
@@ -157,7 +157,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
       </Menu>
 
       {/* New split-button */}
-      <div className="mt-3 flex items-stretch gap-px overflow-hidden rounded-[var(--radius-control)]">
+      <div className="mt-3 flex shrink-0 items-stretch gap-px overflow-hidden rounded-[var(--radius-control)]">
         <button onClick={onNewFolder} className={cn("flex flex-1 items-center justify-center gap-2 bg-primary text-[13.5px] font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary-hover", collapsed ? "h-10" : "h-10")} aria-label="New folder">
           <Plus size={17} /> {!collapsed && "New"}
         </button>
@@ -176,7 +176,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
       </div>
 
       {/* Grouped nav */}
-      <nav className="mt-3 space-y-0.5">
+      <nav className="mt-3 shrink-0 space-y-0.5">
         {!collapsed && <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">Browse</div>}
         {BROWSE.map((d) => <Item key={d.v} def={d} />)}
         <div className="my-2 h-px bg-border" />
@@ -185,7 +185,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
       </nav>
 
       {/* StorageMeter + collapse */}
-      <div className="mt-auto space-y-2 pt-3">
+      <div className="mt-auto shrink-0 space-y-2 pt-3">
         {quota && !collapsed && (
           <button onClick={() => useDriveV2.getState().setInsights(true)} className="block w-full rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 text-left transition-colors hover:border-border-strong">
             <div className="flex items-baseline justify-between">
