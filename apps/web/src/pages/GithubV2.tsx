@@ -188,6 +188,11 @@ function RepoList() {
         <div className="rounded-[var(--radius-card)] border border-dashed border-border bg-surface px-6 py-16 text-center">
           <p className="text-[14px] font-medium">{query || prefs.filter !== "all" ? "No repositories match" : "No repositories yet"}</p>
           <p className="mt-1 text-[13px] text-muted">{query || prefs.filter !== "all" ? "Try a different search or filter." : "Create your first repository to get started."}</p>
+          {!query && prefs.filter === "all" && (
+            <p className="mx-auto mt-3 max-w-md text-[12px] text-faint">
+              Expecting existing repos? Kosh needs a classic GitHub <span className="font-medium">OAuth App</span> (with the <span className="font-mono">repo</span> scope) — a <span className="font-medium">GitHub App</span> only shows repositories it's installed on. See <span className="font-mono">docs/GITHUB.md</span>.
+            </p>
+          )}
         </div>
       ) : prefs.layout === "grid" ? (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">

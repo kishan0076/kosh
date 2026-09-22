@@ -16,6 +16,13 @@ computer for a `.git` repo and a `.gitignore`.
 
 ## 1. Create a GitHub OAuth App
 
+> ⚠️ **Create a classic *OAuth App*, NOT a *GitHub App*.** They look similar in GitHub's UI but
+> behave very differently here: a classic OAuth App with the `repo` scope can see **all** your
+> repositories immediately, whereas a **GitHub App**'s token only sees repositories where the App is
+> *installed* — so the GitHub module shows **"No repositories yet"** even after a successful connect.
+> Tell them apart by the Client ID: OAuth Apps are ~20 hex characters; GitHub App IDs start with
+> `Iv…`. If you already made a GitHub App, just create an OAuth App instead and swap the credentials.
+
 GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**
 (for an org: **Org settings → Developer settings → OAuth Apps**).
 
@@ -34,9 +41,6 @@ GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**
   host. The host **and path prefix** must match, which is why both paths are registered.
 
 Copy the **Client ID** and generate a **Client secret**.
-
-> A GitHub *App* (as opposed to an OAuth App) also works, but the flow here is written for a
-> classic OAuth App. Fine-grained tokens differ in how scopes appear; see §4.
 
 ## 2. Configure the server
 
