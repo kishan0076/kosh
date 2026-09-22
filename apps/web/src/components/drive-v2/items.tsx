@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
+import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { Spinner } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
-import type { DriveView, SortKey } from "@/data/driveV2";
+import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { getDragIds, hasDriveDrag } from "./dnd";
 
 /**
@@ -70,6 +70,19 @@ const KIND_TINT: Record<DriveKind, string> = {
   archive: "text-muted",
   other: "text-muted",
 };
+/** The soft type wash behind a card's hero icon — the "engineered surface" color cue. */
+const KIND_HERO: Record<DriveKind, string> = {
+  folder: "bg-surface-2",
+  doc: "bg-info-soft",
+  sheet: "bg-ok-soft",
+  slide: "bg-warn-soft",
+  image: "bg-primary-soft",
+  video: "bg-danger-soft",
+  audio: "bg-gold-soft",
+  pdf: "bg-danger-soft",
+  archive: "bg-surface-3",
+  other: "bg-surface-2",
+};
 
 /** Thumbnail with graceful fallback to a kind icon (thumbnailLink is short-lived + auth-scoped). */
 export function NodeIcon({ node, size = 20, thumb = false }: { node: DriveNode; size?: number; thumb?: boolean }) {
@@ -98,6 +111,7 @@ export interface ItemHandlers {
   onClick: (node: DriveNode, e: ReactMouseEvent) => void;
   onContext: (node: DriveNode, e: ReactMouseEvent) => void;
   onToggleStar: (node: DriveNode) => void;
+  onToggleSelect: (node: DriveNode) => void;
   onMore: (node: DriveNode, e: ReactMouseEvent) => void;
   onRenameSubmit: (node: DriveNode, name: string) => void;
   onRenameCancel: () => void;
@@ -142,8 +156,25 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
   );
 }
 
+/** Small circular select control shown on hover / when selected (top-left of a card). */
+function SelectDisc({ selected, onToggle }: { selected: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      aria-label={selected ? "Deselect" : "Select"}
+      aria-pressed={selected}
+      className={cn(
+        "grid h-6 w-6 place-items-center rounded-full border backdrop-blur transition-opacity",
+        selected ? "border-primary bg-primary text-primary-foreground opacity-100" : "border-border-strong bg-surface/80 text-transparent opacity-0 hover:text-muted group-hover:opacity-100",
+      )}
+    >
+      <Check size={13} strokeWidth={3} />
+    </button>
+  );
+}
+
 /* ── list row ── */
-export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onContext, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   return (
     <div
@@ -157,23 +188,30 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group grid grid-cols-[minmax(0,1fr)_140px_120px_36px] items-center gap-3 border-b border-border px-3 py-2 text-[13px] transition-colors sm:grid-cols-[minmax(0,1fr)_150px_130px_36px]",
-        over ? "bg-primary-soft ring-1 ring-inset ring-primary" : selected ? "bg-primary-soft" : "hover:bg-surface-2",
+        "group grid grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-1.5 text-[13px] transition-colors md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
+        over ? "bg-primary-soft ring-1 ring-inset ring-primary" : selected ? "bg-primary-soft shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-surface-2",
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        <span className="grid h-7 w-7 shrink-0 place-items-center overflow-hidden rounded-md bg-surface-2">
-          <NodeIcon node={node} size={17} thumb />
+        <span className="relative grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface-2">
+          <NodeIcon node={node} size={18} thumb />
         </span>
         {renaming ? (
           <InlineRename node={node} onSubmit={(name) => onRenameSubmit(node, name)} onCancel={onRenameCancel} />
         ) : (
           <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
         )}
-        {node.starred && <Star size={13} className="shrink-0 fill-gold text-gold" />}
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
+          className={cn("shrink-0 rounded p-0.5 transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 group-hover:opacity-100")}
+          aria-label={node.starred ? "Unstar" : "Star"}
+        >
+          <Star size={13} className={cn(node.starred && "fill-gold")} />
+        </button>
       </div>
-      <span className="hidden truncate text-[12px] text-muted sm:block">{node.owners?.[0]?.displayName ?? (node.ownedByMe ? "me" : "—")}</span>
-      <span className="truncate text-[12px] text-muted">{node.modifiedTime ? ago(node.modifiedTime) : "—"}</span>
+      <span className="hidden truncate text-[12px] text-muted md:block">{node.owners?.[0]?.displayName ?? (node.ownedByMe ? "me" : "—")}</span>
+      <span className="hidden justify-self-end font-mono text-[11.5px] tabular text-muted md:block">{!node.isFolder && node.size != null ? formatBytes(node.size) : "—"}</span>
+      <span className="truncate font-mono text-[11.5px] tabular text-muted">{node.modifiedTime ? ago(node.modifiedTime) : "—"}</span>
       <div className="flex items-center justify-end">
         {busy ? (
           <Spinner size={14} className="text-muted" />
@@ -192,8 +230,9 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
 }
 
 /* ── grid card ── */
-export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
+  const kind = kindOf(node);
   return (
     <div
       role="gridcell"
@@ -206,13 +245,38 @@ export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onCo
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group relative flex flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-colors",
-        over ? "border-primary ring-2 ring-primary" : selected ? "border-primary ring-1 ring-primary" : "border-border hover:border-border-strong hover:bg-surface-2",
+        "group relative flex flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow,border-color] duration-200 will-change-transform",
+        over
+          ? "border-primary bg-primary-soft ring-2 ring-primary"
+          : selected
+            ? "-translate-y-0.5 border-primary bg-primary-soft/40 shadow-card ring-2 ring-primary"
+            : "card-hover border-border hover:border-border-strong",
       )}
     >
-      <div className="relative flex h-28 items-center justify-center overflow-hidden bg-surface-2">
-        <NodeIcon node={node} size={38} thumb />
-        <div className="absolute right-1.5 top-1.5 flex items-center gap-1">
+      {/* folder color top-strip (the one sanctioned inline-hex spot) */}
+      {node.isFolder && (
+        <span className={cn("h-[3px] w-full shrink-0", !node.folderColorRgb && "bg-primary")} style={node.folderColorRgb ? { backgroundColor: node.folderColorRgb } : undefined} />
+      )}
+      <div className={cn("relative flex h-36 items-center justify-center overflow-hidden", KIND_HERO[kind])}>
+        {/* faint top light for a physical, lit feel */}
+        <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/10 to-transparent dark:from-white/5" />
+        {node.isFolder ? (
+          over ? (
+            <FolderOpen size={44} style={{ color: node.folderColorRgb || undefined }} className={cn(!node.folderColorRgb && "text-primary")} />
+          ) : (
+            <Folder size={44} style={{ color: node.folderColorRgb || undefined }} className={cn("transition-transform group-hover:scale-105", !node.folderColorRgb && "text-primary")} />
+          )
+        ) : (
+          <NodeIcon node={node} size={44} thumb />
+        )}
+
+        {/* select disc */}
+        <div className="absolute left-2 top-2">
+          <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} />
+        </div>
+
+        {/* star + more (frosted pill) */}
+        <div className="absolute right-2 top-2 flex items-center gap-1">
           <button
             onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
             className={cn("grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur transition-opacity hover:bg-surface", node.starred ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
@@ -233,24 +297,38 @@ export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onCo
           )}
         </div>
       </div>
-      <div className="flex items-center gap-2 px-2.5 py-2">
-        <span className="grid h-5 w-5 shrink-0 place-items-center"><NodeIcon node={node} size={15} /></span>
+
+      <div className="flex flex-col gap-0.5 px-3 py-2.5">
         {renaming ? (
-          <InlineRename node={node} onSubmit={(name) => onRenameSubmit(node, name)} onCancel={onRenameCancel} />
+          <InlineRename node={node} onSubmit={(name) => onRenameSubmit(node, name)} onCancel={onRenameCancel} center />
         ) : (
-          <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{node.name}</span>
+          <div className="flex items-center gap-1.5">
+            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.name}</span>
+          </div>
         )}
+        <span className="truncate font-mono text-[11px] tabular text-faint">{metaLine(node)}</span>
       </div>
     </div>
   );
 }
 
+/* ── sortable list header (reads sort state from the store) ── */
 export function ListHeader() {
+  const sortKey = useDriveV2((s) => s.prefs.sortKey);
+  const sortDir = useDriveV2((s) => s.prefs.sortDir);
+  const setSort = useDriveV2((s) => s.setSort);
+  const caret = (k: SortKey) => (sortKey === k ? (sortDir === "asc" ? " ↑" : " ↓") : "");
+  const SortBtn = ({ k, label, className }: { k: SortKey; label: string; className?: string }) => (
+    <button onClick={() => setSort(k)} className={cn("inline-flex items-center text-left transition-colors hover:text-foreground", sortKey === k && "text-primary", className)}>
+      {label}<span className="tabular">{caret(k)}</span>
+    </button>
+  );
   return (
-    <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_140px_120px_36px] gap-3 border-b border-border bg-surface px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-faint sm:grid-cols-[minmax(0,1fr)_150px_130px_36px]">
-      <span>Name</span>
-      <span className="hidden sm:block">Owner</span>
-      <span>Modified</span>
+    <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_104px_36px] gap-3 border-b border-border bg-background/85 px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-faint backdrop-blur md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]">
+      <SortBtn k="name" label="Name" />
+      <span className="hidden md:block">Owner</span>
+      <SortBtn k="size" label="Size" className="hidden justify-self-end md:inline-flex" />
+      <SortBtn k="modified" label="Modified" />
       <span />
     </div>
   );
@@ -260,50 +338,52 @@ export function ListHeader() {
 export function DriveContentSkeleton({ layout }: { layout: "grid" | "list" }) {
   if (layout === "grid") {
     return (
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(160px,1fr))] gap-3 p-4">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-4">
         {Array.from({ length: 12 }).map((_, i) => (
-          <div key={i} className="overflow-hidden rounded-[var(--radius-card)] border border-border">
-            <div className="shimmer h-28" />
-            <div className="flex items-center gap-2 px-2.5 py-2"><div className="shimmer h-4 w-4 rounded" /><div className="shimmer h-3 flex-1 rounded" /></div>
+          <div key={i} className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+            <div className="shimmer h-36" />
+            <div className="flex flex-col gap-1.5 px-3 py-2.5"><div className="shimmer h-3.5 w-3/4 rounded" /><div className="shimmer h-2.5 w-1/2 rounded" /></div>
           </div>
         ))}
       </div>
     );
   }
   return (
-    <div>
-      {Array.from({ length: 10 }).map((_, i) => (
-        <div key={i} className="grid grid-cols-[minmax(0,1fr)_150px_130px_36px] items-center gap-3 border-b border-border px-3 py-2.5">
-          <div className="flex items-center gap-2.5"><div className="shimmer h-7 w-7 rounded-md" /><div className="shimmer h-3.5 w-1/3 rounded" /></div>
-          <div className="shimmer h-3 w-20 rounded" /><div className="shimmer h-3 w-16 rounded" /><div />
+    <div className="space-y-0.5">
+      {Array.from({ length: 12 }).map((_, i) => (
+        <div key={i} className="grid grid-cols-[minmax(0,1fr)_150px_96px_128px_36px] items-center gap-3 px-2.5 py-2">
+          <div className="flex items-center gap-2.5"><div className="shimmer h-8 w-8 rounded-[8px]" /><div className="shimmer h-3.5 w-1/3 rounded" /></div>
+          <div className="shimmer h-3 w-20 rounded" /><div className="shimmer h-3 w-12 justify-self-end rounded" /><div className="shimmer h-3 w-16 rounded" /><div />
         </div>
       ))}
     </div>
   );
 }
 
-const EMPTY_COPY: Record<DriveView, { icon: typeof Folder; title: string; body: string }> = {
-  myDrive: { icon: FolderOpen, title: "This folder is empty", body: "Upload files or create a folder to get started." },
-  recent: { icon: File, title: "Nothing recent", body: "Files you open or edit will show up here." },
-  starred: { icon: Star, title: "No starred items", body: "Star files and folders to find them fast." },
-  trash: { icon: FolderOpen, title: "Trash is empty", body: "Items you delete land here for 30 days." },
-  shared: { icon: FolderOpen, title: "Nothing shared with you", body: "Files others share with you will appear here." },
-  search: { icon: Search, title: "No matches", body: "Try a different search term." },
+const EMPTY_COPY: Record<DriveView, { icon: typeof Folder; title: string; body: string; tint: string }> = {
+  myDrive: { icon: FolderOpen, title: "This folder is empty", body: "Drop files anywhere to upload, or create a folder to get started.", tint: "text-primary" },
+  recent: { icon: File, title: "Nothing recent yet", body: "Files you open or edit will show up here.", tint: "text-info" },
+  starred: { icon: Star, title: "No starred items", body: "Star files and folders to find them fast.", tint: "text-gold" },
+  trash: { icon: FolderOpen, title: "Trash is empty", body: "Items you delete rest here for 30 days before they're gone.", tint: "text-muted" },
+  shared: { icon: FolderOpen, title: "Nothing shared with you", body: "Files others share with you will appear here.", tint: "text-info" },
+  search: { icon: Search, title: "No matches", body: "Try a different term, or use operators like type: owner: before:", tint: "text-muted" },
 };
 
 export function DriveEmptyState({ view, onUpload }: { view: DriveView; onUpload?: () => void }) {
-  const { icon: Icon, title, body } = EMPTY_COPY[view];
+  const { icon: Icon, title, body, tint } = EMPTY_COPY[view];
   return (
-    <div className="grid min-h-[320px] place-items-center p-6 text-center">
-      <div>
-        <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-surface-2 text-muted"><Icon size={26} /></span>
-        <div className="text-[15px] font-semibold">{title}</div>
-        <p className="mx-auto mt-1 max-w-xs text-[13px] text-muted">{body}</p>
+    <div className="grid min-h-[360px] place-items-center p-6 text-center">
+      <div className="relative">
+        <span className="pointer-events-none absolute -inset-10 -z-10 mesh opacity-40" />
+        <span className={cn("mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-primary-soft", tint)}><Icon size={30} /></span>
+        <div className="font-display text-[17px] font-semibold">{title}</div>
+        <p className="mx-auto mt-1.5 max-w-xs text-[13px] text-muted">{body}</p>
         {view === "myDrive" && onUpload && (
-          <button onClick={onUpload} className="mx-auto mt-4 inline-flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-3.5 py-2 text-[13px] font-medium hover:bg-surface-2">
+          <button onClick={onUpload} className="mx-auto mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 py-2 text-[13px] font-medium text-primary-foreground shadow-sm hover:bg-primary-hover">
             <UploadCloud size={15} /> Upload files
           </button>
         )}
+        <div className="mt-5 font-mono text-[11px] text-faint">Press ⌘K to search · Drop files anywhere to upload</div>
       </div>
     </div>
   );
@@ -311,11 +391,12 @@ export function DriveEmptyState({ view, onUpload }: { view: DriveView; onUpload?
 
 export function DriveErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
-    <div className="grid min-h-[320px] place-items-center p-6 text-center">
+    <div className="grid min-h-[360px] place-items-center p-6 text-center">
       <div>
-        <div className="text-[15px] font-semibold">Couldn't load this</div>
-        <p className="mx-auto mt-1 max-w-sm text-[13px] text-muted">{message}</p>
-        <button onClick={onRetry} className="mx-auto mt-4 inline-flex items-center gap-2 rounded-[var(--radius-control)] bg-primary px-3.5 py-2 text-[13px] font-medium text-primary-foreground hover:bg-primary-hover">
+        <span className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-danger-soft text-danger"><FileText size={28} /></span>
+        <div className="font-display text-[17px] font-semibold">Couldn't load this</div>
+        <p className="mx-auto mt-1.5 max-w-sm text-[13px] text-muted">{message}</p>
+        <button onClick={onRetry} className="mx-auto mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 py-2 text-[13px] font-medium text-primary-foreground shadow-sm hover:bg-primary-hover">
           Retry
         </button>
       </div>

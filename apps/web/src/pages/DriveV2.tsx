@@ -12,7 +12,6 @@ import {
   Download,
   ExternalLink,
   Filter,
-  FolderPlus,
   HardDrive,
   History,
   LayoutGrid,
@@ -28,7 +27,6 @@ import {
   Star,
   Trash2,
   Type,
-  Upload,
   Users,
   X,
 } from "lucide-react";
@@ -42,6 +40,7 @@ import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, sortNodes, type ItemHandlers } from "@/components/drive-v2/items";
+import { PageHeader } from "@/components/drive-v2/PageHeader";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
 import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components/drive-v2/modals";
 import { ShareModal } from "@/components/drive-v2/ShareModal";
@@ -51,7 +50,7 @@ import { ActivityPanel } from "@/components/drive-v2/ActivityPanel";
 import { RevisionsModal } from "@/components/drive-v2/RevisionsModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
-import { getDragIds, hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
+import { hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
 import { drivePaneKey, useDriveV2UrlSync } from "@/data/driveV2Url";
 import { FadeSwap } from "@/components/motion";
 import { ago } from "@/lib/time";
@@ -165,6 +164,14 @@ function Shell() {
     return sortNodes(filtered, prefs.sortKey, prefs.sortDir);
   }, [nodes, prefs]);
   const orderedIds = useMemo(() => visible.map((n) => n.id), [visible]);
+  const headerStats = useMemo(
+    () => ({
+      count: visible.length,
+      bytes: visible.reduce((a, n) => a + (n.isFolder ? 0 : n.size ?? 0), 0),
+      folders: visible.filter((n) => n.isFolder).length,
+    }),
+    [visible],
+  );
 
 
   /** Ids an action should target: the whole selection if the node is part of a multi-select, else just it. */
@@ -185,6 +192,7 @@ function Shell() {
       setMenu({ ids: targetsFor(node), node, x: e.clientX, y: e.clientY });
     },
     onToggleStar: (node) => void store.getState().toggleStar(node.id),
+    onToggleSelect: (node) => store.getState().toggleSelect(node.id, { meta: true }, orderedIds),
     onMore: (node, e) => {
       if (!selection.has(node.id)) store.getState().toggleSelect(node.id, {}, orderedIds);
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -218,8 +226,13 @@ function Shell() {
           ) : insightsOpen ? (
             <InsightsPanel onClose={() => store.getState().setInsights(false)} />
           ) : (
-          <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-            <DriveToolbar onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })} onUpload={() => fileInputRef.current?.click()} />
+          <div className="flex min-w-0 flex-col">
+            <PageHeader
+              stats={headerStats}
+              onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
+              onUpload={() => fileInputRef.current?.click()}
+            />
+            <DriveToolbar />
             {selection.size > 0 && <SelectionBar />}
             <DriveContentArea
               view={view}
@@ -236,7 +249,7 @@ function Shell() {
               onDropFiles={(files) => void store.getState().uploadFiles(files)}
             />
             {nextPageToken && !listLoading && (
-              <div className="border-t border-border p-3 text-center">
+              <div className="p-3 text-center">
                 <Button variant="ghost" size="sm" onClick={() => void store.getState().loadMore()} disabled={loadingMore}>
                   {loadingMore ? <Spinner size={14} /> : <ChevronRight size={14} className="rotate-90" />} Load more
                 </Button>
@@ -466,15 +479,11 @@ function SpacePicker() {
   );
 }
 
-/* ── toolbar ── */
-function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUpload: () => void }) {
+/* ── toolbar (utility strip on the borderless canvas) ── */
+function DriveToolbar() {
   const view = useDriveV2((s) => s.view);
-  const path = useDriveV2((s) => s.path);
   const prefs = useDriveV2((s) => s.prefs);
   const searchQuery = useDriveV2((s) => s.searchQuery);
-  const emptyTrash = useDriveV2((s) => s.emptyTrash);
-  const spaceId = useDriveV2((s) => s.spaceId);
-  const spaceName = useDriveV2((s) => s.spaceName);
   const [q, setQ] = useState(searchQuery);
   const [saved, setSaved] = useState<{ query: string }[]>(() => { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; } });
   const persistSaved = (next: { query: string }[]) => { setSaved(next); try { localStorage.setItem(SAVED_KEY, JSON.stringify(next)); } catch { /* private mode */ } };
@@ -497,34 +506,15 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
   ];
 
   return (
-    <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-border bg-surface/85 px-3 py-2.5 backdrop-blur">
-      <div className="mr-auto flex min-w-0 items-center gap-1 text-[13px]">
-        {view === "myDrive" ? (
-          <>
-            <CrumbButton folderId={spaceId ?? "root"} onClick={() => useDriveV2.getState().goRoot()} className="font-medium">{spaceName ?? "My Drive"}</CrumbButton>
-            {path.map((f, i) => (
-              <span key={f.id} className="flex min-w-0 items-center gap-0.5">
-                <ChevronRight size={13} className="shrink-0 text-faint" />
-                {i === path.length - 1 ? (
-                  <span className="max-w-[180px] truncate px-1.5 py-0.5 font-semibold">{f.name}</span>
-                ) : (
-                  <CrumbButton folderId={f.id} onClick={() => useDriveV2.getState().breadcrumbTo(i)} className="max-w-[140px] truncate">{f.name}</CrumbButton>
-                )}
-              </span>
-            ))}
-          </>
-        ) : (
-          <span className="px-1.5 font-semibold capitalize">{view}</span>
-        )}
-      </div>
-
-      <SyncPill />
-
-      <label className="flex h-9 min-w-0 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-2.5 focus-within:border-primary focus-within:ring-focus">
+    <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-border bg-background/80 py-2 backdrop-blur">
+      <label className="mr-auto flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 focus-within:border-primary focus-within:ring-focus sm:max-w-sm">
         <Search size={15} className="shrink-0 text-muted" />
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search Drive…" className="min-w-0 w-40 bg-transparent text-[13px] outline-none sm:w-52" />
+        <span className="hidden shrink-0 rounded-[var(--radius-chip)] bg-surface-3 px-1.5 py-0.5 text-[10.5px] capitalize text-muted sm:inline">{view === "myDrive" ? "My Drive" : view === "search" ? "results" : view}</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search Drive… (⌘K)" className="min-w-0 flex-1 bg-transparent text-[13px] outline-none" />
         {q && <button onClick={() => setQ("")} aria-label="Clear search"><X size={14} className="text-faint hover:text-foreground" /></button>}
       </label>
+
+      <SyncPill />
 
       <Menu align="end" width={240} trigger={({ toggle, ref }) => (
         <button ref={ref} onClick={toggle} className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted hover:bg-surface-2" aria-label="Saved searches"><Bookmark size={15} /></button>
@@ -565,32 +555,7 @@ function DriveToolbar({ onNewFolder, onUpload }: { onNewFolder: () => void; onUp
         <button onClick={() => useDriveV2.getState().setLayout("grid")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid view"><LayoutGrid size={15} /></button>
         <button onClick={() => useDriveV2.getState().setLayout("list")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List view"><ListIcon size={15} /></button>
       </div>
-
-      {view === "trash" ? (
-        <Button variant="outline" size="sm" onClick={() => void emptyTrash()}><Trash2 size={14} /> Empty trash</Button>
-      ) : (
-        <>
-          <Button variant="secondary" size="sm" onClick={onNewFolder}><FolderPlus size={15} /> New folder</Button>
-          <Button variant="primary" size="sm" onClick={onUpload}><Upload size={15} /> Upload</Button>
-        </>
-      )}
     </div>
-  );
-}
-
-/** A breadcrumb segment that also accepts an internal drag to move items into that folder. */
-function CrumbButton({ folderId, onClick, className, children }: { folderId: string; onClick: () => void; className?: string; children: ReactNode }) {
-  const [over, setOver] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      onDragOver={(e) => { if (hasDriveDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOver(true); } }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => { if (!hasDriveDrag(e)) return; e.preventDefault(); setOver(false); const ids = getDragIds(e); if (ids?.length) void useDriveV2.getState().move(ids, folderId); }}
-      className={cn("rounded px-1.5 py-0.5 hover:bg-surface-2", over && "bg-primary-soft ring-1 ring-primary", className)}
-    >
-      {children}
-    </button>
   );
 }
 
@@ -702,7 +667,7 @@ function DriveContentArea({
       onDragOver={canDrop ? (e) => { if (hasExternalFiles(e) && !hasDriveDrag(e)) { e.preventDefault(); setDrag(true); } } : undefined}
       onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
       onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
-      className={cn("relative max-h-[calc(100dvh-14rem)] min-h-[320px] overflow-y-auto", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
+      className={cn("relative max-h-[calc(100dvh-16rem)] min-h-[360px] overflow-y-auto rounded-[var(--radius-card)]", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
     >
       {marquee.box && <div className="pointer-events-none fixed z-30 rounded-[3px] border border-primary bg-primary/10" style={{ left: marquee.box.x, top: marquee.box.y, width: marquee.box.w, height: marquee.box.h }} />}
       {drag && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-primary-soft/40 text-[14px] font-semibold text-primary">Drop to upload here</div>}
@@ -725,7 +690,7 @@ type ItemRowProps = { node: DriveNode; selected: boolean; busy: boolean; renamin
 
 /** Virtualized list — only the visible rows are mounted, so 10k-item folders stay smooth. */
 function VirtualList({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HTMLDivElement | null>; visible: DriveNode[]; rowProps: (n: DriveNode) => ItemRowProps }) {
-  const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => 41, overscan: 12 });
+  const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => 48, overscan: 12 });
   return (
     <div>
       <ListHeader />
@@ -750,16 +715,16 @@ function VirtualGrid({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HT
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
-    const compute = () => { const w = el.clientWidth - 24; const min = 150, gap = 12; setCols(Math.max(1, Math.floor((w + gap) / (min + gap)))); }; // -24 = p-3 horizontal padding
+    const compute = () => { const w = el.clientWidth; const min = 176, gap = 16; setCols(Math.max(1, Math.floor((w + gap) / (min + gap)))); };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
   const rows = Math.ceil(visible.length / cols);
-  const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => 174, overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
+  const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => 208, overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
   return (
-    <div ref={gridRef} className="p-3">
+    <div ref={gridRef} className="py-2">
       <div style={{ height: virt.getTotalSize(), position: "relative" }}>
         {virt.getVirtualItems().map((vr) => {
           const items = visible.slice(vr.index * cols, vr.index * cols + cols);
@@ -768,7 +733,7 @@ function VirtualGrid({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HT
               key={vr.key}
               data-index={vr.index}
               ref={virt.measureElement}
-              style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "12px", paddingBottom: "12px" }}
+              style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px", paddingBottom: "16px" }}
             >
               {items.map((n) => <FileCard key={n.id} {...rowProps(n)} />)}
             </div>
