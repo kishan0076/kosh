@@ -10,6 +10,66 @@ export function githubClient(token?: string | null): Octokit {
   return new Octokit({ auth: token ?? config.github.token ?? undefined });
 }
 
+/* ── OAuth "Connect GitHub" (browser consent → a token we store to manage repos) ─── */
+
+/** True when the OAuth app is configured so the connect button can be offered. */
+export function githubOAuthConfigured(): boolean {
+  return !!config.github.clientId && !!config.github.clientSecret;
+}
+
+/** Scopes the connect flow requests: full repo CRUD + push, repo delete, Actions, and the profile. */
+export function githubConnectScopes(): string {
+  return "repo read:user delete_repo workflow";
+}
+
+/** Build the GitHub authorize URL for the connect flow (`state` is a signed CSRF token). */
+export function githubAuthorizeUrl(state: string, redirectUri: string): string {
+  const url = new URL("https://github.com/login/oauth/authorize");
+  url.searchParams.set("client_id", config.github.clientId ?? "");
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("scope", githubConnectScopes());
+  url.searchParams.set("state", state);
+  url.searchParams.set("allow_signup", "false");
+  return url.toString();
+}
+
+export interface GithubTokenGrant {
+  accessToken: string;
+  scopes: string[];
+}
+
+/** Exchange an OAuth `code` for an access token. Throws GithubAuthError when GitHub declines. */
+export async function exchangeGithubCode(code: string, redirectUri: string): Promise<GithubTokenGrant> {
+  const res = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: config.github.clientId,
+      client_secret: config.github.clientSecret,
+      code,
+      redirect_uri: redirectUri,
+    }),
+  });
+  const json = (await res.json().catch(() => ({}))) as { access_token?: string; scope?: string; error?: string; error_description?: string };
+  if (!json.access_token) throw new GithubAuthError(json.error_description || json.error || "GitHub didn't return an access token.");
+  const scopes = (json.scope ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return { accessToken: json.access_token, scopes };
+}
+
+export interface GithubIdentity {
+  id: string;
+  login: string;
+  name?: string;
+  avatarUrl?: string;
+}
+
+/** Fetch the authenticated user's public profile (used to label the connected account). */
+export async function getGithubIdentity(token: string): Promise<GithubIdentity> {
+  const gh = githubClient(token);
+  const me = await gh.rest.users.getAuthenticated();
+  return { id: String(me.data.id), login: me.data.login, name: me.data.name ?? undefined, avatarUrl: me.data.avatar_url ?? undefined };
+}
+
 /* ── Publish a folder to a new repo (create → tree → commit → ref) ─── */
 
 /** A repository name that's already taken on the account. */

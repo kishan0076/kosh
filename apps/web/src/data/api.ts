@@ -212,6 +212,11 @@ export const api = {
   githubStatus: () => req<{ connected: boolean }>("/settings/github-token"),
   setGithubToken: (token: string) => req<{ connected: boolean; login: string; scopes: string[] }>("/settings/github-token", { method: "PUT", body: JSON.stringify({ token }) }),
   clearGithubToken: () => req<{ connected: boolean }>("/settings/github-token", { method: "DELETE" }),
+  // "Connect GitHub" one-click OAuth. `githubConnectUrl` is a full-page redirect that starts consent;
+  // `from` records the page to return to ("publish" | "github").
+  githubConnectConfig: () => req<{ oauth: boolean; scopes: string[] }>("/github/config"),
+  githubConnectUrl: (from?: string) => `${API_BASE}/github/auth${from ? `?from=${encodeURIComponent(from)}` : ""}`,
+  githubDisconnect: () => req<{ connected: boolean }>("/github/disconnect", { method: "POST" }),
 
   listApiKeys: () => req<{ apiKeys: ApiKeyPublic[] }>("/settings/api-keys"),
   // Returns the full plaintext key ONCE — the server only stores its hash, so it can never be shown again.

@@ -62,6 +62,9 @@ export function createApp(): Express {
   api.use("/email", limiter(30));
   api.use("/uploads", limiter(120));
   api.use("/repos", limiter(20));
+  // The GitHub module (connect flow + repo listing/management) is chattier than publishing, so it gets
+  // its own generous per-IP bucket rather than sharing the strict /repos publish limit.
+  api.use("/github", limiter(120));
   api.use("/vault", limiter(60));
   api.use("/drive", limiter(120));
   // Google's changes.watch webhook is unauthenticated and all pings share Google's source IPs, so it

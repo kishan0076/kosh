@@ -61,7 +61,14 @@ export function publicUser(u: ServerUser) {
     aiSpendToday: u.aiSpendToday,
     aiSpendCap: u.aiSpendCap,
     emailToken: u.emailToken,
-    github: { connected: !!u.githubToken },
+    github: {
+      connected: !!u.githubToken,
+      login: u.githubToken ? u.githubLogin : undefined,
+      name: u.githubToken ? u.githubName : undefined,
+      avatarUrl: u.githubToken ? u.githubAvatarUrl : undefined,
+      scopes: u.githubToken && u.githubScopes ? u.githubScopes.split(" ").filter(Boolean) : undefined,
+      source: u.githubToken ? u.githubTokenSource ?? "pat" : undefined,
+    },
     isAdmin: isAdmin(u),
   };
 }

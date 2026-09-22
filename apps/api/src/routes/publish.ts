@@ -162,7 +162,13 @@ publishRouter.put(
     const { token } = z.object({ token: z.string().min(10).max(500) }).parse(req.body);
     const info = await validateGithubToken(token);
     if (!info) throw badRequest("INVALID_TOKEN", "That token didn't work. Check it has repo access and hasn't expired.");
-    await getStore().users.updateById(uid, { githubToken: encryptSecret(token) });
+    await getStore().users.updateById(uid, {
+      githubToken: encryptSecret(token),
+      githubLogin: info.login,
+      githubScopes: info.scopes.join(" "),
+      githubTokenSource: "pat",
+      githubConnectedAt: nowIso(),
+    });
     res.json({ connected: true, login: info.login, scopes: info.scopes });
   }),
 );
@@ -171,7 +177,15 @@ publishRouter.delete(
   "/settings/github-token",
   ah(async (req, res) => {
     const uid = requireWrite(req);
-    await getStore().users.updateById(uid, { githubToken: "" });
+    await getStore().users.updateById(uid, {
+      githubToken: "",
+      githubLogin: "",
+      githubName: "",
+      githubAvatarUrl: "",
+      githubScopes: "",
+      githubTokenSource: undefined,
+      githubConnectedAt: "",
+    });
     res.json({ connected: false });
   }),
 );

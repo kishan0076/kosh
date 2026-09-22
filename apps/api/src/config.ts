@@ -44,6 +44,9 @@ export const config = {
     // A server token used for enrichment when a user hasn't connected OAuth.
     // (In this sandbox the proxy blocks api.github.com, so enrichment degrades gracefully.)
     token: env.KOSH_GITHUB_TOKEN || null,
+    // The OAuth callback for the "Connect GitHub" flow. Register this URL on the OAuth App (OAuth Apps
+    // accept up to 10 callback URLs, so it can coexist with the /api/auth/github/callback login URL).
+    connectRedirectUri: env.GITHUB_CONNECT_REDIRECT_URI || `${env.API_URL ?? `http://localhost:${env.PORT ?? 8787}`}/api/github/auth/callback`,
   },
 
   // Google Drive integration (OAuth 2.0). Unset creds → the feature runs in demo mode and the

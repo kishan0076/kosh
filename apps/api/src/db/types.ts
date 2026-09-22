@@ -4,6 +4,13 @@ import type { ApiKey, Collection, Item, Skill, User } from "@kosh/shared";
 export interface ServerUser extends User {
   githubId?: string;
   githubToken?: string; // encrypted at rest in production
+  // Connected-GitHub metadata (safe to show; the token above is never exposed).
+  githubLogin?: string;
+  githubName?: string;
+  githubAvatarUrl?: string;
+  githubScopes?: string; // space-joined OAuth scopes the stored token carries
+  githubTokenSource?: "oauth" | "pat"; // how the token was obtained (Connect button vs. pasted PAT)
+  githubConnectedAt?: string;
   aiSpendDate?: string;
   telegramChatId?: number;
 }

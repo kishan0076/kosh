@@ -303,7 +303,14 @@ export interface User {
   /** Opaque, unguessable token for the user's inbound email address (inbox+<token>@…). */
   emailToken?: string;
   /** GitHub connection status (a write-capable token is stored) — never the token itself. */
-  github?: { connected?: boolean };
+  github?: {
+    connected?: boolean;
+    login?: string;
+    name?: string;
+    avatarUrl?: string;
+    scopes?: string[];
+    source?: "oauth" | "pat";
+  };
   /** Whether this user may access the admin-only Secure Vault. */
   isAdmin?: boolean;
 }

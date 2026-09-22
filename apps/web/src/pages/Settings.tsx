@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Blocks,
   Bookmark,
@@ -91,6 +91,35 @@ export function Settings() {
   const ghConnected = user.github?.connected ?? false;
   const [ghToken, setGhToken] = useState("");
   const [ghConnecting, setGhConnecting] = useState(false);
+  const [ghOauth, setGhOauth] = useState(false);
+  const [showTokenEntry, setShowTokenEntry] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Is one-click "Connect GitHub" (OAuth) available?
+  useEffect(() => {
+    if (!backend) return;
+    let live = true;
+    api.githubConnectConfig().then((c) => { if (live) setGhOauth(c.oauth); }).catch(() => {});
+    return () => { live = false; };
+  }, [backend]);
+
+  // Handle the OAuth return (?github_connected | ?github_error) once, then strip the params.
+  useEffect(() => {
+    const okLogin = searchParams.get("github_connected");
+    const errCode = searchParams.get("github_error");
+    if (!okLogin && !errCode) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("github_connected");
+    next.delete("github_error");
+    setSearchParams(next, { replace: true });
+    if (okLogin) {
+      void api.me().then((me) => useData.setState({ user: me.user })).catch(() => {});
+      toast({ message: `GitHub connected as @${okLogin}`, tone: "ok" });
+    } else if (errCode) {
+      toast({ message: "GitHub connection failed. Please try again.", tone: "danger" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // In backend mode the server is the source of truth — replace the demo rows with the real ones.
   useEffect(() => {
@@ -302,34 +331,59 @@ export function Settings() {
             </div>
           ) : ghConnected ? (
             <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok">
-                <Check size={16} />
-              </span>
+              {user.github?.avatarUrl ? (
+                <img src={user.github.avatarUrl} alt="" referrerPolicy="no-referrer" className="h-8 w-8 shrink-0 rounded-full" />
+              ) : (
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><Check size={16} /></span>
+              )}
               <div className="min-w-0 flex-1">
-                <div className="text-[13.5px] font-medium">Connected</div>
-                <div className="text-[12px] text-faint">A token with repo access is stored (encrypted).</div>
+                <div className="text-[13.5px] font-medium">Connected{user.github?.login ? ` as @${user.github.login}` : ""}</div>
+                <div className="text-[12px] text-faint">
+                  {user.github?.source === "oauth" ? "Connected with GitHub" : "A token with repo access is stored"} (encrypted).
+                  {user.github?.scopes?.length ? ` Scopes: ${user.github.scopes.join(", ")}.` : ""}
+                </div>
               </div>
               <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={disconnectGithub}>
                 Disconnect
               </Button>
             </div>
           ) : (
-            <div>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <input
-                  type="password"
-                  value={ghToken}
-                  onChange={(e) => setGhToken(e.target.value)}
-                  placeholder="ghp_… or github_pat_…"
-                  className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
-                />
-                <Button variant="primary" onClick={connectGithub} disabled={ghConnecting || ghToken.trim().length < 10}>
-                  {ghConnecting ? <RefreshCw size={15} className="animate-spin" /> : <Github size={15} />} Connect
-                </Button>
-              </div>
-              <p className="mt-2 text-[12px] text-faint">
-                Create a token at github.com/settings/tokens with the <span className="font-mono">repo</span> scope. Stored encrypted; never shown again.
-              </p>
+            <div className="space-y-3">
+              {ghOauth && (
+                <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-primary/30 bg-primary-soft/40 px-3.5 py-3">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface text-foreground shadow-[var(--shadow-sm)]"><Github size={18} /></span>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13.5px] font-medium">Connect with one click</div>
+                    <div className="text-[12px] text-muted">Approve on GitHub and land right back here — nothing to paste.</div>
+                  </div>
+                  <Button variant="primary" onClick={() => { window.location.href = api.githubConnectUrl("settings"); }}>
+                    <Github size={15} /> Connect GitHub
+                  </Button>
+                </div>
+              )}
+              {ghOauth && !showTokenEntry ? (
+                <button onClick={() => setShowTokenEntry(true)} className="text-[12.5px] font-medium text-muted underline-offset-2 hover:text-foreground hover:underline">
+                  Prefer a Personal Access Token? Paste one instead
+                </button>
+              ) : (
+                <div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      type="password"
+                      value={ghToken}
+                      onChange={(e) => setGhToken(e.target.value)}
+                      placeholder="ghp_… or github_pat_…"
+                      className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
+                    />
+                    <Button variant={ghOauth ? "outline" : "primary"} onClick={connectGithub} disabled={ghConnecting || ghToken.trim().length < 10}>
+                      {ghConnecting ? <RefreshCw size={15} className="animate-spin" /> : <ShieldCheck size={15} />} Connect token
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-[12px] text-faint">
+                    Create a token at github.com/settings/tokens with the <span className="font-mono">repo</span> scope. Stored encrypted; never shown again.
+                  </p>
+                </div>
+              )}
             </div>
           )}
         </SectionCard>

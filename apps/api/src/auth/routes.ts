@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
@@ -24,6 +25,12 @@ function allowed(login: string): boolean {
   return config.allowedLogins.length === 0 || config.allowedLogins.includes(login);
 }
 
+// CSRF for the login OAuth flow: a random nonce echoed in the URL and set as a short-lived cookie, then
+// compared on the callback (double-submit). Without it a forged callback could log a victim into an
+// attacker-controlled GitHub account.
+const LOGIN_STATE_COOKIE = "kosh_login_state";
+const loginStateCookieOpts = () => ({ httpOnly: true, sameSite: "lax" as const, secure: config.cookieSecure, path: "/", maxAge: 10 * 60 * 1000 });
+
 /** Dev login — allowlisted, no OAuth app required (default in non-prod). */
 authRouter.post(
   "/auth/dev-login",
@@ -45,11 +52,14 @@ authRouter.get("/auth/github", (_req, res) => {
     return;
   }
   const redirect = `${config.apiUrl}/api/auth/github/callback`;
+  const state = randomBytes(16).toString("hex");
+  res.cookie(LOGIN_STATE_COOKIE, state, loginStateCookieOpts());
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", config.github.clientId);
   url.searchParams.set("redirect_uri", redirect);
   // read:user for the profile; repo so users can create + push repos from Kosh (§publish).
   url.searchParams.set("scope", "read:user repo");
+  url.searchParams.set("state", state);
   res.redirect(url.toString());
 });
 
@@ -57,6 +67,11 @@ authRouter.get(
   "/auth/github/callback",
   ah(async (req, res) => {
     if (!config.github.clientId || !config.github.clientSecret) throw forbidden("OAuth disabled.");
+    // Verify the CSRF state (double-submit): the URL value must match the cookie we set at /auth/github.
+    const state = String(req.query.state ?? "");
+    const cookieState = String((req.cookies as Record<string, string> | undefined)?.[LOGIN_STATE_COOKIE] ?? "");
+    res.clearCookie(LOGIN_STATE_COOKIE, { path: "/" });
+    if (!state || !cookieState || state !== cookieState) throw forbidden("Invalid or missing OAuth state.");
     const code = String(req.query.code ?? "");
     if (!code) throw unauthorized("Missing OAuth code.");
     const tokenRes = await fetch("https://github.com/login/oauth/access_token", {

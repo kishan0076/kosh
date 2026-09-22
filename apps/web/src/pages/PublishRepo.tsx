@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Check,
@@ -86,6 +86,21 @@ interface LoadedFile extends RepoFileMeta {
   encoding: "utf-8" | "base64";
 }
 
+/** Friendly copy for an OAuth-callback error code. */
+function githubConnectErrorMessage(code: string): string {
+  switch (code) {
+    case "access_denied":
+      return "GitHub authorization was cancelled.";
+    case "state_mismatch":
+      return "That sign-in couldn't be verified. Please try connecting again.";
+    case "exchange_failed":
+    case "connect_failed":
+      return "Couldn't complete the GitHub connection. Please try again.";
+    default:
+      return "GitHub connection failed. Please try again.";
+  }
+}
+
 /* ── page ────────────────────────────────────────────────────── */
 
 export function PublishRepo() {
@@ -96,6 +111,7 @@ export function PublishRepo() {
   const toast = useUi((s) => s.toast);
   const openConfirm = useUi((s) => s.openConfirm);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const inputRef = useRef<HTMLInputElement>(null);
   const nameEdited = useRef(false); // did the user hand-edit the repo name?
 
@@ -121,6 +137,37 @@ export function PublishRepo() {
   const connected = !backend || !!user.github?.connected;
   const [token, setToken] = useState("");
   const [connecting, setConnecting] = useState(false);
+  const [oauthAvailable, setOauthAvailable] = useState(false);
+  const [showTokenEntry, setShowTokenEntry] = useState(false);
+
+  // Is one-click "Connect GitHub" (OAuth) available on this server?
+  useEffect(() => {
+    if (!backend) return;
+    let live = true;
+    api.githubConnectConfig().then((c) => { if (live) setOauthAvailable(c.oauth); }).catch(() => {});
+    return () => { live = false; };
+  }, [backend]);
+
+  // Handle the OAuth return (?github_connected=<login> | ?github_error=<code>) once on mount, then
+  // strip the params so a refresh doesn't re-toast.
+  useEffect(() => {
+    const okLogin = searchParams.get("github_connected");
+    const errCode = searchParams.get("github_error");
+    if (!okLogin && !errCode) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete("github_connected");
+    next.delete("github_error");
+    setSearchParams(next, { replace: true });
+    if (okLogin) {
+      void api.me().then((me) => useData.setState({ user: me.user })).catch(() => {});
+      toast({ message: `GitHub connected as @${okLogin}`, tone: "ok" });
+    } else if (errCode) {
+      toast({ message: githubConnectErrorMessage(errCode), tone: "danger" });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startOAuthConnect = () => { window.location.href = api.githubConnectUrl("publish"); };
 
   const publishing = progress !== null && progress.phase !== "done";
 
@@ -306,28 +353,61 @@ export function PublishRepo() {
           <h1 className="text-xl font-semibold leading-tight">GitHub Repository Manager</h1>
           <p className="mt-0.5 text-[13px] text-muted">Turn any project folder into a new GitHub repository — created and pushed in one commit.</p>
         </div>
-        <ConnectionPill backend={backend} connected={connected} login={user.login} onDisconnect={disconnect} />
+        <ConnectionPill backend={backend} connected={connected} github={user.github} onDisconnect={disconnect} />
       </header>
 
       {/* ── connect gate ───────────────────────────────────── */}
       {needsConnect && (
-        <div className="rounded-[var(--radius-card)] border border-primary/30 bg-primary-soft/50 px-5 py-4">
-          <div className="mb-2 flex items-center gap-2 text-[14px] font-semibold">
-            <Plug size={17} className="text-primary" /> Connect GitHub to publish
+        <div className="overflow-hidden rounded-[var(--radius-card)] border border-primary/30 bg-primary-soft/40">
+          <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center">
+            <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-surface text-foreground shadow-[var(--shadow-sm)]">
+              <GitHubMark size={24} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-[15px] font-semibold">Connect GitHub to publish</div>
+              <p className="mt-0.5 text-[12.5px] text-muted">
+                {oauthAvailable
+                  ? "One click — you'll approve the permissions on GitHub and land right back here. Nothing to copy or paste."
+                  : "Paste a token with the repo scope below. It's stored encrypted and shown to no one."}
+              </p>
+            </div>
+            {oauthAvailable && (
+              <Button variant="primary" size="lg" className="shrink-0" onClick={startOAuthConnect}>
+                <GitHubMark size={16} /> Connect GitHub
+              </Button>
+            )}
           </div>
-          <p className="mb-3 text-[12.5px] text-muted">Paste a token with the <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">repo</code> scope. It's stored encrypted and shown to no one.</p>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && connectToken()}
-              placeholder="ghp_… or github_pat_…"
-              className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
-            />
-            <Button variant="primary" onClick={connectToken} disabled={connecting || token.trim().length < 10}>
-              {connecting ? <Spinner size={15} /> : <ShieldCheck size={15} />} Connect
-            </Button>
+
+          {/* Token fallback: always available (and the only option when OAuth isn't configured). */}
+          <div className="border-t border-primary/20 bg-surface/50 px-5 py-3.5">
+            {oauthAvailable && !showTokenEntry ? (
+              <button onClick={() => setShowTokenEntry(true)} className="text-[12.5px] font-medium text-muted underline-offset-2 hover:text-foreground hover:underline">
+                Prefer a Personal Access Token? Paste one instead
+              </button>
+            ) : (
+              <div>
+                <label htmlFor="pat" className="mb-1.5 block text-[12px] font-medium text-muted">
+                  Personal Access Token <span className="text-faint">— needs the <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">repo</code> scope</span>
+                </label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <input
+                    id="pat"
+                    type="password"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && connectToken()}
+                    placeholder="ghp_… or github_pat_…"
+                    className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
+                  />
+                  <Button variant={oauthAvailable ? "outline" : "primary"} onClick={connectToken} disabled={connecting || token.trim().length < 10}>
+                    {connecting ? <Spinner size={15} /> : <ShieldCheck size={15} />} Connect token
+                  </Button>
+                </div>
+                <a href="https://github.com/settings/tokens/new?scopes=repo,delete_repo,workflow&description=Kosh" target="_blank" rel="noreferrer noopener" className="mt-1.5 inline-flex items-center gap-1 text-[11.5px] text-muted hover:text-primary">
+                  <ExternalLink size={12} /> Create a token on GitHub
+                </a>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -476,7 +556,7 @@ export function PublishRepo() {
                 <div>
                   <label htmlFor="repo-name" className="mb-1.5 block text-[12px] font-medium text-muted">Repository name</label>
                   <div className="flex items-center overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface focus-within:border-primary focus-within:ring-focus">
-                    <span className="shrink-0 border-r border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-faint">{connected && backend ? `${user.login}/` : "github.com/…/"}</span>
+                    <span className="shrink-0 border-r border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-faint">{connected && backend ? `${user.github?.login ?? user.login}/` : "github.com/…/"}</span>
                     <input
                       id="repo-name"
                       value={name}
@@ -578,7 +658,7 @@ export function PublishRepo() {
 
 /* ── sub-components ───────────────────────────────────────────── */
 
-function ConnectionPill({ backend, connected, login, onDisconnect }: { backend: boolean; connected: boolean; login: string; onDisconnect: () => void }) {
+function ConnectionPill({ backend, connected, github, onDisconnect }: { backend: boolean; connected: boolean; github?: { login?: string; avatarUrl?: string }; onDisconnect: () => void }) {
   if (!backend) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-3 py-1.5 text-[12px] text-muted">
@@ -587,10 +667,15 @@ function ConnectionPill({ backend, connected, login, onDisconnect }: { backend: 
     );
   }
   if (connected) {
+    const login = github?.login;
     return (
-      <div className="inline-flex items-center gap-2 rounded-full border border-ok/30 bg-ok-soft px-3 py-1.5 text-[12px]">
-        <span className="grid h-4 w-4 place-items-center rounded-full bg-ok text-white"><Check size={11} /></span>
-        <span className="font-medium">Connected{login && login !== "…" ? ` · @${login}` : ""}</span>
+      <div className="inline-flex items-center gap-2 rounded-full border border-ok/30 bg-ok-soft py-1 pl-1 pr-2.5 text-[12px]">
+        {github?.avatarUrl ? (
+          <img src={github.avatarUrl} alt="" referrerPolicy="no-referrer" className="h-5 w-5 rounded-full" />
+        ) : (
+          <span className="grid h-5 w-5 place-items-center rounded-full bg-ok text-white"><Check size={11} /></span>
+        )}
+        <span className="font-medium">{login ? `@${login}` : "Connected"}</span>
         <button onClick={onDisconnect} className="ml-0.5 rounded-full p-0.5 text-muted hover:bg-surface-2 hover:text-danger" aria-label="Disconnect GitHub">
           <X size={13} />
         </button>
