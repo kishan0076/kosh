@@ -181,8 +181,20 @@ function Shell() {
       else store.getState().setPreview(node);
     },
     onClick: (node, e) => {
-      store.getState().toggleSelect(node.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey }, orderedIds);
-      if (!e.shiftKey && !e.metaKey && !e.ctrlKey) void store.getState().loadDetails(node.id);
+      // Modifier-click always extends/toggles the selection (multi-select) — never opens.
+      if (e.shiftKey || e.metaKey || e.ctrlKey) {
+        store.getState().toggleSelect(node.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey }, orderedIds);
+        return;
+      }
+      // A plain single click opens a folder directly (no details drawer, no double-click needed).
+      // Use the checkbox disc, right-click, or ⌘/Shift-click to select a folder instead.
+      if (node.isFolder) {
+        store.getState().openFolder(node);
+        return;
+      }
+      // Files: select + open the details drawer, as before.
+      store.getState().toggleSelect(node.id, {}, orderedIds);
+      void store.getState().loadDetails(node.id);
     },
     onContext: (node, e) => {
       e.preventDefault();
