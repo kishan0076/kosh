@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   PUBLISH_LIMITS,
+  STARTER_GITIGNORE,
   planRepoUpload,
   sanitizeRepoName,
   scanSecrets,
@@ -33,35 +34,10 @@ import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { api, ApiError, type PublishProgress } from "@/data/api";
 import { GitHubMark } from "@/lib/icons";
+import { GitScanCard } from "@/components/github/GitScanCard";
 import { Button, Spinner } from "@/components/ui";
 
 /* ── helpers ─────────────────────────────────────────────────── */
-
-/** A sensible starter .gitignore offered when a project has none. */
-const STARTER_GITIGNORE = `# Dependencies
-node_modules/
-
-# Build output
-dist/
-build/
-out/
-
-# Environment & secrets
-.env
-.env.*
-!.env.example
-
-# Logs & caches
-*.log
-.cache/
-.turbo/
-
-# OS & editor
-.DS_Store
-Thumbs.db
-.idea/
-.vscode/
-`;
 
 /** Detect binary by content (a NUL byte is a reliable tell), matching the CLI — reading a binary
  *  file as UTF-8 would silently corrupt it, so extension guessing isn't safe. */
@@ -447,6 +423,9 @@ export function PublishRepo() {
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] lg:items-start">
           {/* left: source + review */}
           <div className="space-y-5">
+            {/* Optional: check a local folder's git hygiene before publishing (Chromium). */}
+            {files.length === 0 && <GitScanCard />}
+
             <input ref={inputRef} type="file" multiple hidden onChange={(e) => onPick(e.target.files)} />
 
             {files.length === 0 ? (
