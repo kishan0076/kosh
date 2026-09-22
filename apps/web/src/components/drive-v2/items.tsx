@@ -165,7 +165,7 @@ function SelectDisc({ selected, onToggle }: { selected: boolean; onToggle: () =>
       aria-pressed={selected}
       className={cn(
         "grid h-6 w-6 place-items-center rounded-full border backdrop-blur transition-opacity",
-        selected ? "border-primary bg-primary text-primary-foreground opacity-100" : "border-border-strong bg-surface/80 text-transparent opacity-0 hover:text-muted group-hover:opacity-100",
+        selected ? "border-primary bg-primary text-primary-foreground opacity-100" : "border-border-strong bg-surface/80 text-transparent opacity-0 hover:text-muted focus-visible:opacity-100 group-hover:opacity-100",
       )}
     >
       <Check size={13} strokeWidth={3} />
@@ -178,7 +178,6 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   return (
     <div
-      role="row"
       tabIndex={-1}
       data-node-id={node.id}
       draggable={!renaming}
@@ -188,7 +187,7 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group grid grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-1.5 text-[13px] transition-colors md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
+        "group grid cursor-pointer grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-1.5 text-[13px] transition-colors md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
         over ? "bg-primary-soft ring-1 ring-inset ring-primary" : selected ? "bg-primary-soft shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-surface-2",
       )}
     >
@@ -203,7 +202,7 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
         )}
         <button
           onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
-          className={cn("shrink-0 rounded p-0.5 transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 group-hover:opacity-100")}
+          className={cn("shrink-0 rounded p-0.5 transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
           aria-label={node.starred ? "Unstar" : "Star"}
         >
           <Star size={13} className={cn(node.starred && "fill-gold")} />
@@ -235,7 +234,6 @@ export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onCo
   const kind = kindOf(node);
   return (
     <div
-      role="gridcell"
       tabIndex={-1}
       data-node-id={node.id}
       draggable={!renaming}
@@ -245,7 +243,7 @@ export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onCo
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group relative flex flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow,border-color] duration-200 will-change-transform",
+        "group relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow,border-color] duration-200 will-change-transform",
         over
           ? "border-primary bg-primary-soft ring-2 ring-primary"
           : selected
@@ -279,7 +277,7 @@ export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onCo
         <div className="absolute right-2 top-2 flex items-center gap-1">
           <button
             onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
-            className={cn("grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur transition-opacity hover:bg-surface", node.starred ? "opacity-100" : "opacity-0 group-hover:opacity-100")}
+            className={cn("grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur transition-opacity hover:bg-surface", node.starred ? "opacity-100" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
             aria-label={node.starred ? "Unstar" : "Star"}
           >
             <Star size={14} className={cn(node.starred ? "fill-gold text-gold" : "text-muted")} />
@@ -289,7 +287,7 @@ export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onCo
           ) : (
             <button
               onClick={(e) => { e.stopPropagation(); onMore(node, e); }}
-              className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 text-muted opacity-0 backdrop-blur transition-opacity hover:bg-surface hover:text-foreground group-hover:opacity-100"
+              className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 text-muted opacity-0 backdrop-blur transition-opacity hover:bg-surface hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
               aria-label="More actions"
             >
               <MoreVertical size={15} />

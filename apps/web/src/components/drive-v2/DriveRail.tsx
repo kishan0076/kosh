@@ -97,14 +97,15 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
     const btn = (
       <button
         onClick={() => go(def.v)}
+        aria-label={def.label}
         className={cn(
           "relative flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-[14px] font-medium transition-colors",
           collapsed ? "h-10 justify-center px-0" : "h-10",
           active ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground",
         )}
       >
-        {active && <motion.span layoutId="drive-rail-active" transition={{ type: "spring", stiffness: 380, damping: 32, mass: 0.8 }} className={cn("absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full", def.gold ? "bg-gold" : "bg-primary")} />}
-        <Icon size={18} className={cn("shrink-0", !active && def.gold && "text-gold", def.gold && active && "fill-gold")} />
+        {active && <motion.span layoutId="drive-rail-active" transition={{ type: "spring", stiffness: 380, damping: 32, mass: 0.8 }} className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r-full bg-primary" />}
+        <Icon size={18} className={cn("shrink-0", def.gold && "text-gold", def.gold && active && "fill-gold")} />
         {!collapsed && <span className="flex-1 truncate text-left">{def.label}</span>}
         {!collapsed && def.v === "activity" && <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", sync.status === "error" ? "bg-danger" : sync.status === "live" ? "bg-ok" : sync.status === "syncing" ? "bg-primary" : "bg-faint")} />}
       </button>
@@ -113,7 +114,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
   };
 
   return (
-    <aside className={cn("flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface p-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)]", collapsed ? "w-full lg:w-[68px]" : "w-full lg:w-[248px]")}>
+    <aside className={cn("flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface p-3 lg:sticky lg:top-4 lg:max-h-[calc(100dvh-2rem)]", collapsed ? "w-[68px]" : "w-full lg:w-[248px]")}>
       {/* WorkspaceCrest */}
       <Menu
         align="start"

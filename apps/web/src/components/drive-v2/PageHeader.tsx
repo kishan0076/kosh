@@ -115,7 +115,7 @@ function Crumb({ folderId, onClick, children, icon }: { folderId: string; onClic
     <button
       onClick={onClick}
       onDragOver={(e) => { if (hasDriveDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOver(true); } }}
-      onDragLeave={() => setOver(false)}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false); }}
       onDrop={(e) => { if (!hasDriveDrag(e)) return; e.preventDefault(); setOver(false); const ids = getDragIds(e); if (ids?.length) void move(ids, folderId); }}
       className={cn("flex min-w-0 items-center gap-1.5 rounded-[var(--radius-control)] px-1.5 py-0.5 transition-colors hover:bg-surface-2", over && "bg-primary-soft ring-1 ring-primary")}
     >
