@@ -10,6 +10,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
+import { Check, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 /* ── Menu (dropdown) ────────────────────────────────────────── */
@@ -126,11 +127,85 @@ export function MenuItem({
   );
 }
 
+/** Close the enclosing Menu from a custom (non-MenuItem) child, e.g. a row with its own controls. */
+export function useMenuClose() {
+  return useContext(MenuContext).close;
+}
+
 export function MenuLabel({ children }: { children: ReactNode }) {
   return <div className="px-2.5 pt-2 pb-1 text-[11px] font-semibold uppercase tracking-wide text-faint">{children}</div>;
 }
 export function MenuSeparator() {
   return <div className="my-1 h-px bg-border" />;
+}
+
+/* ── SelectMenu (dropdown value picker) ─────────────────────────
+   A Menu-backed replacement for native <select>: keeps light/dark theming and matches every other
+   dropdown in the app (account/space picker, context menus) instead of the OS-native select chrome. */
+export interface SelectOption {
+  value: string;
+  label: ReactNode;
+}
+export function SelectMenu({
+  value,
+  options,
+  onChange,
+  align = "start",
+  width = 200,
+  size = "md",
+  disabled,
+  ariaLabel,
+  className,
+}: {
+  value: string;
+  options: SelectOption[];
+  onChange: (value: string) => void;
+  align?: "start" | "end";
+  width?: number;
+  size?: "sm" | "md";
+  disabled?: boolean;
+  ariaLabel?: string;
+  className?: string;
+}) {
+  const current = options.find((o) => o.value === value);
+  return (
+    <Menu
+      align={align}
+      width={width}
+      trigger={({ open, toggle, ref }) => (
+        <button
+          ref={ref}
+          type="button"
+          disabled={disabled}
+          aria-label={ariaLabel}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggle();
+          }}
+          className={cn(
+            "inline-flex items-center justify-between gap-2 rounded-[var(--radius-control)] border border-border bg-surface text-foreground outline-none transition-colors",
+            "hover:border-border-strong focus-visible:border-primary focus-visible:ring-focus disabled:opacity-50 disabled:pointer-events-none",
+            size === "sm" ? "h-8 px-2.5 text-[13px]" : "h-9 px-3 text-[13.5px]",
+            className,
+          )}
+        >
+          <span className="truncate">{current?.label ?? value}</span>
+          <ChevronDown size={15} className={cn("shrink-0 text-faint transition-transform", open && "rotate-180")} />
+        </button>
+      )}
+    >
+      {options.map((o) => (
+        <MenuItem key={o.value} onClick={() => onChange(o.value)}>
+          <span className="flex flex-1 items-center justify-between gap-2">
+            <span className="truncate">{o.label}</span>
+            {o.value === value && <Check size={14} className="ml-auto shrink-0 text-primary" />}
+          </span>
+        </MenuItem>
+      ))}
+    </Menu>
+  );
 }
 
 /* ── Tooltip ────────────────────────────────────────────────── */

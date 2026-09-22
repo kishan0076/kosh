@@ -21,9 +21,9 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur-md sm:px-6">
-      <button onClick={onOpenMobileNav} className="rounded-md p-2 text-muted hover:bg-surface-2 lg:hidden" aria-label="Open menu">
+      <Button variant="ghost" size="icon" onClick={onOpenMobileNav} className="lg:hidden" aria-label="Open menu">
         <MenuIcon size={20} />
-      </button>
+      </Button>
 
       {/* search / palette trigger */}
       <button

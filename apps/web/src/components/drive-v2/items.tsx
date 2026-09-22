@@ -3,7 +3,7 @@ import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as 
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
-import { Spinner } from "@/components/ui";
+import { Button, Spinner } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { getDragIds, hasDriveDrag } from "./dnd";
@@ -377,9 +377,7 @@ export function DriveEmptyState({ view, onUpload }: { view: DriveView; onUpload?
         <div className="font-display text-[17px] font-semibold">{title}</div>
         <p className="mx-auto mt-1.5 max-w-xs text-[13px] text-muted">{body}</p>
         {view === "myDrive" && onUpload && (
-          <button onClick={onUpload} className="mx-auto mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 py-2 text-[13px] font-medium text-primary-foreground shadow-sm hover:bg-primary-hover">
-            <UploadCloud size={15} /> Upload files
-          </button>
+          <Button variant="primary" onClick={onUpload} className="mx-auto mt-5"><UploadCloud size={15} /> Upload files</Button>
         )}
         <div className="mt-5 font-mono text-[11px] text-faint">Press ⌘K to search · Drop files anywhere to upload</div>
       </div>
@@ -394,9 +392,7 @@ export function DriveErrorState({ message, onRetry }: { message: string; onRetry
         <span className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-danger-soft text-danger"><FileText size={28} /></span>
         <div className="font-display text-[17px] font-semibold">Couldn't load this</div>
         <p className="mx-auto mt-1.5 max-w-sm text-[13px] text-muted">{message}</p>
-        <button onClick={onRetry} className="mx-auto mt-5 inline-flex items-center gap-2 rounded-[var(--radius-control)] bg-primary px-4 py-2 text-[13px] font-medium text-primary-foreground shadow-sm hover:bg-primary-hover">
-          Retry
-        </button>
+        <Button variant="primary" onClick={onRetry} className="mx-auto mt-5">Retry</Button>
       </div>
     </div>
   );

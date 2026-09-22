@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
 import { forwardRef, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 
@@ -49,6 +49,71 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ),
 );
 Button.displayName = "Button";
+
+/* ── Input / Textarea ───────────────────────────────────────── */
+// The app-standard text field: semantic-token surface + border, primary focus ring. Replaces the
+// hand-rolled inline classes (and the dead `.input` class) scattered across forms.
+const FIELD_BASE =
+  "w-full rounded-[var(--radius-control)] border border-border bg-surface text-foreground outline-none transition-colors placeholder:text-faint focus:border-primary focus:ring-focus disabled:opacity-50 disabled:pointer-events-none";
+
+export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
+  ({ className, ...props }, ref) => (
+    <input ref={ref} className={cn(FIELD_BASE, "h-9 px-3 text-[13.5px]", className)} {...props} />
+  ),
+);
+Input.displayName = "Input";
+
+export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  ({ className, ...props }, ref) => (
+    <textarea ref={ref} className={cn(FIELD_BASE, "min-h-[80px] px-3 py-2 text-[13.5px] leading-relaxed", className)} {...props} />
+  ),
+);
+Textarea.displayName = "Textarea";
+
+/* ── Toggle (switch) ────────────────────────────────────────── */
+// The single source of truth for on/off switches. Previously hand-built (twice) from a bare
+// role="switch" button and an appearance-none checkbox — both now route through this.
+export function Toggle({
+  checked,
+  onChange,
+  disabled,
+  label,
+  id,
+  className,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  label?: string;
+  id?: string;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      id={id}
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "relative inline-flex h-6 w-10 shrink-0 items-center rounded-full transition-colors",
+        "focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2",
+        "disabled:opacity-50 disabled:pointer-events-none",
+        checked ? "bg-primary" : "bg-surface-3",
+        className,
+      )}
+    >
+      <span
+        className={cn(
+          "pointer-events-none absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+          checked ? "translate-x-[18px]" : "translate-x-0.5",
+        )}
+      />
+    </button>
+  );
+}
 
 /* ── Badge / Chip ───────────────────────────────────────────── */
 export function Badge({

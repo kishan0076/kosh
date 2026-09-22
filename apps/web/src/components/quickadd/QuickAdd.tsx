@@ -122,19 +122,10 @@ export function QuickAdd() {
           placeholder="Paste a link, drop a folder, or type to capture…"
           className="h-11 flex-1 bg-transparent text-[15px] outline-none placeholder:text-faint"
         />
-        <button
-          onClick={pasteFromClipboard}
-          className="hidden h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-3 text-[13px] text-muted hover:bg-surface-2 sm:inline-flex"
-        >
-          Paste
-        </button>
-        <button
-          onClick={() => fileInput.current?.click()}
-          className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted hover:bg-surface-2"
-          aria-label="Upload files"
-        >
+        <Button variant="outline" onClick={pasteFromClipboard} className="hidden sm:inline-flex">Paste</Button>
+        <Button variant="outline" size="icon" onClick={() => fileInput.current?.click()} aria-label="Upload files">
           <FolderUp size={17} />
-        </button>
+        </Button>
         <Button variant={hint.kind === "link" || hint.kind === "repo" ? "primary" : "secondary"} onClick={submit} disabled={!value.trim()}>
           {hint.label}
         </Button>

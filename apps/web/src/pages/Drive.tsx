@@ -29,8 +29,9 @@ import { ago } from "@/lib/time";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { useDrive, type DriveItemStatus, type DriveQueueItem } from "@/data/drive";
-import { driveApi } from "@/data/driveApi";
+import { driveApi, type DriveAccount } from "@/data/driveApi";
 import { Button, Progress, Spinner } from "@/components/ui";
+import { Menu, MenuLabel, MenuSeparator, useMenuClose } from "@/components/overlays";
 
 /* ── recursive folder read for drag-and-dropped folders ── */
 async function readEntry(entry: FileSystemEntry, path: string, out: { file: File; relPath: string }[]): Promise<void> {
@@ -198,16 +199,7 @@ function AccountPicker() {
   const disconnect = useDrive((s) => s.disconnect);
   const openConfirm = useUi((s) => s.openConfirm);
   const toast = useUi((s) => s.toast);
-  const [open, setOpen] = useState(false);
   const account = accounts.find((a) => a.id === accountId) ?? null;
-
-  // Close the menu on Escape while it's open.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open]);
 
   const remove = (id: string, email: string) =>
     openConfirm({
@@ -225,36 +217,43 @@ function AccountPicker() {
     });
 
   return (
-    <div className="relative">
-      <button onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} className="flex items-center gap-2 rounded-full border border-border bg-surface-2 py-1.5 pl-1.5 pr-3 text-[12.5px] transition-colors hover:border-border-strong">
-        {account?.picture ? <img src={account.picture} alt="" referrerPolicy="no-referrer" className="h-6 w-6 rounded-full" /> : <span className="grid h-6 w-6 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={13} /></span>}
-        <span className="max-w-[160px] truncate font-medium">{account?.email ?? "Select account"}</span>
-        <ChevronRight size={14} className={cn("text-muted transition-transform", open && "rotate-90")} />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div role="menu" aria-label="Google accounts" className="absolute right-0 z-50 mt-2 w-72 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface shadow-lg">
-            <div className="border-b border-border px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-faint">Google accounts</div>
-            {accounts.map((a) => (
-              <div key={a.id} className={cn("flex items-center gap-2 px-3 py-2", a.id === accountId && "bg-primary-soft/40")}>
-                <button role="menuitem" onClick={() => { void selectAccount(a.id); setOpen(false); }} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                  {a.picture ? <img src={a.picture} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full" /> : <span className="grid h-7 w-7 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={14} /></span>}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium">{a.name ?? a.email}</span>
-                    <span className="block truncate text-[11px] text-muted">{a.email}</span>
-                  </span>
-                  {a.id === accountId && <Check size={15} className="shrink-0 text-primary" />}
-                </button>
-                <button onClick={() => remove(a.id, a.email)} className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-2 hover:text-danger" aria-label={`Disconnect ${a.email}`}><X size={14} /></button>
-              </div>
-            ))}
-            <a role="menuitem" href={driveApi.connectUrl()} className="flex items-center gap-2 border-t border-border px-3 py-2.5 text-[13px] font-medium text-primary hover:bg-surface-2">
-              <Plus size={15} /> Add another account
-            </a>
-          </div>
-        </>
+    <Menu
+      align="end"
+      width={288}
+      trigger={({ open, toggle, ref }) => (
+        <button ref={ref} onClick={toggle} aria-haspopup="menu" aria-expanded={open} className="flex items-center gap-2 rounded-full border border-border bg-surface-2 py-1.5 pl-1.5 pr-3 text-[12.5px] transition-colors hover:border-border-strong">
+          {account?.picture ? <img src={account.picture} alt="" referrerPolicy="no-referrer" className="h-6 w-6 rounded-full" /> : <span className="grid h-6 w-6 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={13} /></span>}
+          <span className="max-w-[160px] truncate font-medium">{account?.email ?? "Select account"}</span>
+          <ChevronRight size={14} className={cn("text-muted transition-transform", open && "rotate-90")} />
+        </button>
       )}
+    >
+      <MenuLabel>Google accounts</MenuLabel>
+      {accounts.map((a) => (
+        <AccountRow key={a.id} account={a} active={a.id === accountId} onSelect={() => void selectAccount(a.id)} onRemove={() => remove(a.id, a.email)} />
+      ))}
+      <MenuSeparator />
+      <a href={driveApi.connectUrl()} className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-primary transition-colors hover:bg-surface-2">
+        <Plus size={15} /> Add another account
+      </a>
+    </Menu>
+  );
+}
+
+/** One row in the account Menu: select (auto-closes) plus a disconnect control. */
+function AccountRow({ account: a, active, onSelect, onRemove }: { account: DriveAccount; active: boolean; onSelect: () => void; onRemove: () => void }) {
+  const close = useMenuClose();
+  return (
+    <div className={cn("flex items-center gap-1 rounded-md", active && "bg-primary-soft/40")}>
+      <button onClick={() => { onSelect(); close(); }} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-surface-2">
+        {a.picture ? <img src={a.picture} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full" /> : <span className="grid h-7 w-7 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={14} /></span>}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium">{a.name ?? a.email}</span>
+          <span className="block truncate text-[11px] text-muted">{a.email}</span>
+        </span>
+        {active && <Check size={15} className="shrink-0 text-primary" />}
+      </button>
+      <button onClick={() => { close(); onRemove(); }} className="mr-1 shrink-0 rounded-md p-1 text-faint transition-colors hover:bg-surface-2 hover:text-danger" aria-label={`Disconnect ${a.email}`}><X size={14} /></button>
     </div>
   );
 }
@@ -317,7 +316,7 @@ function FolderBrowser() {
         ) : (
           <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
             {folders.map((f) => (
-              <button key={f.id} onClick={() => openFolder(f)} className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 py-2 text-left transition-colors hover:border-primary hover:bg-primary-soft/40">
+              <button key={f.id} onClick={() => openFolder(f)} className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 py-2 text-left transition-colors hover:border-primary hover:bg-primary-soft/40">
                 <Folder size={16} className="shrink-0 text-primary" />
                 <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">{f.name}</span>
               </button>

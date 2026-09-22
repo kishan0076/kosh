@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { ArrowRight, Type } from "lucide-react";
-import { Button, Spinner } from "@/components/ui";
+import { Button, Input, Spinner } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { useUi } from "@/data/ui";
 import { useDriveV2 } from "@/data/driveV2";
@@ -76,17 +76,17 @@ export function BulkRenameModal({ ids, onClose }: { ids: string[]; onClose: () =
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="mb-1 block text-[12px] font-medium text-muted">Find</label>
-            <input value={find} onChange={(e) => setFind(e.target.value)} placeholder="text to replace" className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13.5px] outline-none focus:border-primary focus:ring-focus" />
+            <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder="text to replace" />
           </div>
           <div>
             <label className="mb-1 block text-[12px] font-medium text-muted">Replace with</label>
-            <input value={replace} onChange={(e) => setReplace(e.target.value)} placeholder="replacement" className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13.5px] outline-none focus:border-primary focus:ring-focus" />
+            <Input value={replace} onChange={(e) => setReplace(e.target.value)} placeholder="replacement" />
           </div>
         </div>
         <label className="flex items-center gap-2 text-[13px]">
           <input type="checkbox" checked={numbering} onChange={(e) => setNumbering(e.target.checked)} className="h-4 w-4 accent-[var(--primary)]" />
           Append a number, starting from
-          <input type="number" value={start} min={0} onChange={(e) => setStart(Number(e.target.value) || 0)} disabled={!numbering} className="w-16 rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1 text-[13px] outline-none disabled:opacity-50" />
+          <Input type="number" value={start} min={0} onChange={(e) => setStart(Number(e.target.value) || 0)} disabled={!numbering} className="h-8 w-16" />
         </label>
 
         <div className="rounded-[var(--radius-control)] border border-border bg-surface-2">

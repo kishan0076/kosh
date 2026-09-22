@@ -24,8 +24,8 @@ import { useUi } from "@/data/ui";
 import { useVault, type VaultEntry, type VaultEntryType } from "@/data/vault";
 import { passwordStrength } from "@/lib/vaultCrypto";
 import { PageHeader } from "@/components/common";
-import { Modal } from "@/components/overlays";
-import { Button, Spinner } from "@/components/ui";
+import { Modal, SelectMenu } from "@/components/overlays";
+import { Button, Input, Spinner, Textarea } from "@/components/ui";
 
 const TYPE_ICON: Record<VaultEntryType, typeof FileText> = { note: FileText, secret: KeyRound, file: Paperclip };
 
@@ -358,24 +358,29 @@ function EntryForm({ entry, onClose }: { entry?: VaultEntry; onClose: () => void
           </div>
         )}
         <Field label="Title">
-          <input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus className="input" placeholder="e.g. Bank login" />
+          <Input value={title} onChange={(e) => setTitle(e.target.value)} autoFocus placeholder="e.g. Bank login" />
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Category">
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className="input">
-              {(data?.categories ?? ["Personal"]).map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <SelectMenu
+              value={category}
+              onChange={setCategory}
+              options={(data?.categories ?? ["Personal"]).map((c) => ({ value: c, label: c }))}
+              width={200}
+              ariaLabel="Category"
+              className="w-full"
+            />
           </Field>
           <Field label="New category (optional)">
-            <input value={newCat} onChange={(e) => setNewCat(e.target.value)} className="input" placeholder="Add one" />
+            <Input value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="Add one" />
           </Field>
         </div>
         <Field label="Folder (optional)">
-          <input value={folder} onChange={(e) => setFolder(e.target.value)} className="input" placeholder="e.g. Finance" />
+          <Input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="e.g. Finance" />
         </Field>
         {type === "secret" && (
           <Field label="Secret value">
-            <textarea value={secret} onChange={(e) => setSecret(e.target.value)} rows={3} className="input font-mono" placeholder="Password, API key, seed phrase…" />
+            <Textarea value={secret} onChange={(e) => setSecret(e.target.value)} rows={3} className="font-mono" placeholder="Password, API key, seed phrase…" />
           </Field>
         )}
         {type === "file" && !editing && (
@@ -384,7 +389,7 @@ function EntryForm({ entry, onClose }: { entry?: VaultEntry; onClose: () => void
           </Field>
         )}
         <Field label="Note (optional)">
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} className="input" placeholder="Anything you want to remember…" />
+          <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={3} placeholder="Anything you want to remember…" />
         </Field>
       </div>
       <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
@@ -393,7 +398,6 @@ function EntryForm({ entry, onClose }: { entry?: VaultEntry; onClose: () => void
           {busy ? <Spinner size={15} /> : null} {editing ? "Save" : "Add"}
         </Button>
       </div>
-      <style>{`.input{width:100%;border-radius:var(--radius-control);border:1px solid var(--border);background:var(--surface);padding:.5rem .75rem;font-size:14px;outline:none}.input:focus{border-color:var(--primary);box-shadow:var(--ring-focus,0 0 0 3px color-mix(in oklab,var(--primary) 25%,transparent))}`}</style>
     </Modal>
   );
 }

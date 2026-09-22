@@ -4,6 +4,7 @@ import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { NodeIcon } from "./items";
+import { Button, Textarea } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
 
 function Fact({ label, value }: { label: string; value: string }) {
@@ -121,10 +122,10 @@ function NotesEditor({ node, onSave }: { node: DriveNode; onSave: (desc: string)
       </div>
       {editing ? (
         <div className="space-y-2">
-          <textarea autoFocus value={value} onChange={(e) => setValue(e.target.value)} rows={3} maxLength={1000} className="w-full resize-none rounded-[var(--radius-control)] border border-border bg-surface px-2.5 py-2 text-[12.5px] outline-none focus:border-primary focus:ring-focus" />
+          <Textarea autoFocus value={value} onChange={(e) => setValue(e.target.value)} rows={3} maxLength={1000} className="min-h-0 resize-none text-[12.5px]" />
           <div className="flex justify-end gap-1.5">
-            <button onClick={() => setEditing(false)} className="rounded-md px-2 py-1 text-[12px] text-muted hover:bg-surface-2"><X size={13} className="mr-1 inline" />Cancel</button>
-            <button onClick={() => { onSave(value.trim()); setEditing(false); }} className="rounded-md bg-primary px-2 py-1 text-[12px] font-medium text-primary-foreground hover:bg-primary-hover"><Check size={13} className="mr-1 inline" />Save</button>
+            <Button variant="ghost" size="sm" onClick={() => setEditing(false)}><X size={13} /> Cancel</Button>
+            <Button variant="primary" size="sm" onClick={() => { onSave(value.trim()); setEditing(false); }}><Check size={13} /> Save</Button>
           </div>
         </div>
       ) : node.description ? (

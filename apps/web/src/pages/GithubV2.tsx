@@ -720,7 +720,7 @@ function DeleteRepoModal({ repo, onClose, onDeleted }: { repo: RepoDetail; onClo
         {error && <div className="mt-3 rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
         <div className="mt-5 flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="primary" className="bg-danger hover:bg-danger" onClick={del} disabled={!match || busy}>{busy ? <Spinner size={15} /> : <Trash2 size={15} />} Delete forever</Button>
+          <Button variant="danger" onClick={del} disabled={!match || busy}>{busy ? <Spinner size={15} /> : <Trash2 size={15} />} Delete forever</Button>
         </div>
       </div>
     </Modal>

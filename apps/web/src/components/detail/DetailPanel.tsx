@@ -40,7 +40,7 @@ import { useSetStage } from "@/lib/useSetStage";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
-import { Badge, Button, Divider } from "../ui";
+import { Badge, Button, Divider, Toggle } from "../ui";
 import { Menu, MenuItem } from "../overlays";
 import { StageChip, StarRating, TrustBadge } from "../common";
 import { Markdown } from "../markdown";
@@ -440,15 +440,14 @@ function ItemBody({ item }: { item: Item }) {
               </div>
             )}
             {/* watch toggle */}
-            <label className="mt-3 flex cursor-pointer items-center justify-between rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2">
+            <div className="mt-3 flex items-center justify-between rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2">
               <span className="text-[13px] font-medium">Watch for changes</span>
-              <input
-                type="checkbox"
+              <Toggle
                 checked={!!g.watch?.enabled}
-                onChange={(e) => patchItem(item.id, { github: { ...g, watch: { ...g.watch, enabled: e.target.checked } } })}
-                className="h-4 w-8 cursor-pointer appearance-none rounded-full bg-surface-3 transition-colors checked:bg-primary relative after:absolute after:left-0.5 after:top-0.5 after:h-3 after:w-3 after:rounded-full after:bg-white after:transition-transform checked:after:translate-x-4"
+                onChange={(next) => patchItem(item.id, { github: { ...g, watch: { ...g.watch, enabled: next } } })}
+                label="Watch for changes"
               />
-            </label>
+            </div>
           </div>
 
           {/* skills inside */}

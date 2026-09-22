@@ -24,6 +24,7 @@ import { inbox, live } from "@/data/selectors";
 import { useUi } from "@/data/ui";
 import { Logo } from "./Logo";
 import { Tooltip } from "../overlays";
+import { Progress } from "../ui";
 
 interface NavItem {
   to: string;
@@ -144,16 +145,12 @@ export function Sidebar({
               <span>Storage</span>
               <span className="tabular">{formatBytes(user.storageUsed)} / {formatBytes(user.storageQuota)}</span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
-              <div className="h-full rounded-full bg-primary" style={{ width: `${storagePct}%` }} />
-            </div>
+            <Progress value={storagePct} />
             <div className="mt-3 mb-2 flex items-center justify-between text-[11px] font-medium text-muted">
               <span>GitHub budget</span>
               <span className="tabular">{user.githubBudget.remaining.toLocaleString()} left</span>
             </div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
-              <div className="h-full rounded-full bg-ok" style={{ width: `${budgetPct}%` }} />
-            </div>
+            <Progress value={budgetPct} tone="ok" />
           </div>
         )}
 

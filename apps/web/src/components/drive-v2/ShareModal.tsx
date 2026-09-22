@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { Check, Globe, Link2, Lock, Share2, UserPlus, X } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { Button, Spinner } from "@/components/ui";
-import { Modal } from "@/components/overlays";
+import { Button, Spinner, Toggle } from "@/components/ui";
+import { Modal, SelectMenu } from "@/components/overlays";
 import { useUi } from "@/data/ui";
 import { driveV2Api, type DriveNode, type DrivePermission } from "@/data/driveV2Api";
 import { useDriveV2 } from "@/data/driveV2";
@@ -195,14 +195,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
                 <div className="text-[11.5px] text-muted">{anyone ? `Anyone on the internet with the link can ${ROLE_LABEL[anyone.role]?.toLowerCase() ?? "view"}` : "Only people with access can open"}</div>
               </div>
               {busy === "anyone" ? <Spinner size={15} className="text-muted" /> : (
-                <button
-                  onClick={() => void toggleLink(!anyone)}
-                  role="switch"
-                  aria-checked={!!anyone}
-                  className={cn("relative h-6 w-10 shrink-0 rounded-full transition-colors", anyone ? "bg-primary" : "bg-surface-3")}
-                >
-                  <span className={cn("absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform", anyone ? "translate-x-[18px]" : "translate-x-0.5")} />
-                </button>
+                <Toggle checked={!!anyone} onChange={(on) => void toggleLink(on)} label="Anyone with the link" />
               )}
             </div>
           </div>
@@ -219,12 +212,15 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
 
 function RoleSelect({ value, onChange, compact }: { value: string; onChange: (role: string) => void; compact?: boolean }) {
   return (
-    <select
+    <SelectMenu
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className={cn("rounded-[var(--radius-control)] border border-border bg-surface text-[13px] outline-none focus:border-primary", compact ? "px-2 py-1" : "px-2.5 py-2")}
-    >
-      {ASSIGNABLE.map((r) => <option key={r.role} value={r.role}>{r.label}</option>)}
-    </select>
+      onChange={onChange}
+      options={ASSIGNABLE.map((r) => ({ value: r.role, label: r.label }))}
+      width={150}
+      size={compact ? "sm" : "md"}
+      align="end"
+      ariaLabel="Access role"
+      className={compact ? "shrink-0" : undefined}
+    />
   );
 }
