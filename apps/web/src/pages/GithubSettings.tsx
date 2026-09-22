@@ -84,12 +84,14 @@ export function GithubSettings() {
       };
       const { repo: d } = await githubV2Api.updateRepo(detail.owner, detail.name, patch);
       let next = d;
+      let topicsFailed = false;
       if (topicsChanged) {
-        try { const { topics: saved } = await githubV2Api.setTopics(d.owner, d.name, topics); next = { ...d, topics: saved }; } catch { /* non-fatal */ }
+        try { const { topics: saved } = await githubV2Api.setTopics(d.owner, d.name, topics); next = { ...d, topics: saved }; }
+        catch { topicsFailed = true; setTopics(d.topics); } // revert the field to the server's truth
       }
       useGithubV2.getState().upsertRepo(next);
       setDetail(next);
-      ghToast("Repository updated", "ok");
+      ghToast(topicsFailed ? "Saved, but topics couldn't be updated" : "Repository updated", topicsFailed ? "warn" : "ok");
       if (renamed) navigate(`/github/${next.owner}/${next.name}/settings`, { replace: true });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save changes.");

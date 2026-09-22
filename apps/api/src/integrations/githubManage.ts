@@ -188,17 +188,24 @@ export async function getRepoDetail(token: string, owner: string, repo: string):
   return { ...toSummary(r), parent: r.parent?.full_name, network: r.network_count, subscribers: r.subscribers_count };
 }
 
+/** A "can't edit this here" error carrying a 422 so the route surfaces its message (not a 500). */
+function notEditable(message: string): Error {
+  const e = new Error(message) as Error & { status: number };
+  e.status = 422;
+  return e;
+}
+
 /** Read a single text file's content for the in-app editor. Missing file → an empty new file. */
 export async function getFileContent(token: string, owner: string, repo: string, path: string, branch?: string): Promise<{ content: string; sha: string | null; isNew: boolean }> {
   const gh = githubClient(token);
   try {
     const res = await gh.rest.repos.getContent({ owner, repo, path, ...(branch ? { ref: branch } : {}) });
-    if (Array.isArray(res.data) || (res.data as { type?: string }).type !== "file") {
-      throw new Error("That path is a directory, not a file.");
-    }
+    if (Array.isArray(res.data) || (res.data as { type?: string }).type !== "file") throw notEditable("That path is a directory, not a file.");
     const data = res.data as { content?: string; encoding?: string; sha?: string };
-    const buf = Buffer.from(data.content ?? "", (data.encoding as BufferEncoding) ?? "base64");
-    if (buf.includes(0)) throw new Error("That file is binary and can't be edited here.");
+    // Files over ~1 MB come back with encoding "none" and empty content — too big for the inline editor.
+    if (data.encoding === "none") throw notEditable("That file is too large to edit here.");
+    const buf = Buffer.from(data.content ?? "", (data.encoding as BufferEncoding) || "base64");
+    if (buf.includes(0)) throw notEditable("That file is binary and can't be edited here.");
     return { content: buf.toString("utf8"), sha: data.sha ?? null, isNew: false };
   } catch (err) {
     if ((err as { status?: number }).status === 404) return { content: "", sha: null, isNew: true };
@@ -520,20 +527,26 @@ export async function commitFiles(
   }
 
   // Optionally open a PR from the pushed branch back to a base (commit-as-PR for protected branches).
+  // The commit has already landed above — opening the PR is a follow-up that must NEVER discard it, so
+  // a PR failure is swallowed (and a pre-existing PR for this branch is reused) rather than rejected.
   let pullRequestUrl: string | undefined;
   let pullRequestNumber: number | undefined;
   const prBase = opts.pullRequest?.base || defaultBranch;
   if (opts.pullRequest && branch !== prBase) {
-    const pr = await gh.rest.pulls.create({
-      owner,
-      repo,
-      head: branch,
-      base: prBase,
-      title: opts.pullRequest.title || opts.message,
-      body: opts.pullRequest.body,
-    });
-    pullRequestUrl = pr.data.html_url;
-    pullRequestNumber = pr.data.number;
+    try {
+      const pr = await gh.rest.pulls.create({ owner, repo, head: branch, base: prBase, title: opts.pullRequest.title || opts.message, body: opts.pullRequest.body });
+      pullRequestUrl = pr.data.html_url;
+      pullRequestNumber = pr.data.number;
+    } catch (err) {
+      // 422 usually means a PR already exists for this head → reuse it; other failures are non-fatal.
+      if ((err as { status?: number }).status === 422) {
+        try {
+          const existing = await gh.rest.pulls.list({ owner, repo, head: `${owner}:${branch}`, base: prBase, state: "open" });
+          const pr = existing.data[0];
+          if (pr) { pullRequestUrl = pr.html_url; pullRequestNumber = pr.number; }
+        } catch { /* ignore — still return the successful push */ }
+      }
+    }
   }
 
   return { commitSha: commit.data.sha, htmlUrl: `${info.data.html_url}/commit/${commit.data.sha}`, branch, pullRequestUrl, pullRequestNumber };

@@ -129,7 +129,9 @@ export function GithubUpload() {
     if (el) { el.setAttribute("webkitdirectory", ""); el.setAttribute("directory", ""); }
   }, [target, result]);
 
+  const ingestSeq = useRef(0);
   async function ingest(plan: Awaited<ReturnType<typeof readFolderPlan>>) {
+    const mine = ++ingestSeq.current;
     setFolderName(plan.topFolder);
     setFiles(plan.files);
     setExcluded(new Set());
@@ -139,10 +141,10 @@ export function GithubUpload() {
     setAddGitignore(false);
     setConfirmSecrets(false);
     if (!message || message === "Update from Kosh") setMessage(`Add ${plan.topFolder} contents`);
-    // Compute blob shas for the dry-run (non-blocking for the UI).
+    // Compute blob shas for the dry-run (non-blocking). Guard against a newer folder pick landing first.
     setBlobShas(new Map());
     const entries = await Promise.all(plan.files.map(async (f) => [f.path, await gitBlobSha(f)] as const));
-    setBlobShas(new Map(entries));
+    if (ingestSeq.current === mine) setBlobShas(new Map(entries));
   }
 
   async function onPickList(list: FileList | null) {
@@ -185,7 +187,13 @@ export function GithubUpload() {
     const t = setTimeout(() => {
       githubV2Api
         .tree(target.owner, target.name, diffBranch)
-        .then(({ entries }) => { if (treeSeq.current !== mine) return; setTreeMap(new Map(entries.map((e) => [e.path, e.sha]))); setDiffState("ready"); })
+        .then(({ entries, truncated }) => {
+          if (treeSeq.current !== mine) return;
+          // A truncated tree omits existing files, which would mislabel Overwrites as New — don't trust it.
+          if (truncated) { setTreeMap(null); setDiffState("unavailable"); return; }
+          setTreeMap(new Map(entries.map((e) => [e.path, e.sha])));
+          setDiffState("ready");
+        })
         .catch(() => { if (treeSeq.current === mine) { setTreeMap(null); setDiffState("unavailable"); } });
     }, 300);
     return () => clearTimeout(t);
@@ -209,9 +217,12 @@ export function GithubUpload() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [included, treeMap, diffState, blobShas, cleanSubpath]);
 
-  // Skips split into "too large / over a cap" vs the rest (ignored / build files).
-  const tooLarge = useMemo(() => skipped.filter((s) => /too large|over the/.test(s.reason)), [skipped]);
-  const otherSkipped = useMemo(() => skipped.filter((s) => !/too large|over the/.test(s.reason)), [skipped]);
+  // Skips split into size-related ("too large" / total-size cap) vs the rest (count cap, ignored, build).
+  const isSizeSkip = (reason: string) => /too large|total-size limit/.test(reason);
+  const tooLarge = useMemo(() => skipped.filter((s) => isSizeSkip(s.reason)), [skipped]);
+  const otherSkipped = useMemo(() => skipped.filter((s) => !isSizeSkip(s.reason)), [skipped]);
+  // Only offer/inject a starter .gitignore when we can confirm the target repo doesn't already have one.
+  const canOfferGitignore = !hasGitignore && !cleanSubpath && diffState === "ready" && !treeMap?.has(".gitignore");
 
   const toggleFile = (path: string) => setExcluded((prev) => { const next = new Set(prev); next.has(path) ? next.delete(path) : next.add(path); return next; });
   const setAll = (on: boolean) => setExcluded(on ? new Set() : new Set(files.map((f) => f.path)));
@@ -226,7 +237,7 @@ export function GithubUpload() {
     setError(null);
     try {
       const out = included.map((f) => ({ path: destPath(f.path), content: f.content, encoding: f.encoding }));
-      if (addGitignore && !hasGitignore && !cleanSubpath) out.unshift({ path: ".gitignore", content: STARTER_GITIGNORE, encoding: "utf-8" });
+      if (addGitignore && canOfferGitignore) out.unshift({ path: ".gitignore", content: STARTER_GITIGNORE, encoding: "utf-8" });
 
       const { push } = await githubV2Api.pushFiles(target.owner, target.name, {
         files: out,
@@ -481,8 +492,8 @@ export function GithubUpload() {
                       <Input id="up-msg" value={message} onChange={(e) => setMessage(e.target.value)} />
                     </div>
 
-                    {/* starter .gitignore */}
-                    {!hasGitignore && !cleanSubpath && (
+                    {/* starter .gitignore — only when the target repo doesn't already have one */}
+                    {canOfferGitignore && (
                       <label className="flex cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 text-[12.5px]">
                         <input type="checkbox" checked={addGitignore} onChange={(e) => setAddGitignore(e.target.checked)} className="h-4 w-4 accent-[var(--primary)]" />
                         <span className="inline-flex items-center gap-1"><Sparkles size={13} className="text-primary" /> Add a starter .gitignore</span>

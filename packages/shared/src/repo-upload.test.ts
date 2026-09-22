@@ -5,6 +5,7 @@ import {
   makeGitignoreMatcher,
   planRepoUpload,
   sanitizeRepoName,
+  sanitizeTopic,
   scanSecrets,
   type RepoFileMeta,
 } from "./repo-upload.js";
@@ -106,6 +107,22 @@ describe("sanitizeRepoName", () => {
     expect(isValidRepoName("has space")).toBe(false);
     expect(isValidRepoName("")).toBe(false);
     expect(isValidRepoName("..")).toBe(false);
+  });
+});
+
+describe("sanitizeTopic", () => {
+  it("produces valid GitHub topics", () => {
+    expect(sanitizeTopic("React")).toBe("react");
+    expect(sanitizeTopic("Machine Learning")).toBe("machine-learning");
+    expect(sanitizeTopic("C++")).toBe("c");
+    expect(sanitizeTopic("--foo--")).toBe("foo");
+    expect(sanitizeTopic("_private")).toBe("private"); // must start alphanumeric
+    expect(sanitizeTopic("a".repeat(60))).toHaveLength(50); // capped at 50
+  });
+  it("returns empty for input with nothing valid (so callers drop it)", () => {
+    expect(sanitizeTopic("!!!")).toBe("");
+    expect(sanitizeTopic("   ")).toBe("");
+    expect(sanitizeTopic("")).toBe("");
   });
 });
 

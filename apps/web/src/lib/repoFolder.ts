@@ -14,14 +14,26 @@ export interface FolderPlan {
   hasGitignore: boolean;
 }
 
-/** Detect binary by content (a NUL byte). Reading a binary file as UTF-8 would corrupt it. */
-export async function readContent(file: File): Promise<{ content: string; encoding: "utf-8" | "base64" }> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  if (!bytes.includes(0)) return { content: new TextDecoder().decode(bytes), encoding: "utf-8" };
+function toBase64(bytes: Uint8Array): { content: string; encoding: "base64" } {
   let bin = "";
   const CHUNK = 0x8000;
   for (let i = 0; i < bytes.length; i += CHUNK) bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
   return { content: btoa(bin), encoding: "base64" };
+}
+
+/**
+ * Read a file as UTF-8 text, or fall back to base64 for anything that isn't valid UTF-8. A NUL byte
+ * (binary) or a strict-decode failure (e.g. latin-1 / UTF-16 source) both route to base64 so the file
+ * is pushed byte-exact instead of being silently corrupted by a lossy decode.
+ */
+export async function readContent(file: File): Promise<{ content: string; encoding: "utf-8" | "base64" }> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes.includes(0)) return toBase64(bytes);
+  try {
+    return { content: new TextDecoder("utf-8", { fatal: true }).decode(bytes), encoding: "utf-8" };
+  } catch {
+    return toBase64(bytes);
+  }
 }
 
 /** Drop the top path segment so files sit at the repo root. */

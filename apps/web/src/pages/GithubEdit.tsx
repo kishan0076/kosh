@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Check, Eye, ExternalLink, FileCode2, GitBranch, GitPullRequest, Pencil } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -41,11 +41,7 @@ export function GithubEdit() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PushResult | null>(null);
 
-  const loadedFor = useRef("");
   useEffect(() => {
-    const key = `${owner}/${repo}/${path}`;
-    if (loadedFor.current === key) return;
-    loadedFor.current = key;
     let live = true;
     setLoading(true); setLoadError(null); setResult(null);
     Promise.all([
@@ -90,6 +86,7 @@ export function GithubEdit() {
       });
       setResult(push);
       setOriginal(content);
+      setPhase("idle");
       ghToast(push.pullRequestUrl ? "Pull request opened" : `Committed to ${push.branch}`, "ok");
       useGithubV2.getState().load(true).catch(() => {});
     } catch (err) {

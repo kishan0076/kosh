@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { AlertTriangle, Check, Globe, Lock, X } from "lucide-react";
-import { isValidRepoName, sanitizeRepoName } from "@kosh/shared";
+import { isValidRepoName, sanitizeTopic } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/ui";
 
@@ -202,7 +202,7 @@ export function SecretFindings({
 export function TopicsInput({ topics, onChange }: { topics: string[]; onChange: (t: string[]) => void }) {
   const [draft, setDraft] = useState("");
   const add = (raw: string) => {
-    const t = sanitizeRepoName(raw).toLowerCase();
+    const t = sanitizeTopic(raw);
     if (t && !topics.includes(t) && topics.length < 20) onChange([...topics, t]);
     setDraft("");
   };

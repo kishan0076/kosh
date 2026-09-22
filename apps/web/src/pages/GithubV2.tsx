@@ -246,16 +246,24 @@ const BULK_META: Record<BulkAction, { label: string; icon: typeof Archive; verb:
 };
 
 function SelectionBar({ repos, onAction, onClear }: { repos: RepoSummary[]; onAction: (a: BulkAction) => void; onClear: () => void }) {
+  // Archive / visibility / delete all require admin — offer them only when every selected repo qualifies,
+  // otherwise the server would reject the ones the user can't manage.
   const admin = repos.every((r) => r.canAdmin);
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
       <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-full border border-border bg-elevated px-3 py-2 shadow-[var(--shadow-pop)]">
         <span className="px-1 text-[13px] font-semibold">{repos.length} selected</span>
         <span className="h-4 w-px bg-border" />
-        <Button variant="ghost" size="sm" onClick={() => onAction("archive")}><Archive size={14} /> Archive</Button>
-        <Button variant="ghost" size="sm" onClick={() => onAction("makePrivate")}><Lock size={14} /> Private</Button>
-        <Button variant="ghost" size="sm" onClick={() => onAction("makePublic")}><Globe size={14} /> Public</Button>
-        {admin && <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={() => onAction("delete")}><Trash2 size={14} /> Delete</Button>}
+        {admin ? (
+          <>
+            <Button variant="ghost" size="sm" onClick={() => onAction("archive")}><Archive size={14} /> Archive</Button>
+            <Button variant="ghost" size="sm" onClick={() => onAction("makePrivate")}><Lock size={14} /> Private</Button>
+            <Button variant="ghost" size="sm" onClick={() => onAction("makePublic")}><Globe size={14} /> Public</Button>
+            <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={() => onAction("delete")}><Trash2 size={14} /> Delete</Button>
+          </>
+        ) : (
+          <span className="px-1 text-[12px] text-muted">Some selected repos aren't yours to manage</span>
+        )}
         <span className="h-4 w-px bg-border" />
         <button onClick={onClear} className="rounded-full p-1.5 text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Clear selection"><X size={15} /></button>
       </div>

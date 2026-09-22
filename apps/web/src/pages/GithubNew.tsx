@@ -100,7 +100,7 @@ export function GithubNew() {
   // Debounced availability check.
   const seq = useRef(0);
   useEffect(() => {
-    if (!nameValid || !owner) { setNameStatus("idle"); return; }
+    if (!nameValid || !owner) { ++seq.current; setNameStatus("idle"); return; } // invalidate any in-flight check
     const mine = ++seq.current;
     setNameStatus("checking");
     const t = setTimeout(() => {
@@ -112,17 +112,19 @@ export function GithubNew() {
     return () => clearTimeout(t);
   }, [trimmedName, nameValid, owner]);
 
-  const autoInit = initReadme || !!gitignore || !!license;
+  // GitHub's auto_init always adds a README, so choosing a template forces a README on.
+  const readmeForced = !!gitignore || !!license;
+  const autoInit = initReadme || readmeForced;
   const seedBlocked = seedFiles.length > 0 && seedFindings.length > 0 && !seedConfirm;
   const canCreate = nameValid && nameStatus !== "taken" && nameStatus !== "checking" && !busy && !seedBlocked;
 
   const initFiles = useMemo(() => {
     const f: string[] = [];
-    if (initReadme) f.push("README.md");
+    if (initReadme || readmeForced) f.push("README.md");
     if (gitignore) f.push(".gitignore");
     if (license) f.push("LICENSE");
     return f;
-  }, [initReadme, gitignore, license]);
+  }, [initReadme, readmeForced, gitignore, license]);
 
   async function create() {
     if (!canCreate) return;
@@ -223,8 +225,8 @@ export function GithubNew() {
           <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3.5">
             <div className="mb-2.5 text-[12px] font-semibold uppercase tracking-wide text-faint">Initialize this repository</div>
             <div className="flex items-center justify-between gap-3">
-              <span className="flex items-center gap-2 text-[13px]"><Book size={15} className="text-muted" /> Add a README</span>
-              <Toggle checked={initReadme} onChange={setInitReadme} label="Add a README" />
+              <span className="flex items-center gap-2 text-[13px]"><Book size={15} className="text-muted" /> Add a README {readmeForced && <span className="text-[11px] text-faint">(added automatically with a template)</span>}</span>
+              <Toggle checked={initReadme || readmeForced} onChange={setInitReadme} disabled={readmeForced} label="Add a README" />
             </div>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               <div>

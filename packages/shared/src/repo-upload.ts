@@ -171,6 +171,21 @@ export function isValidRepoName(name: string): boolean {
   return /^[A-Za-z0-9._-]{1,100}$/.test(name) && name !== "." && name !== "..";
 }
 
+/**
+ * Normalize a string into a valid GitHub topic: lowercase, only `[a-z0-9-]`, must start with an
+ * alphanumeric, no leading/trailing or doubled hyphens, capped at 50 chars. Returns "" when nothing
+ * valid remains (so callers can drop it) — unlike sanitizeRepoName, which substitutes a placeholder.
+ */
+export function sanitizeTopic(raw: string): string {
+  return (raw ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .slice(0, 50)
+    .replace(/-+$/, "");
+}
+
 /* ── Secret scanning ─────────────────────────────────────────── */
 
 interface SecretRule {
