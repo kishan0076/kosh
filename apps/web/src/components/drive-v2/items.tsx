@@ -156,16 +156,19 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
   );
 }
 
-/** Small circular select control shown on hover / when selected (top-left of a card). */
-function SelectDisc({ selected, onToggle }: { selected: boolean; onToggle: () => void }) {
+/** Circular select checkbox — always visible so items can be picked without hovering. */
+function SelectDisc({ selected, onToggle, className }: { selected: boolean; onToggle: () => void; className?: string }) {
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
       aria-label={selected ? "Deselect" : "Select"}
       aria-pressed={selected}
       className={cn(
-        "grid h-6 w-6 place-items-center rounded-full border backdrop-blur transition-opacity",
-        selected ? "border-primary bg-primary text-primary-foreground opacity-100" : "border-border-strong bg-surface/80 text-transparent opacity-0 hover:text-muted focus-visible:opacity-100 group-hover:opacity-100",
+        "grid h-6 w-6 shrink-0 place-items-center rounded-full border backdrop-blur transition-colors",
+        selected
+          ? "border-primary bg-primary text-primary-foreground opacity-100"
+          : "border-border-strong bg-surface/80 text-transparent hover:text-muted group-hover:border-primary/60",
+        className,
       )}
     >
       <Check size={13} strokeWidth={3} />
@@ -174,7 +177,7 @@ function SelectDisc({ selected, onToggle }: { selected: boolean; onToggle: () =>
 }
 
 /* ── list row ── */
-export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   return (
     <div
@@ -192,6 +195,7 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
+        <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} className="h-5 w-5" />
         <span className="relative grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface-2">
           <NodeIcon node={node} size={18} thumb />
         </span>

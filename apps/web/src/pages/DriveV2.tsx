@@ -4,9 +4,12 @@ import {
   Bookmark,
   BookmarkPlus,
   Check,
+  CheckSquare,
   ChevronRight,
   Copy,
   CornerUpRight,
+  MinusSquare,
+  Square,
   Download,
   ExternalLink,
   Filter,
@@ -245,7 +248,7 @@ function Shell() {
               onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
               onUpload={() => fileInputRef.current?.click()}
             />
-            <DriveToolbar />
+            <DriveToolbar orderedIds={orderedIds} />
             {selection.size > 0 && <SelectionBar />}
             <DriveContentArea
               view={view}
@@ -391,7 +394,31 @@ function SyncPill() {
 }
 
 /* ── toolbar (utility strip on the borderless canvas) ── */
-function DriveToolbar() {
+/** Tri-state "Select all / Deselect all" over the currently visible items. */
+function SelectAllToggle({ orderedIds }: { orderedIds: string[] }) {
+  const selection = useDriveV2((s) => s.selection);
+  const total = orderedIds.length;
+  const sel = orderedIds.reduce((n, id) => n + (selection.has(id) ? 1 : 0), 0);
+  const all = total > 0 && sel === total;
+  const some = sel > 0 && !all;
+  const Icon = all ? CheckSquare : some ? MinusSquare : Square;
+  return (
+    <button
+      onClick={() => (all ? useDriveV2.getState().clearSelection() : useDriveV2.getState().selectAll(orderedIds))}
+      disabled={total === 0}
+      aria-pressed={all}
+      className={cn(
+        "inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] transition-colors hover:bg-surface-2 disabled:opacity-50",
+        all || some ? "border-primary text-primary" : "border-border text-muted",
+      )}
+      title={all ? "Deselect all" : "Select all"}
+    >
+      <Icon size={15} /> <span className="hidden sm:inline">{all ? "Deselect all" : "Select all"}</span>
+    </button>
+  );
+}
+
+function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
   const view = useDriveV2((s) => s.view);
   const prefs = useDriveV2((s) => s.prefs);
   const searchQuery = useDriveV2((s) => s.searchQuery);
@@ -441,6 +468,8 @@ function DriveToolbar() {
         <MenuSeparator />
         <MenuItem icon={BookmarkPlus} disabled={!q.trim()} onClick={saveCurrent}>Save current search</MenuItem>
       </Menu>
+
+      <SelectAllToggle orderedIds={orderedIds} />
 
       <Menu align="end" width={200} trigger={({ toggle, ref }) => (
         <button ref={ref} onClick={toggle} className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[13px] text-muted hover:bg-surface-2"><ArrowUpDown size={15} /> Sort</button>
