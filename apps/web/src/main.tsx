@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { MotionConfig } from "motion/react";
 import "./index.css";
 import { initTheme } from "@/lib/theme";
 import { AppShell } from "@/components/layout/AppShell";
@@ -33,6 +34,7 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
+    <MotionConfig reducedMotion="user">
     <BrowserRouter>
       <Routes>
         <Route element={<AppShell />}>
@@ -58,5 +60,6 @@ createRoot(document.getElementById("root")!).render(
         </Route>
       </Routes>
     </BrowserRouter>
+    </MotionConfig>
   </StrictMode>,
 );

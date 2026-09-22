@@ -227,7 +227,7 @@ function AccountPicker() {
   return (
     <div className="relative">
       <button onClick={() => setOpen((v) => !v)} aria-haspopup="menu" aria-expanded={open} className="flex items-center gap-2 rounded-full border border-border bg-surface-2 py-1.5 pl-1.5 pr-3 text-[12.5px] transition-colors hover:border-border-strong">
-        {account?.picture ? <img src={account.picture} alt="" className="h-6 w-6 rounded-full" /> : <span className="grid h-6 w-6 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={13} /></span>}
+        {account?.picture ? <img src={account.picture} alt="" referrerPolicy="no-referrer" className="h-6 w-6 rounded-full" /> : <span className="grid h-6 w-6 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={13} /></span>}
         <span className="max-w-[160px] truncate font-medium">{account?.email ?? "Select account"}</span>
         <ChevronRight size={14} className={cn("text-muted transition-transform", open && "rotate-90")} />
       </button>
@@ -239,7 +239,7 @@ function AccountPicker() {
             {accounts.map((a) => (
               <div key={a.id} className={cn("flex items-center gap-2 px-3 py-2", a.id === accountId && "bg-primary-soft/40")}>
                 <button role="menuitem" onClick={() => { void selectAccount(a.id); setOpen(false); }} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-                  {a.picture ? <img src={a.picture} alt="" className="h-7 w-7 rounded-full" /> : <span className="grid h-7 w-7 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={14} /></span>}
+                  {a.picture ? <img src={a.picture} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full" /> : <span className="grid h-7 w-7 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={14} /></span>}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[13px] font-medium">{a.name ?? a.email}</span>
                     <span className="block truncate text-[11px] text-muted">{a.email}</span>

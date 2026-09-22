@@ -322,6 +322,25 @@
     animation: kosh-shimmer 1.4s ease-in-out infinite;
   }
 
+  /* Motion tokens — mirror apps/web/src/lib/motion.ts so CSS + framer animations stay consistent. */
+  :root {
+    --motion-fast: 120ms;
+    --motion-base: 200ms;
+    --motion-slow: 320ms;
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+    --ease-exit: cubic-bezier(0.3, 0, 1, 1);
+  }
+
+  /* Cheap, GPU-friendly reveal for VIRTUALIZED rows/cards (never wrap those in framer motion.*). */
+  @keyframes kosh-reveal-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  .reveal-in {
+    animation: kosh-reveal-in var(--motion-base) var(--ease-standard) both;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -333,6 +352,9 @@
     }
     .card-hover:hover {
       transform: none;
+    }
+    .reveal-in {
+      animation: none;
     }
   }
 }

@@ -1,5 +1,5 @@
 import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from "react";
-import { forwardRef } from "react";
+import { forwardRef, useEffect, useState } from "react";
 import { cn } from "@/lib/cn";
 
 /* ── Button ─────────────────────────────────────────────────── */
@@ -135,12 +135,17 @@ export function Progress({ value, className, tone = "primary" }: { value: number
 /* ── Avatar ─────────────────────────────────────────────────── */
 export function Avatar({ name, src, size = 32, className }: { name: string; src?: string; size?: number; className?: string }) {
   const initials = name.split(" ").map((p) => p[0]).slice(0, 2).join("").toUpperCase();
+  // Google/GitHub avatar hosts (lh3.googleusercontent.com, avatars.githubusercontent.com) reject
+  // requests carrying a cross-origin Referer → the image 403s. `no-referrer` fixes it; on any other
+  // load failure we fall back to the initials rather than a broken-image glyph.
+  const [broken, setBroken] = useState(false);
+  useEffect(() => { setBroken(false); }, [src]);
   return (
     <div
       className={cn("relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary-soft text-primary font-semibold", className)}
       style={{ width: size, height: size, fontSize: size * 0.4 }}
     >
-      {src ? <img src={src} alt={name} className="h-full w-full object-cover" /> : initials}
+      {src && !broken ? <img src={src} alt={name} referrerPolicy="no-referrer" onError={() => setBroken(true)} className="h-full w-full object-cover" /> : initials}
     </div>
   );
 }
