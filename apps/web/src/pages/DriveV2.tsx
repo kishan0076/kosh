@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import {
-  Activity,
   ArrowUpDown,
   Bookmark,
   BookmarkPlus,
   Check,
   ChevronRight,
-  Clock,
   Copy,
   CornerUpRight,
   Download,
@@ -18,16 +16,13 @@ import {
   List as ListIcon,
   Pencil,
   Plug,
-  Plus,
   RefreshCw,
   RotateCcw,
   Search,
   Share2,
-  Sparkles,
   Star,
   Trash2,
   Type,
-  Users,
   X,
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
@@ -41,6 +36,7 @@ import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, sortNodes, type ItemHandlers } from "@/components/drive-v2/items";
 import { PageHeader } from "@/components/drive-v2/PageHeader";
+import { DriveRail } from "@/components/drive-v2/DriveRail";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
 import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components/drive-v2/modals";
 import { ShareModal } from "@/components/drive-v2/ShareModal";
@@ -218,8 +214,11 @@ function Shell() {
   return (
     <div className="w-full" onKeyDown={onKeyDown}>
       <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => { void store.getState().uploadFiles(Array.from(e.target.files ?? [])); if (fileInputRef.current) fileInputRef.current.value = ""; }} />
-      <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
-        <DriveNav />
+      <div className="grid gap-6 lg:grid-cols-[auto_minmax(0,1fr)] lg:items-start">
+        <DriveRail
+          onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
+          onUpload={() => fileInputRef.current?.click()}
+        />
         <FadeSwap k={paneKey} className="min-w-0">
           {activityOpen ? (
             <ActivityPanel onClose={() => store.getState().setActivity(false)} />
@@ -326,99 +325,6 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
   return a;
 }
 
-/* ── left nav ── */
-function DriveNav() {
-  const accounts = useDriveV2((s) => s.accounts);
-  const accountId = useDriveV2((s) => s.accountId);
-  const view = useDriveV2((s) => s.view);
-  const insightsOpen = useDriveV2((s) => s.insightsOpen);
-  const activityOpen = useDriveV2((s) => s.activityOpen);
-  const quota = useDriveV2((s) => s.quota);
-  const account = accounts.find((a) => a.id === accountId);
-
-  const NAV: { v: DriveView; label: string; icon: typeof HardDrive; tone?: string }[] = [
-    { v: "myDrive", label: "My Drive", icon: HardDrive },
-    { v: "recent", label: "Recent", icon: Clock },
-    { v: "starred", label: "Starred", icon: Star, tone: "text-gold" },
-    { v: "shared", label: "Shared with me", icon: Users },
-    { v: "trash", label: "Trash", icon: Trash2 },
-  ];
-  const pct = quota?.limit ? Math.min(100, Math.round((quota.usage / quota.limit) * 100)) : 0;
-
-  return (
-    <aside className="space-y-3 lg:sticky lg:top-4">
-      <div className="rounded-[var(--radius-card)] border border-border bg-surface p-2">
-        <Menu
-          align="start"
-          width={240}
-          trigger={({ toggle, ref }) => (
-            <button ref={ref} onClick={toggle} className="flex w-full items-center gap-2 rounded-[var(--radius-control)] p-1.5 text-left hover:bg-surface-2">
-              {account?.picture ? <img src={account.picture} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 place-items-center rounded-full bg-primary-soft text-primary"><HardDrive size={15} /></span>}
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[12.5px] font-semibold">{account?.name ?? "Account"}</span>
-                <span className="block truncate text-[11px] text-muted">{account?.email}</span>
-              </span>
-              <ChevronRight size={14} className="text-faint" />
-            </button>
-          )}
-        >
-          <MenuLabel>Google accounts</MenuLabel>
-          {accounts.map((a) => (
-            <MenuItem key={a.id} icon={a.id === accountId ? Check : HardDrive} onClick={() => void useDriveV2.getState().selectAccount(a.id)}>
-              <span className="truncate">{a.email}</span>
-            </MenuItem>
-          ))}
-          <MenuSeparator />
-          <MenuItem icon={Plus} onClick={() => { window.location.href = driveApi.connectUrl("drive-v2"); }}>Connect account</MenuItem>
-        </Menu>
-        <div className="mt-1.5"><SpacePicker /></div>
-      </div>
-
-      <nav className="rounded-[var(--radius-card)] border border-border bg-surface p-2">
-        {NAV.map(({ v, label, icon: Icon, tone }) => {
-          const active = !insightsOpen && view === v;
-          return (
-            <button
-              key={v}
-              onClick={() => useDriveV2.getState().setView(v)}
-              className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors", active ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
-            >
-              <Icon size={16} className={cn(!active && tone)} /> {label}
-            </button>
-          );
-        })}
-        <div className="my-1 h-px bg-border" />
-        <button
-          onClick={() => useDriveV2.getState().setInsights(true)}
-          className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors", insightsOpen ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
-        >
-          <Sparkles size={16} /> Insights
-        </button>
-        <button
-          onClick={() => useDriveV2.getState().setActivity(true)}
-          className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors", activityOpen ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}
-        >
-          <Activity size={16} /> Activity
-        </button>
-      </nav>
-
-      {quota && (
-        <div className="rounded-[var(--radius-card)] border border-border bg-surface p-3.5">
-          <div className="mb-2 flex items-center gap-2 text-[12.5px] font-semibold"><HardDrive size={15} className="text-primary" /> Storage</div>
-          {quota.limit ? (
-            <>
-              <Progress value={pct} tone={pct > 95 ? "danger" : pct > 80 ? "warn" : "primary"} />
-              <div className="mt-1.5 text-[11.5px] text-muted">{formatBytes(quota.usage)} of {formatBytes(quota.limit)} used</div>
-            </>
-          ) : (
-            <div className="text-[11.5px] text-muted">{formatBytes(quota.usage)} used</div>
-          )}
-        </div>
-      )}
-    </aside>
-  );
-}
-
 /* ── live-sync status pill ── */
 function SyncPill() {
   const sync = useDriveV2((s) => s.sync);
@@ -447,35 +353,6 @@ function SyncPill() {
       {sync.status === "syncing" ? <RefreshCw size={13} className="animate-spin text-primary" /> : <span className={cn("h-1.5 w-1.5 rounded-full", dot)} />}
       <span className="hidden md:inline">{label}</span>
     </button>
-  );
-}
-
-/* ── Shared Drive (space) picker ── */
-function SpacePicker() {
-  const spaces = useDriveV2((s) => s.spaces);
-  const spaceId = useDriveV2((s) => s.spaceId);
-  const spaceName = useDriveV2((s) => s.spaceName);
-  if (!spaces.length) return null; // consumer accounts have no Shared Drives
-  return (
-    <Menu
-      align="start"
-      width={230}
-      trigger={({ toggle, ref }) => (
-        <button ref={ref} onClick={toggle} className="flex w-full items-center gap-2 rounded-[var(--radius-control)] border border-border px-2.5 py-2 text-left text-[13px] hover:bg-surface-2">
-          {spaceId ? <Users size={15} className="shrink-0 text-primary" /> : <HardDrive size={15} className="shrink-0 text-primary" />}
-          <span className="min-w-0 flex-1 truncate font-medium">{spaceId ? spaceName : "My Drive"}</span>
-          <ChevronRight size={14} className="shrink-0 text-faint" />
-        </button>
-      )}
-    >
-      <MenuLabel>Spaces</MenuLabel>
-      <MenuItem icon={spaceId === null ? Check : HardDrive} onClick={() => void useDriveV2.getState().selectSpace(null)}>My Drive</MenuItem>
-      {spaces.map((d) => (
-        <MenuItem key={d.id} icon={spaceId === d.id ? Check : Users} onClick={() => void useDriveV2.getState().selectSpace(d.id)}>
-          <span className="truncate">{d.name}</span>
-        </MenuItem>
-      ))}
-    </Menu>
   );
 }
 
