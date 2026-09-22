@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ExternalLink,
   FileCode2,
+  FileWarning,
   FolderInput,
   FolderUp,
   GitBranch,
@@ -17,9 +18,9 @@ import {
 import { formatBytes, PUBLISH_LIMITS, STARTER_GITIGNORE } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ApiError } from "@/data/api";
-import { githubV2Api, type PushResult, type RepoSummary } from "@/data/githubV2Api";
+import { githubV2Api, type BranchLite, type PushResult, type RepoSummary } from "@/data/githubV2Api";
 import { useGithubV2, ghToast } from "@/data/githubV2";
-import { readFolderPlan, type LoadedRepoFile } from "@/lib/repoFolder";
+import { readFolderPlan, readDropPlan, gitBlobSha, type LoadedRepoFile } from "@/lib/repoFolder";
 import { GitHubMark } from "@/lib/icons";
 import { Button, Input, Spinner } from "@/components/ui";
 import { SelectMenu } from "@/components/overlays";
@@ -34,10 +35,13 @@ interface Target {
   canPush: boolean;
 }
 
+type DiffLabel = "added" | "overwrite" | "unchanged";
+
 /**
  * Dedicated page to upload a local folder's contents into a SELECTED GitHub repo as one commit.
  * Reached standalone at /github/upload (pick any push-capable repo) or deep-linked at
- * /github/:owner/:repo/upload (repo pre-selected). Replaces the cramped PushFilesModal.
+ * /github/:owner/:repo/upload (repo pre-selected). Includes drag-and-drop, per-file include/exclude,
+ * an existing-or-new branch target, and a dry-run diff (Added / Overwrites / Unchanged).
  */
 export function GithubUpload() {
   const params = useParams();
@@ -53,17 +57,27 @@ export function GithubUpload() {
 
   const [folderName, setFolderName] = useState("");
   const [files, setFiles] = useState<LoadedRepoFile[]>([]);
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [skipped, setSkipped] = useState<{ path: string; reason: string }[]>([]);
   const [findings, setFindings] = useState<SecretFinding[]>([]);
   const [hasGitignore, setHasGitignore] = useState(false);
   const [addGitignore, setAddGitignore] = useState(false);
   const [reading, setReading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const [showSkipped, setShowSkipped] = useState(false);
 
+  const [branches, setBranches] = useState<BranchLite[]>([]);
+  const [branchMode, setBranchMode] = useState<"existing" | "new">("existing");
   const [branch, setBranch] = useState("");
+  const [newBranch, setNewBranch] = useState("");
   const [subpath, setSubpath] = useState("");
   const [message, setMessage] = useState("Update from Kosh");
   const [confirmSecrets, setConfirmSecrets] = useState(false);
+
+  // Dry-run: git blob shas of picked files + the target-branch tree, compared to label each file.
+  const [blobShas, setBlobShas] = useState<Map<string, string>>(new Map());
+  const [treeMap, setTreeMap] = useState<Map<string, string> | null>(null);
+  const [diffState, setDiffState] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
 
   const [phase, setPhase] = useState<"idle" | "pushing">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -84,17 +98,25 @@ export function GithubUpload() {
       .then(({ repo }) => {
         if (!live) return;
         setTarget({ owner: repo.owner, name: repo.name, defaultBranch: repo.defaultBranch, private: repo.private, canPush: repo.canPush });
-        setBranch(repo.defaultBranch);
       })
       .catch((err) => { if (live) setTargetError(err instanceof ApiError ? err.message : "Couldn't load that repository."); });
     return () => { live = false; };
   }, [deepLinked, params.owner, params.repo]);
 
+  // When a target is chosen, default the branch and load its branch list.
+  useEffect(() => {
+    if (!target) return;
+    setBranch(target.defaultBranch);
+    setBranchMode("existing");
+    let live = true;
+    githubV2Api.branches(target.owner, target.name).then(({ branches }) => { if (live) setBranches(branches); }).catch(() => { if (live) setBranches([]); });
+    return () => { live = false; };
+  }, [target?.owner, target?.name, target?.defaultBranch]);
+
   const pushable = useMemo(() => repos.filter((r) => r.canPush && !r.archived).sort((a, b) => a.fullName.localeCompare(b.fullName)), [repos]);
 
   function selectRepo(r: RepoSummary) {
     setTarget({ owner: r.owner, name: r.name, defaultBranch: r.defaultBranch, private: r.private, canPush: r.canPush });
-    setBranch(r.defaultBranch);
     setResult(null);
   }
 
@@ -103,51 +125,107 @@ export function GithubUpload() {
     if (el) { el.setAttribute("webkitdirectory", ""); el.setAttribute("directory", ""); }
   }, [target, result]);
 
-  const totalBytes = useMemo(() => files.reduce((a, f) => a + f.size, 0), [files]);
+  async function ingest(plan: Awaited<ReturnType<typeof readFolderPlan>>) {
+    setFolderName(plan.topFolder);
+    setFiles(plan.files);
+    setExcluded(new Set());
+    setSkipped(plan.skipped);
+    setFindings(plan.findings);
+    setHasGitignore(plan.hasGitignore);
+    setAddGitignore(false);
+    setConfirmSecrets(false);
+    if (!message || message === "Update from Kosh") setMessage(`Add ${plan.topFolder} contents`);
+    // Compute blob shas for the dry-run (non-blocking for the UI).
+    setBlobShas(new Map());
+    const entries = await Promise.all(plan.files.map(async (f) => [f.path, await gitBlobSha(f)] as const));
+    setBlobShas(new Map(entries));
+  }
 
-  async function onPick(list: FileList | null) {
+  async function onPickList(list: FileList | null) {
     if (!list || list.length === 0) return;
-    setReading(true);
-    setError(null);
-    setResult(null);
-    try {
-      const plan = await readFolderPlan(list);
-      setFolderName(plan.topFolder);
-      setFiles(plan.files);
-      setSkipped(plan.skipped);
-      setFindings(plan.findings);
-      setHasGitignore(plan.hasGitignore);
-      setAddGitignore(false);
-      setConfirmSecrets(false);
-      if (!message || message === "Update from Kosh") setMessage(`Add ${plan.topFolder} contents`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't read that folder.");
-    } finally {
-      setReading(false);
-      if (inputRef.current) inputRef.current.value = "";
-    }
+    setReading(true); setError(null); setResult(null);
+    try { await ingest(await readFolderPlan(list)); }
+    catch (err) { setError(err instanceof Error ? err.message : "Couldn't read that folder."); }
+    finally { setReading(false); if (inputRef.current) inputRef.current.value = ""; }
+  }
+
+  async function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    if (!e.dataTransfer.items.length) return;
+    setReading(true); setError(null); setResult(null);
+    try { await ingest(await readDropPlan(e.dataTransfer)); }
+    catch (err) { setError(err instanceof Error ? err.message : "Couldn't read that folder."); }
+    finally { setReading(false); }
   }
 
   // Destination subpath: strip slashes, reject traversal.
   const cleanSubpath = subpath.trim().replace(/^\/+|\/+$/g, "");
   const subpathInvalid = cleanSubpath.split("/").some((s) => s === "..") || subpath.trim().startsWith("/");
+  const destPath = (p: string) => (cleanSubpath ? `${cleanSubpath}/${p}` : p);
+
+  const included = useMemo(() => files.filter((f) => !excluded.has(f.path)), [files, excluded]);
+  const includedBytes = useMemo(() => included.reduce((a, f) => a + f.size, 0), [included]);
+
+  const effectiveBranch = (branchMode === "new" ? newBranch : branch).trim();
+  const diffBranch = branchMode === "new" ? target?.defaultBranch : branch.trim();
+
+  // Fetch the target branch's tree for the dry-run.
+  const treeSeq = useRef(0);
+  useEffect(() => {
+    if (!target || files.length === 0 || !diffBranch) { setTreeMap(null); setDiffState("idle"); return; }
+    const mine = ++treeSeq.current;
+    setDiffState("loading");
+    const t = setTimeout(() => {
+      githubV2Api
+        .tree(target.owner, target.name, diffBranch)
+        .then(({ entries }) => { if (treeSeq.current !== mine) return; setTreeMap(new Map(entries.map((e) => [e.path, e.sha]))); setDiffState("ready"); })
+        .catch(() => { if (treeSeq.current === mine) { setTreeMap(null); setDiffState("unavailable"); } });
+    }, 300);
+    return () => clearTimeout(t);
+  }, [target?.owner, target?.name, diffBranch, files.length]);
+
+  const labelOf = (f: LoadedRepoFile): DiffLabel | undefined => {
+    if (!treeMap || diffState !== "ready") return undefined;
+    const existing = treeMap.get(destPath(f.path));
+    if (existing === undefined) return "added";
+    return existing === blobShas.get(f.path) ? "unchanged" : "overwrite";
+  };
+
+  const diffCounts = useMemo(() => {
+    if (diffState !== "ready") return null;
+    let added = 0, overwrite = 0, unchanged = 0;
+    for (const f of included) {
+      const l = labelOf(f);
+      if (l === "added") added++; else if (l === "overwrite") overwrite++; else if (l === "unchanged") unchanged++;
+    }
+    return { added, overwrite, unchanged };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [included, treeMap, diffState, blobShas, cleanSubpath]);
+
+  // Skips split into "too large / over a cap" vs the rest (ignored / build files).
+  const tooLarge = useMemo(() => skipped.filter((s) => /too large|over the/.test(s.reason)), [skipped]);
+  const otherSkipped = useMemo(() => skipped.filter((s) => !/too large|over the/.test(s.reason)), [skipped]);
+
+  const toggleFile = (path: string) => setExcluded((prev) => { const next = new Set(prev); next.has(path) ? next.delete(path) : next.add(path); return next; });
+  const setAll = (on: boolean) => setExcluded(on ? new Set() : new Set(files.map((f) => f.path)));
 
   const canPush =
-    !!target && target.canPush && files.length > 0 && !reading && phase === "idle" &&
-    !!branch.trim() && !!message.trim() && !subpathInvalid && (findings.length === 0 || confirmSecrets);
+    !!target && target.canPush && included.length > 0 && !reading && phase === "idle" &&
+    !!effectiveBranch && !!message.trim() && !subpathInvalid && (findings.length === 0 || confirmSecrets);
 
   async function push() {
     if (!canPush || !target) return;
     setPhase("pushing");
     setError(null);
     try {
-      const out = files.map((f) => ({ path: cleanSubpath ? `${cleanSubpath}/${f.path}` : f.path, content: f.content, encoding: f.encoding }));
+      const out = included.map((f) => ({ path: destPath(f.path), content: f.content, encoding: f.encoding }));
       if (addGitignore && !hasGitignore && !cleanSubpath) out.unshift({ path: ".gitignore", content: STARTER_GITIGNORE, encoding: "utf-8" });
 
       const { push } = await githubV2Api.pushFiles(target.owner, target.name, {
         files: out,
         message: message.trim(),
-        branch: branch.trim(),
+        branch: effectiveBranch,
         allowSecrets: confirmSecrets,
       });
       setResult({ ...push, count: out.length });
@@ -166,24 +244,13 @@ export function GithubUpload() {
   }
 
   function reset() {
-    setResult(null);
-    setFiles([]);
-    setSkipped([]);
-    setFindings([]);
-    setFolderName("");
-    setPhase("idle");
-    setError(null);
-    setConfirmSecrets(false);
+    setResult(null); setFiles([]); setExcluded(new Set()); setSkipped([]); setFindings([]);
+    setFolderName(""); setPhase("idle"); setError(null); setConfirmSecrets(false); setTreeMap(null); setDiffState("idle");
   }
 
   const repoOptions = pushable.map((r) => ({
     value: r.fullName,
-    label: (
-      <span className="flex items-center gap-2">
-        <GitHubMark size={12} className="shrink-0 text-muted" />
-        <span className="truncate">{r.fullName}</span>
-      </span>
-    ),
+    label: <span className="flex items-center gap-2"><GitHubMark size={12} className="shrink-0 text-muted" /><span className="truncate">{r.fullName}</span></span>,
   }));
 
   return (
@@ -219,17 +286,23 @@ export function GithubUpload() {
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
           {/* left: source + review */}
           <div className="space-y-4">
-            <input ref={inputRef} type="file" multiple hidden onChange={(e) => onPick(e.target.files)} />
+            <input ref={inputRef} type="file" multiple hidden onChange={(e) => onPickList(e.target.files)} />
 
             {files.length === 0 ? (
               <button
                 type="button"
                 onClick={() => inputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false); }}
+                onDrop={onDrop}
                 disabled={reading}
-                className="flex min-h-[220px] w-full flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border-2 border-dashed border-border bg-surface px-6 py-12 text-center transition-colors hover:border-primary hover:bg-primary-soft/30 disabled:opacity-60"
+                className={cn(
+                  "flex min-h-[220px] w-full flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] border-2 border-dashed px-6 py-12 text-center transition-colors disabled:opacity-60",
+                  dragOver ? "border-primary bg-primary-soft/50" : "border-border bg-surface hover:border-primary hover:bg-primary-soft/30",
+                )}
               >
                 <span className="grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary">{reading ? <Spinner size={26} /> : <FolderUp size={28} />}</span>
-                <span className="text-[15px] font-semibold">{reading ? "Reading folder…" : "Choose a folder to upload"}</span>
+                <span className="text-[15px] font-semibold">{reading ? "Reading folder…" : dragOver ? "Drop to read the folder" : "Drop a folder here, or choose one"}</span>
                 <span className="max-w-sm text-[12.5px] text-muted">Prepared in your browser — build files, dependencies and secrets are filtered out automatically. Up to {PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB.</span>
               </button>
             ) : (
@@ -239,32 +312,58 @@ export function GithubUpload() {
                     <FileCode2 size={17} className="shrink-0 text-primary" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[14px] font-semibold">{folderName || "Folder"}</div>
-                      <div className="text-[12px] text-muted">{files.length} file{files.length === 1 ? "" : "s"} · {formatBytes(totalBytes)}{skipped.length ? ` · ${skipped.length} skipped` : ""}</div>
+                      <div className="text-[12px] text-muted">
+                        {included.length} of {files.length} file{files.length === 1 ? "" : "s"} · {formatBytes(includedBytes)}
+                        {diffCounts && <span className="ml-1 text-faint">· {diffCounts.added} new · {diffCounts.overwrite} overwrite{diffCounts.unchanged ? ` · ${diffCounts.unchanged} unchanged` : ""}</span>}
+                      </div>
                     </div>
+                    <button onClick={() => setAll(true)} className="text-[12px] font-medium text-muted hover:text-foreground">All</button>
+                    <span className="text-faint">·</span>
+                    <button onClick={() => setAll(false)} className="text-[12px] font-medium text-muted hover:text-foreground">None</button>
                     <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()} disabled={phase !== "idle"}><RefreshCw size={14} /> Change</Button>
                   </div>
-                  <div className="max-h-64 overflow-y-auto">
-                    {files.map((f) => (
-                      <div key={f.path} className="flex items-center gap-2 border-b border-border px-4 py-1.5 font-mono text-[12px] last:border-0">
-                        <span className="min-w-0 flex-1 truncate">{cleanSubpath ? `${cleanSubpath}/${f.path}` : f.path}</span>
-                        {f.encoding === "base64" && <span className="shrink-0 rounded bg-surface-3 px-1.5 text-[10px] text-muted">binary</span>}
-                        <span className="shrink-0 text-faint">{formatBytes(f.size)}</span>
-                      </div>
-                    ))}
+                  <div className="max-h-72 overflow-y-auto">
+                    {files.map((f) => {
+                      const on = !excluded.has(f.path);
+                      const label = on ? labelOf(f) : undefined;
+                      return (
+                        <label key={f.path} className={cn("flex cursor-pointer items-center gap-2 border-b border-border px-4 py-1.5 font-mono text-[12px] last:border-0 hover:bg-surface-2", !on && "opacity-45")}>
+                          <input type="checkbox" checked={on} onChange={() => toggleFile(f.path)} className="h-3.5 w-3.5 shrink-0 accent-[var(--primary)]" />
+                          <span className={cn("min-w-0 flex-1 truncate", !on && "line-through")}>{destPath(f.path)}</span>
+                          <DiffBadge label={label} />
+                          {f.encoding === "base64" && <span className="shrink-0 rounded bg-surface-3 px-1.5 text-[10px] text-muted">binary</span>}
+                          <span className="shrink-0 text-faint">{formatBytes(f.size)}</span>
+                        </label>
+                      );
+                    })}
                   </div>
-                  {skipped.length > 0 && (
-                    <div className="border-t border-border px-4 py-2.5">
-                      <button onClick={() => setShowSkipped((v) => !v)} className="text-[12px] font-medium text-muted hover:text-foreground">
-                        {showSkipped ? "Hide" : "Show"} {skipped.length} skipped file{skipped.length === 1 ? "" : "s"}
-                      </button>
-                      {showSkipped && (
-                        <div className="mt-2 max-h-40 overflow-y-auto rounded-[var(--radius-control)] border border-border">
-                          {skipped.map((s) => (
-                            <div key={s.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] last:border-0">
-                              <span className="min-w-0 flex-1 truncate font-mono text-faint">{s.path}</span>
-                              <span className="shrink-0 text-faint">{s.reason}</span>
+                  {diffState === "unavailable" && <div className="border-t border-border px-4 py-2 text-[11.5px] text-faint">Change preview unavailable — files will still push (add/overwrite only; nothing is deleted).</div>}
+                  {(tooLarge.length > 0 || otherSkipped.length > 0) && (
+                    <div className="space-y-2 border-t border-border px-4 py-2.5">
+                      {tooLarge.length > 0 && (
+                        <div className="rounded-[var(--radius-control)] border border-warn/40 bg-warn-soft px-3 py-2">
+                          <div className="flex items-center gap-2 text-[12.5px] font-medium text-warn"><FileWarning size={14} /> {tooLarge.length} file{tooLarge.length === 1 ? "" : "s"} too large to push</div>
+                          <div className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto font-mono text-[11.5px] text-muted">
+                            {tooLarge.map((s) => <div key={s.path} className="truncate">{s.path} — {s.reason}</div>)}
+                          </div>
+                          <p className="mt-1 text-[11px] text-faint">Push these with git directly, or via git-LFS for very large files.</p>
+                        </div>
+                      )}
+                      {otherSkipped.length > 0 && (
+                        <div>
+                          <button onClick={() => setShowSkipped((v) => !v)} className="text-[12px] font-medium text-muted hover:text-foreground">
+                            {showSkipped ? "Hide" : "Show"} {otherSkipped.length} auto-skipped file{otherSkipped.length === 1 ? "" : "s"}
+                          </button>
+                          {showSkipped && (
+                            <div className="mt-2 max-h-40 overflow-y-auto rounded-[var(--radius-control)] border border-border">
+                              {otherSkipped.map((s) => (
+                                <div key={s.path} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12px] last:border-0">
+                                  <span className="min-w-0 flex-1 truncate font-mono text-faint">{s.path}</span>
+                                  <span className="shrink-0 text-faint">{s.reason}</span>
+                                </div>
+                              ))}
                             </div>
-                          ))}
+                          )}
                         </div>
                       )}
                     </div>
@@ -297,7 +396,7 @@ export function GithubUpload() {
                     )
                   ) : (
                     <SelectMenu
-                      value={target?.name ? `${target.owner}/${target.name}` : ""}
+                      value={target ? `${target.owner}/${target.name}` : ""}
                       onChange={(full) => { const r = pushable.find((x) => x.fullName === full); if (r) selectRepo(r); }}
                       options={repoOptions.length ? repoOptions : [{ value: "", label: "No push-capable repositories" }]}
                       width={320}
@@ -308,15 +407,33 @@ export function GithubUpload() {
                   {target && !target.canPush && <p className="mt-1 text-[11.5px] text-danger">You don't have push access to this repository.</p>}
                 </div>
 
-                {files.length > 0 && (
+                {files.length > 0 && target && (
                   <>
-                    {/* branch */}
+                    {/* branch: existing / new */}
                     <div>
-                      <label htmlFor="up-branch" className="mb-1.5 block text-[12px] font-medium text-muted">Branch</label>
-                      <div className="flex items-center overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface focus-within:border-primary focus-within:ring-focus">
-                        <span className="grid h-9 w-9 shrink-0 place-items-center border-r border-border bg-surface-2 text-faint"><GitBranch size={14} /></span>
-                        <input id="up-branch" value={branch} onChange={(e) => setBranch(e.target.value)} placeholder="main" className="min-w-0 flex-1 bg-transparent px-2.5 py-2 font-mono text-[13px] outline-none" />
+                      <label className="mb-1.5 block text-[12px] font-medium text-muted">Branch</label>
+                      <div className="mb-2 flex rounded-[var(--radius-control)] border border-border p-0.5 text-[12px]">
+                        <SegBtn active={branchMode === "existing"} onClick={() => setBranchMode("existing")}>Existing</SegBtn>
+                        <SegBtn active={branchMode === "new"} onClick={() => setBranchMode("new")}>New branch</SegBtn>
                       </div>
+                      {branchMode === "existing" ? (
+                        <SelectMenu
+                          value={branch}
+                          onChange={setBranch}
+                          options={(branches.length ? branches.map((b) => b.name) : [branch].filter(Boolean)).map((n) => ({ value: n, label: <span className="font-mono">{n}{n === target.defaultBranch ? " (default)" : ""}</span> }))}
+                          width={300}
+                          ariaLabel="Branch"
+                          className="w-full font-mono"
+                        />
+                      ) : (
+                        <>
+                          <div className="flex items-center overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface focus-within:border-primary focus-within:ring-focus">
+                            <span className="grid h-9 w-9 shrink-0 place-items-center border-r border-border bg-surface-2 text-faint"><GitBranch size={14} /></span>
+                            <input value={newBranch} onChange={(e) => setNewBranch(e.target.value.replace(/\s+/g, "-"))} placeholder="feature/upload" className="min-w-0 flex-1 bg-transparent px-2.5 py-2 font-mono text-[13px] outline-none" />
+                          </div>
+                          <p className="mt-1 text-[11px] text-faint">Branches off <span className="font-mono">{target.defaultBranch}</span>.</p>
+                        </>
+                      )}
                     </div>
 
                     {/* subpath */}
@@ -324,7 +441,7 @@ export function GithubUpload() {
                       <label htmlFor="up-subpath" className="mb-1.5 block text-[12px] font-medium text-muted">Destination folder <span className="text-faint">(optional)</span></label>
                       <Input id="up-subpath" value={subpath} onChange={(e) => setSubpath(e.target.value)} placeholder="e.g. src/vendor" className={cn("font-mono", subpathInvalid && "border-danger")} />
                       <p className={cn("mt-1 text-[11px]", subpathInvalid ? "text-danger" : "text-faint")}>
-                        {subpathInvalid ? "Invalid path (no leading slash or “..”)." : cleanSubpath ? `Writes to ${target?.name ?? "repo"}/${cleanSubpath}/…` : "Writes to the repository root."}
+                        {subpathInvalid ? "Invalid path (no leading slash or “..”)." : cleanSubpath ? `Writes to ${target.name}/${cleanSubpath}/…` : "Writes to the repository root."}
                       </p>
                     </div>
 
@@ -352,7 +469,7 @@ export function GithubUpload() {
                   </div>
                 ) : (
                   <Button variant="primary" className="w-full" onClick={push} disabled={!canPush}>
-                    <Upload size={15} /> Push {files.length > 0 ? `${files.length} file${files.length === 1 ? "" : "s"}` : "files"}
+                    <Upload size={15} /> Push {included.length > 0 ? `${included.length} file${included.length === 1 ? "" : "s"}` : "files"}
                   </Button>
                 )}
                 {files.length === 0 && <p className="text-center text-[11.5px] text-faint">Choose a folder to get started.</p>}
@@ -368,4 +485,23 @@ export function GithubUpload() {
       )}
     </div>
   );
+}
+
+function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} className={cn("flex-1 rounded-[6px] px-2 py-1 font-medium transition-colors", active ? "bg-surface-2 text-foreground" : "text-muted hover:text-foreground")}>
+      {children}
+    </button>
+  );
+}
+
+function DiffBadge({ label }: { label?: DiffLabel }) {
+  if (!label) return null;
+  const map: Record<DiffLabel, [string, string]> = {
+    added: ["New", "bg-ok-soft text-ok"],
+    overwrite: ["Overwrite", "bg-warn-soft text-warn"],
+    unchanged: ["Unchanged", "bg-surface-3 text-faint"],
+  };
+  const [t, cls] = map[label];
+  return <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-sans font-medium", cls)}>{t}</span>;
 }

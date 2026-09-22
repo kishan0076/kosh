@@ -12,7 +12,7 @@ import {
   deleteRepo,
   getReadmeMarkdown,
   getRepoDetail,
-  getRepoTreePaths,
+  getRepoTree,
   listBranches,
   listCommits,
   listIssues,
@@ -131,7 +131,7 @@ githubV2Router.get(
     const token = await requireGithubToken(uid);
     const { owner, repo } = ownerRepo(req);
     const branch = typeof req.query.branch === "string" ? req.query.branch : undefined;
-    res.json(await ghCall(getRepoTreePaths(token, owner, repo, branch)));
+    res.json(await ghCall(getRepoTree(token, owner, repo, branch)));
   }),
 );
 

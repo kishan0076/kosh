@@ -161,7 +161,7 @@ export const githubV2Api = {
   nameAvailable: (owner: string, name: string) =>
     greq<{ available: boolean; invalid?: boolean }>(`/github/name-available?owner=${enc(owner)}&name=${enc(name)}`),
   tree: (owner: string, repo: string, branch?: string) =>
-    greq<{ paths: string[]; truncated: boolean }>(`/github/repos/${enc(owner)}/${enc(repo)}/tree${branch ? `?branch=${enc(branch)}` : ""}`),
+    greq<{ entries: { path: string; sha: string }[]; truncated: boolean }>(`/github/repos/${enc(owner)}/${enc(repo)}/tree${branch ? `?branch=${enc(branch)}` : ""}`),
 
   createRepo: (input: { name: string; description?: string; private?: boolean; autoInit?: boolean; gitignoreTemplate?: string; licenseTemplate?: string; homepage?: string; org?: string }) =>
     greq<{ repo: RepoDetail }>("/github/repos", { method: "POST", body: JSON.stringify(input) }),

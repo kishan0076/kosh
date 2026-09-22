@@ -161,19 +161,22 @@ export async function repoNameAvailable(token: string, owner: string, name: stri
   }
 }
 
-/** The blob paths already on a branch (for the upload dry-run diff). Empty for a new/empty repo. */
-export async function getRepoTreePaths(token: string, owner: string, repo: string, branch?: string): Promise<{ paths: string[]; truncated: boolean }> {
+/** The blobs (path + git sha) already on a branch — the base for the upload dry-run diff. Empty for a
+ *  new/empty repo. The sha lets the client label each file Added / Overwrites / Unchanged. */
+export async function getRepoTree(token: string, owner: string, repo: string, branch?: string): Promise<{ entries: { path: string; sha: string }[]; truncated: boolean }> {
   const gh = githubClient(token);
   const info = await gh.rest.repos.get({ owner, repo });
   const ref = branch || info.data.default_branch || "main";
   try {
     const res = await gh.rest.git.getTree({ owner, repo, tree_sha: ref, recursive: "1" });
-    const paths = (res.data.tree ?? []).filter((t) => t.type === "blob" && t.path).map((t) => t.path as string);
-    return { paths, truncated: res.data.truncated ?? false };
+    const entries = (res.data.tree ?? [])
+      .filter((t) => t.type === "blob" && t.path && t.sha)
+      .map((t) => ({ path: t.path as string, sha: t.sha as string }));
+    return { entries, truncated: res.data.truncated ?? false };
   } catch (err) {
     // 404 (branch/repo empty) or 409 (empty repo) → nothing exists yet, which is a valid diff base.
     const status = (err as { status?: number }).status;
-    if (status === 404 || status === 409) return { paths: [], truncated: false };
+    if (status === 404 || status === 409) return { entries: [], truncated: false };
     throw err;
   }
 }
