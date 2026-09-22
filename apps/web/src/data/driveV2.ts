@@ -341,6 +341,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     for (const k of [...folderCache.keys()]) if (k.startsWith(`${get().accountId}:`) && k.includes(":myDrive:")) folderCache.delete(k);
   }
 
+  /** After a bulk removal, if the loaded page is now empty but more pages exist, refetch so the
+   *  remaining items appear instead of a false "nothing here" (e.g. delete 100 of 165 in Trash). */
+  function refillIfEmpty() {
+    if (get().nextPageToken && get().nodes.length === 0 && !get().listLoading) void load(true);
+  }
+
   /** Fetch the account's Shared Drives for the space picker (non-fatal — many accounts have none). */
   async function loadSpaces(): Promise<void> {
     const accountId = get().accountId;
@@ -854,6 +860,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const ok = await bulk(ids, (id) => driveV2Api.setTrash(accountId, id, true), (nodes, done) => nodes.filter((n) => !done.has(n.id)), "Moving to trash");
       invalidateFolderViews();
       set({ selection: new Set() });
+      refillIfEmpty();
       if (ok.done.length) {
         pushToast({ message: `Moved ${ok.done.length} item${ok.done.length === 1 ? "" : "s"} to trash`, tone: "default", action: { label: "Undo", onClick: () => void get().restore(ok.done) } });
       }
@@ -878,6 +885,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (!accountId) return;
       const ok = await bulk(ids, (id) => driveV2Api.deletePermanent(accountId, id), (nodes, done) => nodes.filter((n) => !done.has(n.id)), "Deleting forever");
       set({ selection: new Set() });
+      refillIfEmpty();
       void get().loadQuota();
       if (ok.done.length) pushToast({ message: `Permanently deleted ${ok.done.length} item${ok.done.length === 1 ? "" : "s"}`, tone: "default" });
       if (ok.failed.length) toastErr(`${ok.failed.length} couldn't be deleted.`);
@@ -907,6 +915,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       );
       invalidateFolderViews();
       set({ selection: new Set() });
+      refillIfEmpty();
       if (ok.done.length) pushToast({ message: `Moved ${ok.done.length} item${ok.done.length === 1 ? "" : "s"}`, tone: "ok" });
       if (ok.failed.length) toastErr(`${ok.failed.length} couldn't be moved.`);
     },
