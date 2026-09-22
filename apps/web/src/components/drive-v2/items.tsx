@@ -156,18 +156,24 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
   );
 }
 
-/** Circular select checkbox — always visible so items can be picked without hovering. */
-function SelectDisc({ selected, onToggle, className }: { selected: boolean; onToggle: () => void; className?: string }) {
+/**
+ * Circular select checkbox. Hidden by default, revealed on hover (or keyboard focus), and always shown
+ * once the item is selected. `reveal="collapse"` removes it from layout when hidden (inline list rows);
+ * the default uses opacity so an absolutely-positioned card overlay fades in.
+ */
+function SelectDisc({ selected, onToggle, className, reveal = "opacity" }: { selected: boolean; onToggle: () => void; className?: string; reveal?: "opacity" | "collapse" }) {
+  const hidden =
+    reveal === "collapse"
+      ? "hidden group-hover:grid focus-visible:grid"
+      : "grid opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100";
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
       aria-label={selected ? "Deselect" : "Select"}
       aria-pressed={selected}
       className={cn(
-        "grid h-6 w-6 shrink-0 place-items-center rounded-full border backdrop-blur transition-colors",
-        selected
-          ? "border-primary bg-primary text-primary-foreground opacity-100"
-          : "border-border-strong bg-surface/80 text-transparent hover:text-muted group-hover:border-primary/60",
+        "h-6 w-6 shrink-0 place-items-center rounded-full border backdrop-blur transition-colors",
+        selected ? "grid border-primary bg-primary text-primary-foreground opacity-100" : cn(hidden, "border-border-strong bg-surface/80 text-transparent hover:text-muted"),
         className,
       )}
     >
@@ -195,7 +201,7 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} className="h-5 w-5" />
+        <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} reveal="collapse" className="h-5 w-5" />
         <span className="relative grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface-2">
           <NodeIcon node={node} size={18} thumb />
         </span>
