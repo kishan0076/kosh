@@ -107,22 +107,28 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
   const largest = useMemo(() => [...scan].sort((a, b) => sizeOf(b) - sizeOf(a)).slice(0, 30), [scan]);
 
   async function trashIds(ids: string[]) {
+    if (!ids.length) return;
     setBusy((s) => new Set([...s, ...ids]));
-    let ok = 0;
-    for (const id of ids) {
-      try {
-        await driveV2Api.setTrash(accountId, id, true);
-        ok++;
-      } catch {
-        /* keep going */
+    // Publish aggregate progress to the shared bulk bar so a big "Trash all extras" is trackable.
+    useDriveV2.setState({ bulkOp: { label: ids.length > 1 ? "Trashing duplicates" : "Moving to trash", total: ids.length, done: 0 } });
+    const doneIds: string[] = [];
+    const LIMIT = 4;
+    let i = 0;
+    const worker = async () => {
+      while (i < ids.length) {
+        const id = ids[i++]!;
+        try { await driveV2Api.setTrash(accountId, id, true); doneIds.push(id); } catch { /* keep going */ }
+        useDriveV2.setState((s) => (s.bulkOp ? { bulkOp: { ...s.bulkOp, done: s.bulkOp.done + 1 } } : {}));
       }
-    }
-    const done = new Set(ids);
+    };
+    await Promise.all(Array.from({ length: Math.min(LIMIT, ids.length) }, worker));
+    const done = new Set(doneIds);
     setScan((s) => s.filter((f) => !done.has(f.id)));
     setStale((s) => s.filter((f) => !done.has(f.id)));
     setBusy((s) => { const n = new Set(s); ids.forEach((id) => n.delete(id)); return n; });
+    useDriveV2.setState({ bulkOp: null });
     void loadQuota();
-    toast({ message: `Moved ${ok} item${ok === 1 ? "" : "s"} to trash`, tone: ok ? "ok" : "warn" });
+    toast({ message: `Moved ${doneIds.length} item${doneIds.length === 1 ? "" : "s"} to trash`, tone: doneIds.length ? "ok" : "warn" });
   }
 
   const TABS: { k: Tab; label: string; icon: typeof Layers }[] = [

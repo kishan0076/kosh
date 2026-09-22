@@ -276,6 +276,8 @@ function Shell() {
         </FadeSwap>
       </div>
 
+      <BulkProgress />
+
       {/* Inspector — an animated right drawer with a light scrim. */}
       <AnimatePresence>
         {detailsId && (
@@ -494,6 +496,29 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
       <div className="flex h-9 items-center rounded-[var(--radius-control)] border border-border p-0.5">
         <button onClick={() => useDriveV2.getState().setLayout("grid")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid view"><LayoutGrid size={15} /></button>
         <button onClick={() => useDriveV2.getState().setLayout("list")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List view"><ListIcon size={15} /></button>
+      </div>
+    </div>
+  );
+}
+
+/* ── bulk-op progress bar (trash / restore / delete / move) ── */
+function BulkProgress() {
+  const op = useDriveV2((s) => s.bulkOp);
+  if (!op) return null;
+  const pct = op.indeterminate ? 100 : op.total > 0 ? Math.round((op.done / op.total) * 100) : 0;
+  return (
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4" aria-live="polite">
+      <div className="pointer-events-auto w-full max-w-sm rounded-[var(--radius-card)] border border-border bg-elevated px-4 py-3 shadow-[var(--shadow-pop)]">
+        <div className="mb-1.5 flex items-center justify-between text-[12.5px]">
+          <span className="inline-flex items-center gap-1.5 font-medium"><Spinner size={13} className="text-primary" /> {op.label}…</span>
+          {!op.indeterminate && <span className="tabular text-muted">{op.done} / {op.total}</span>}
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
+          <div
+            className={cn("h-full rounded-full bg-primary transition-[width] duration-200 ease-out", op.indeterminate && "motion-safe:animate-pulse")}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
       </div>
     </div>
   );

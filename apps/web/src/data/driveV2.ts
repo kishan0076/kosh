@@ -97,6 +97,8 @@ interface DriveV2State {
 
   quota: DriveQuota | null;
   busyIds: Set<string>;
+  /** Aggregate progress for a running bulk op (trash / restore / delete / move). null when idle. */
+  bulkOp: { label: string; total: number; done: number; indeterminate?: boolean } | null;
   dialog: Dialog;
   uploads: UploadTask[];
   insightsOpen: boolean;
@@ -546,6 +548,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     searchQuery: "",
     searchStarredOnly: false,
     selection: new Set(),
+    bulkOp: null,
     lastClickedId: null,
     detailsId: null,
     detailsNode: null,
@@ -831,7 +834,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     trash: async (ids) => {
       const accountId = get().accountId;
       if (!accountId) return;
-      const ok = await bulk(ids, (id) => driveV2Api.setTrash(accountId, id, true), (nodes, done) => nodes.filter((n) => !done.has(n.id)));
+      const ok = await bulk(ids, (id) => driveV2Api.setTrash(accountId, id, true), (nodes, done) => nodes.filter((n) => !done.has(n.id)), "Moving to trash");
       invalidateFolderViews();
       set({ selection: new Set() });
       if (ok.done.length) {
@@ -843,7 +846,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     restore: async (ids) => {
       const accountId = get().accountId;
       if (!accountId) return;
-      const ok = await bulk(ids, (id) => driveV2Api.setTrash(accountId, id, false), (nodes, done) => nodes.filter((n) => !done.has(n.id)));
+      const ok = await bulk(ids, (id) => driveV2Api.setTrash(accountId, id, false), (nodes, done) => nodes.filter((n) => !done.has(n.id)), "Restoring");
       invalidateFolderViews();
       set({ selection: new Set() });
       // Reload the current view so restored items REAPPEAR (Undo from My Drive) — not just the trash
@@ -856,7 +859,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     deletePermanent: async (ids) => {
       const accountId = get().accountId;
       if (!accountId) return;
-      const ok = await bulk(ids, (id) => driveV2Api.deletePermanent(accountId, id), (nodes, done) => nodes.filter((n) => !done.has(n.id)));
+      const ok = await bulk(ids, (id) => driveV2Api.deletePermanent(accountId, id), (nodes, done) => nodes.filter((n) => !done.has(n.id)), "Deleting forever");
       set({ selection: new Set() });
       void get().loadQuota();
       if (ok.done.length) pushToast({ message: `Permanently deleted ${ok.done.length} item${ok.done.length === 1 ? "" : "s"}`, tone: "default" });
@@ -883,6 +886,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
           return driveV2Api.move(accountId, id, [destId], removeParents);
         },
         (nodes, done) => nodes.filter((n) => !done.has(n.id)),
+        "Moving",
       );
       invalidateFolderViews();
       set({ selection: new Set() });
@@ -963,6 +967,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const accountId = get().accountId;
       if (!accountId) return;
       const seq = loadSeq;
+      // A single server-side op with no per-item feedback — show an indeterminate bar so it's tracked.
+      set({ bulkOp: { label: "Emptying trash", total: 0, done: 0, indeterminate: true } });
       try {
         await driveV2Api.emptyTrash(accountId);
         // Guard against clobbering a newer view: only blank the list if the user is still on Trash and
@@ -972,6 +978,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         pushToast({ message: "Trash emptied", tone: "default" });
       } catch (err) {
         toastErr(err instanceof Error ? err.message : "Couldn't empty trash.");
+      } finally {
+        set({ bulkOp: null });
       }
     },
 
@@ -1059,16 +1067,19 @@ function dedupeActivity(list: ActivityEntry[]): ActivityEntry[] {
   return out;
 }
 
-/** Run per-id calls at bounded concurrency; remove succeeded ids optimistically, keep failures. */
+/** Run per-id calls at bounded concurrency; remove succeeded ids optimistically, keep failures.
+ *  Publishes aggregate progress to `bulkOp` (unless `label` is omitted) so the UI can show a bar. */
 async function bulk(
   ids: string[],
   call: (id: string) => Promise<unknown>,
   apply: (nodes: DriveNode[], done: Set<string>) => DriveNode[],
+  label?: string,
 ): Promise<{ done: string[]; failed: string[] }> {
   const store = useDriveV2;
   const done: string[] = [];
   const failed: string[] = [];
-  store.setState((s) => ({ busyIds: new Set([...s.busyIds, ...ids]) }));
+  const track = !!label && ids.length > 0;
+  store.setState((s) => ({ busyIds: new Set([...s.busyIds, ...ids]), ...(track ? { bulkOp: { label: label!, total: ids.length, done: 0 } } : {}) }));
   const LIMIT = 4;
   let i = 0;
   async function worker() {
@@ -1080,12 +1091,13 @@ async function bulk(
       } catch {
         failed.push(id);
       }
+      if (track) store.setState((s) => (s.bulkOp ? { bulkOp: { ...s.bulkOp, done: s.bulkOp.done + 1 } } : {}));
     }
   }
   await Promise.all(Array.from({ length: Math.min(LIMIT, ids.length) }, worker));
   const doneSet = new Set(done);
-  // Apply removals for the succeeded ids to the current nodes, then clear busy.
-  store.setState((s) => ({ nodes: apply(s.nodes, doneSet), busyIds: withoutIds(s.busyIds, ids) }));
+  // Apply removals for the succeeded ids to the current nodes, then clear busy + progress.
+  store.setState((s) => ({ nodes: apply(s.nodes, doneSet), busyIds: withoutIds(s.busyIds, ids), ...(track ? { bulkOp: null } : {}) }));
   return { done, failed };
 }
 
