@@ -62,8 +62,8 @@ export function Sidebar({
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },
     { to: "/prompts", label: "Prompts", icon: Quote, badge: promptCount },
     { to: "/github", label: "GitHub", icon: Github },
-    { to: "/drive", label: "Google Drive", icon: UploadCloud },
     { to: "/drive-v2", label: "Drive", icon: HardDrive },
+    { to: "/drive", label: "Drive (classic)", icon: UploadCloud },
   ];
 
   const storagePct = Math.round((user.storageUsed / user.storageQuota) * 100);
