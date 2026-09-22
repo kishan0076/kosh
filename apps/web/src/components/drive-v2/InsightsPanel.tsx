@@ -1,12 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Clock, Copy, ExternalLink, HardDrive, Layers, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Clock, Copy, Eye, ExternalLink, HardDrive, Layers, Sparkles, Trash2, X } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
-import { Button, Spinner } from "@/components/ui";
+import { Button, Progress, Spinner } from "@/components/ui";
 import { useUi } from "@/data/ui";
-import { driveV2Api, type DriveScanFile } from "@/data/driveV2Api";
+import { driveV2Api, type DriveNode, type DriveScanFile } from "@/data/driveV2Api";
 import { useDriveV2 } from "@/data/driveV2";
+
+/** Percent label that stays useful for a huge quota (12 GB of 5 TB is 0.2%, not a bare "0%"). */
+function usagePct(usage: number, limit?: number): { label: string; bar: number } {
+  if (!limit) return { label: "—", bar: 0 };
+  const p = (usage / limit) * 100;
+  const label = p >= 10 ? `${Math.round(p)}%` : p >= 0.1 ? `${p.toFixed(1)}%` : usage > 0 ? "<0.1%" : "0%";
+  return { label, bar: Math.max(p, usage > 0 ? 1.5 : 0) }; // keep a visible sliver when anything is used
+}
+
+/** Build a preview-capable node from a scan record (enough for PreviewOverlay). */
+function scanToNode(f: DriveScanFile): DriveNode {
+  return { id: f.id, name: f.name, mimeType: f.mimeType, size: f.size, modifiedTime: f.modifiedTime, thumbnailLink: f.thumbnailLink, webViewLink: f.webViewLink, isFolder: false };
+}
 
 type Bucket = "images" | "videos" | "documents" | "audio" | "archives" | "other";
 const BUCKET_META: Record<Bucket, { label: string; bar: string }> = {
@@ -33,7 +46,9 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId)!;
   const spaceId = useDriveV2((s) => s.spaceId);
   const loadQuota = useDriveV2((s) => s.loadQuota);
+  const quota = useDriveV2((s) => s.quota);
   const toast = useUi((s) => s.toast);
+  const preview = (f: DriveScanFile) => useDriveV2.getState().setPreview(scanToNode(f));
 
   const [scan, setScan] = useState<DriveScanFile[]>([]);
   const [stale, setStale] = useState<DriveScanFile[]>([]);
@@ -118,7 +133,7 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
   ];
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+    <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface lg:h-[calc(100dvh-7.5rem)]">
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <Sparkles size={17} className="text-primary" />
         <span className="text-[14px] font-semibold">Insights</span>
@@ -134,7 +149,7 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
         ))}
       </div>
 
-      <div className="max-h-[calc(100dvh-16rem)] overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {loading ? (
           <div className="grid place-items-center py-16"><Spinner size={24} className="text-primary" /></div>
         ) : error ? (
@@ -142,31 +157,43 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
             <div><div className="text-[14px] font-semibold">Couldn't analyze</div><p className="mt-1 text-[13px] text-muted">{error}</p></div>
           </div>
         ) : tab === "overview" ? (
-          <Overview breakdown={breakdown} reclaimable={dupGroups.reclaimable} dupCount={dupGroups.groups.length} fileCount={scan.length} onSeeDuplicates={() => setTab("duplicates")} />
+          <Overview breakdown={breakdown} reclaimable={dupGroups.reclaimable} dupCount={dupGroups.groups.length} fileCount={scan.length} quota={quota} onSeeDuplicates={() => setTab("duplicates")} />
         ) : tab === "duplicates" ? (
-          <Duplicates groups={dupGroups.groups} reclaimable={dupGroups.reclaimable} busy={busy} onTrash={trashIds} />
+          <Duplicates groups={dupGroups.groups} reclaimable={dupGroups.reclaimable} busy={busy} onTrash={trashIds} onPreview={preview} />
         ) : tab === "largest" ? (
-          <FileList files={largest} busy={busy} onTrash={(id) => void trashIds([id])} meta={(f) => formatBytes(sizeOf(f))} />
+          <FileList files={largest} busy={busy} onTrash={(id) => void trashIds([id])} onPreview={preview} meta={(f) => formatBytes(sizeOf(f))} />
         ) : (
-          <FileList files={stale} busy={busy} onTrash={(id) => void trashIds([id])} meta={(f) => (f.viewedByMeTime ? `last opened ${ago(f.viewedByMeTime)}` : "never opened")} />
+          <FileList files={stale} busy={busy} onTrash={(id) => void trashIds([id])} onPreview={preview} meta={(f) => (f.viewedByMeTime ? `last opened ${ago(f.viewedByMeTime)}` : "never opened")} />
         )}
       </div>
     </div>
   );
 }
 
-function Overview({ breakdown, reclaimable, dupCount, fileCount, onSeeDuplicates }: { breakdown: { rows: { bucket: Bucket; count: number; bytes: number }[]; total: number }; reclaimable: number; dupCount: number; fileCount: number; onSeeDuplicates: () => void }) {
+function Overview({ breakdown, reclaimable, dupCount, fileCount, quota, onSeeDuplicates }: { breakdown: { rows: { bucket: Bucket; count: number; bytes: number }[]; total: number }; reclaimable: number; dupCount: number; fileCount: number; quota: { usage: number; limit?: number } | null; onSeeDuplicates: () => void }) {
   const { rows, total } = breakdown;
+  const usage = usagePct(quota?.usage ?? 0, quota?.limit);
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Stat label="Files analyzed" value={fileCount.toLocaleString()} />
-        <Stat label="Total size" value={formatBytes(total)} />
+        <Stat label={quota?.limit ? "Storage used" : "Storage"} value={quota ? formatBytes(quota.usage) : "—"} sub={quota?.limit ? `of ${formatBytes(quota.limit)} · ${usage.label}` : undefined} />
         <Stat label="Reclaimable (dupes)" value={formatBytes(reclaimable)} tone={reclaimable > 0 ? "warn" : undefined} />
       </div>
 
+      {/* Real account storage (matches the sidebar) — distinct from the analyzed-files breakdown below. */}
+      {quota?.limit && (
+        <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3.5 py-3">
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <span className="text-[12.5px] font-medium">Google Drive storage</span>
+            <span className="font-mono text-[11.5px] tabular text-muted">{formatBytes(quota.usage)} / {formatBytes(quota.limit)}</span>
+          </div>
+          <Progress value={usage.bar} tone={usage.bar > 95 ? "danger" : usage.bar > 80 ? "warn" : "primary"} />
+        </div>
+      )}
+
       <div>
-        <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-faint">Storage by type</div>
+        <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-faint">By type · {formatBytes(total)} analyzed</div>
         {total === 0 ? (
           <p className="text-[13px] text-muted">No sized files found.</p>
         ) : (
@@ -198,16 +225,17 @@ function Overview({ breakdown, reclaimable, dupCount, fileCount, onSeeDuplicates
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: "warn" }) {
+function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "warn" }) {
   return (
     <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
-      <div className={cn("text-[17px] font-semibold", tone === "warn" && "text-warn")}>{value}</div>
+      <div className={cn("font-display text-[18px] font-semibold tabular", tone === "warn" && "text-warn")}>{value}</div>
       <div className="text-[11.5px] text-muted">{label}</div>
+      {sub && <div className="mt-0.5 font-mono text-[10.5px] tabular text-faint">{sub}</div>}
     </div>
   );
 }
 
-function Duplicates({ groups, reclaimable, busy, onTrash }: { groups: DriveScanFile[][]; reclaimable: number; busy: Set<string>; onTrash: (ids: string[]) => Promise<void> }) {
+function Duplicates({ groups, reclaimable, busy, onTrash, onPreview }: { groups: DriveScanFile[][]; reclaimable: number; busy: Set<string>; onTrash: (ids: string[]) => Promise<void>; onPreview: (f: DriveScanFile) => void }) {
   if (!groups.length) return <div className="grid place-items-center py-16 text-center"><div><div className="text-[14px] font-semibold">No duplicates 🎉</div><p className="mt-1 text-[13px] text-muted">No files share identical content.</p></div></div>;
   const extrasOf = (g: DriveScanFile[]) => g.slice(1).map((f) => f.id); // keep the first, trash the rest
   const allExtras = groups.flatMap(extrasOf);
@@ -228,7 +256,8 @@ function Duplicates({ groups, reclaimable, busy, onTrash }: { groups: DriveScanF
               <span className="min-w-0 flex-1 truncate">{f.name}</span>
               {i === 0 && <span className="shrink-0 rounded-full bg-ok-soft px-1.5 text-[10px] text-ok">keep</span>}
               {busy.has(f.id) && <Spinner size={13} className="text-muted" />}
-              {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noreferrer noopener" className="shrink-0 rounded p-1 text-faint hover:text-foreground" aria-label="Open"><ExternalLink size={13} /></a>}
+              <button onClick={() => onPreview(f)} className="shrink-0 rounded p-1 text-faint hover:text-primary" aria-label="Preview"><Eye size={14} /></button>
+              {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noreferrer noopener" className="shrink-0 rounded p-1 text-faint hover:text-foreground" aria-label="Open in Drive"><ExternalLink size={13} /></a>}
             </div>
           ))}
         </div>
@@ -237,7 +266,7 @@ function Duplicates({ groups, reclaimable, busy, onTrash }: { groups: DriveScanF
   );
 }
 
-function FileList({ files, busy, onTrash, meta }: { files: DriveScanFile[]; busy: Set<string>; onTrash: (id: string) => void; meta: (f: DriveScanFile) => string }) {
+function FileList({ files, busy, onTrash, onPreview, meta }: { files: DriveScanFile[]; busy: Set<string>; onTrash: (id: string) => void; onPreview: (f: DriveScanFile) => void; meta: (f: DriveScanFile) => string }) {
   if (!files.length) return <div className="grid place-items-center py-16 text-[13px] text-muted">Nothing to show.</div>;
   return (
     <div className="divide-y divide-border">
@@ -245,10 +274,11 @@ function FileList({ files, busy, onTrash, meta }: { files: DriveScanFile[]; busy
         <div key={f.id} className="flex items-center gap-3 py-2">
           <div className="min-w-0 flex-1">
             <div className="truncate text-[13px] font-medium">{f.name}</div>
-            <div className="text-[11.5px] text-faint">{meta(f)}</div>
+            <div className="font-mono text-[11px] tabular text-faint">{meta(f)}</div>
           </div>
           {busy.has(f.id) ? <Spinner size={14} className="text-muted" /> : (
             <>
+              <button onClick={() => onPreview(f)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-primary" aria-label="Preview"><Eye size={15} /></button>
               {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noreferrer noopener" className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Open in Drive"><ExternalLink size={15} /></a>}
               <button onClick={() => onTrash(f.id)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-danger" aria-label="Move to trash"><Trash2 size={15} /></button>
             </>

@@ -77,7 +77,11 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; } });
   const toggleCollapsed = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem(RAIL_KEY, n ? "1" : "0"); } catch { /* ignore */ } return n; });
 
-  const pct = quota?.limit ? Math.min(100, Math.round((quota.usage / quota.limit) * 100)) : 0;
+  const pctRaw = quota?.limit ? Math.min(100, (quota.usage / quota.limit) * 100) : 0;
+  const pct = Math.round(pctRaw); // used for the ring + tone thresholds
+  // A precise label so a huge quota (e.g. 12 GB of 5 TB) reads "0.2%" not a bare, broken-looking "0%".
+  const pctLabel = pctRaw >= 10 ? `${Math.round(pctRaw)}%` : pctRaw >= 0.1 ? `${pctRaw.toFixed(1)}%` : quota && quota.usage > 0 ? "<0.1%" : "0%";
+  const barVal = Math.max(pctRaw, quota && quota.usage > 0 ? 1.5 : 0); // keep a visible sliver when anything is used
 
   const activeKey = activityOpen ? "activity" : insightsOpen ? "insights" : view;
   const go = (v: NavDef["v"]) => {
@@ -184,10 +188,10 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
         {quota && !collapsed && (
           <button onClick={() => useDriveV2.getState().setInsights(true)} className="block w-full rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 text-left transition-colors hover:border-border-strong">
             <div className="flex items-baseline justify-between">
-              <span className="font-display text-[20px] tabular leading-none">{quota.limit ? `${pct}%` : formatBytes(quota.usage)}</span>
+              <span className="font-display text-[20px] tabular leading-none">{quota.limit ? pctLabel : formatBytes(quota.usage)}</span>
               {quota.limit && pct > 80 && <span className="rounded-[var(--radius-chip)] bg-gold-soft px-1.5 py-0.5 text-[10px] font-semibold text-gold">Reclaim space</span>}
             </div>
-            {quota.limit ? <Progress value={pct} className="mt-2" tone={pct > 95 ? "danger" : pct > 80 ? "warn" : "primary"} /> : null}
+            {quota.limit ? <Progress value={barVal} className="mt-2" tone={pct > 95 ? "danger" : pct > 80 ? "warn" : "primary"} /> : null}
             <div className="mt-1.5 font-mono text-[10.5px] tabular text-muted">{quota.limit ? `${formatBytes(quota.usage)} / ${formatBytes(quota.limit)}` : "used"}</div>
           </button>
         )}
