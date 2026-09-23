@@ -18,6 +18,7 @@ import {
   getStartPageToken,
   GoogleBadRequestError,
   GoogleForbiddenError,
+  GoogleGoneError,
   listChanges,
   listChildren,
   listDrives,
@@ -61,6 +62,8 @@ function mapGoogleError(err: unknown): never {
   if (err instanceof GoogleAuthError) throw badRequest("NEEDS_RECONNECT", err.message);
   if (err instanceof GoogleForbiddenError) throw forbidden(err.message);
   if (err instanceof GoogleBadRequestError) throw badRequest("DRIVE_BAD_REQUEST", err.message);
+  // Preserve 410 so the client's sync poller re-anchors its page token instead of retrying a dead one.
+  if (err instanceof GoogleGoneError) throw new AppError("PAGE_TOKEN_GONE", err.message, 410);
   if (err instanceof GoogleTransientError) throw new AppError("UPSTREAM", err.message, 502);
   throw err;
 }
@@ -233,7 +236,19 @@ driveV2Router.get(
       clearInterval(heartbeat);
       removeSubscriber(acc.id, res);
     });
-    if (!closed) await ensureWatch(acc.id, uid).catch(() => {}); // best-effort; polling still covers gaps
+    // Only claim push once a watch channel is CONFIRMED live. If it couldn't be created (unverified
+    // webhook domain, token/quota error, transient 5xx), tell the client so it keeps polling and never
+    // shows a false "Live" pill while receiving nothing.
+    if (!closed) {
+      const pushOk = await ensureWatch(acc.id, uid).catch(() => false);
+      if (!closed) {
+        try {
+          res.write(`data: ${JSON.stringify({ type: pushOk ? "push-ready" : "push-unavailable" })}\n\n`);
+        } catch {
+          /* socket closed between the check and the write */
+        }
+      }
+    }
   }),
 );
 

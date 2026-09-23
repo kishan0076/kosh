@@ -5,7 +5,7 @@ import { logger } from "../logger.js";
 import { getStore } from "../db/index.js";
 import { decryptSecret } from "../auth/crypto.js";
 import { refreshAccessToken } from "./googleDrive.js";
-import { getStartPageToken, listChanges, stopChannel, watchChanges, type DriveChange } from "./googleDriveV2.js";
+import { getStartPageToken, GoogleGoneError, listChanges, stopChannel, watchChanges, type DriveChange } from "./googleDriveV2.js";
 
 /**
  * Drive V2 push-sync hub (changes.watch → server webhook → SSE to the browser).
@@ -95,24 +95,28 @@ function broadcast(accountId: string, payload: unknown): void {
 
 /* ── channel lifecycle ── */
 
-/** Ensure a live watch channel exists for the account (creates or renews as needed). */
-export async function ensureWatch(accountId: string, userId: string): Promise<void> {
-  if (!pushEnabled()) return;
+/** Ensure a live watch channel exists for the account. Resolves TRUE only when a channel is confirmed
+ *  live (existing-and-valid, or freshly created) so the caller can honestly tell the browser whether
+ *  push is really active — otherwise the UI would show "Live" while receiving nothing. */
+export async function ensureWatch(accountId: string, userId: string): Promise<boolean> {
+  if (!pushEnabled()) return false;
   const existingId = channelByAccount.get(accountId);
   if (existingId) {
     const ch = channelsById.get(existingId);
-    if (ch && ch.expiration - RENEW_BUFFER_MS > Date.now()) return; // still valid
+    if (ch && ch.expiration - RENEW_BUFFER_MS > Date.now()) return true; // still valid
   }
-  await createWatch(accountId, userId);
+  return createWatch(accountId, userId);
 }
 
-async function createWatch(accountId: string, userId: string): Promise<void> {
-  if (!pushEnabled()) return;
-  if (pendingWatch.has(accountId)) return; // another (re)create is in flight — one channel per account
+/** Create (or replace) the account's watch channel. Returns true on success, false on any failure —
+ *  never throws — so both the /events route and the renew timer can branch on the result. */
+async function createWatch(accountId: string, userId: string): Promise<boolean> {
+  if (!pushEnabled()) return false;
+  if (pendingWatch.has(accountId)) return false; // another (re)create is in flight — one channel per account
   pendingWatch.add(accountId);
   try {
     const minted = await mintFor(accountId);
-    if (!minted) return;
+    if (!minted) return false;
     const oldId = channelByAccount.get(accountId);
     const old = oldId ? channelsById.get(oldId) : undefined;
     // On RENEWAL continue from where the old channel left off so nothing is dropped; on a FRESH watch
@@ -135,6 +139,10 @@ async function createWatch(accountId: string, userId: string): Promise<void> {
     // A renewal carried the token forward — the new channel only pings on FUTURE changes, so drain
     // anything that happened since (incl. pages the old channel hadn't finished) right away.
     if (old) void pollAndBroadcast(ch);
+    return true;
+  } catch (e) {
+    logger.warn({ e, accountId }, "drive-v2 push: watch create failed");
+    return false;
   } finally {
     pendingWatch.delete(accountId);
   }
@@ -149,16 +157,18 @@ function scheduleRenew(ch: Channel): void {
       void teardownAccount(ch.accountId).catch(() => {});
       return;
     }
-    void createWatch(ch.accountId, ch.userId).catch((e) => {
+    void (async () => {
+      const ok = await createWatch(ch.accountId, ch.userId);
       // A transient renewal failure must NOT permanently kill push — retry before the channel expires,
-      // as long as this is still the account's channel and someone is listening.
-      logger.warn({ e, accountId: ch.accountId }, "drive-v2 push: renew failed, retrying");
-      if (channelByAccount.get(ch.accountId) === ch.channelId && subscribers.get(ch.accountId)?.size) {
-        const retry = setTimeout(() => { if (subscribers.get(ch.accountId)?.size) void createWatch(ch.accountId, ch.userId).catch(() => {}); }, RENEW_RETRY_MS);
+      // as long as this is still the account's channel and someone is listening. (createWatch no longer
+      // throws; it reports success/failure via its boolean.)
+      if (!ok && channelByAccount.get(ch.accountId) === ch.channelId && subscribers.get(ch.accountId)?.size) {
+        logger.warn({ accountId: ch.accountId }, "drive-v2 push: renew failed, retrying");
+        const retry = setTimeout(() => { if (subscribers.get(ch.accountId)?.size) void createWatch(ch.accountId, ch.userId); }, RENEW_RETRY_MS);
         retry.unref?.();
         renewTimers.set(ch.channelId, retry);
       }
-    });
+    })();
   }, delay);
   t.unref?.();
   renewTimers.set(ch.channelId, t);
@@ -241,7 +251,20 @@ async function pollAndBroadcast(ch: Channel): Promise<void> {
     ch.pageToken = pageToken;
     if (collected.length) broadcast(ch.accountId, { type: "changes", changes: collected });
   } catch (e) {
-    logger.warn({ e, accountId: ch.accountId }, "drive-v2 push: poll after notification failed");
+    if (e instanceof GoogleGoneError) {
+      // The stored page token expired. Left as-is it would poison EVERY future notification (and survive
+      // channel renewal, which carries the token forward). Re-anchor at "now" so push works again — the
+      // browser's poller/idle-reconcile covers the small gap of changes between the dead token and now.
+      try {
+        const m = await mintFor(ch.accountId);
+        if (m) ch.pageToken = await getStartPageToken(m.token);
+        logger.warn({ accountId: ch.accountId }, "drive-v2 push: page token expired, re-anchored");
+      } catch (e2) {
+        logger.warn({ e: e2, accountId: ch.accountId }, "drive-v2 push: re-anchor after expired token failed");
+      }
+    } else {
+      logger.warn({ e, accountId: ch.accountId }, "drive-v2 push: poll after notification failed");
+    }
   } finally {
     pollLocks.delete(ch.channelId);
   }

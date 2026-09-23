@@ -211,7 +211,12 @@ browser→Google directly with a short-lived token (never proxied). Errors use K
 - **Live sync** is push (`changes.watch` → SSE) when `DRIVE_WEBHOOK_URL` is set, else a ~12s poll that
   pauses when the tab is hidden; either way it re-anchors its page token when you switch account or
   Shared Drive, and the poller catches up automatically if the push stream drops. Push channels are
-  in-memory (single-instance) and auto-renew before their ~6h TTL. The Activity timeline lives only in
+  in-memory (single-instance) and auto-renew before their ~6h TTL. The UI only shows a **Live** (push)
+  pill once the server confirms a watch channel was actually created — if it can't be (e.g. an
+  unverified webhook domain), the server tells the client (`push-unavailable`) and it stays on
+  polling rather than showing a false "Live" while receiving nothing. An **expired change page
+  token** (Google `410`) re-anchors at "now" on *both* the client poller (and refreshes the current
+  view to close the gap) and the server push hub, instead of retrying a dead token forever. The Activity timeline lives only in
   the open tab (it is not persisted server-side) and is capped at 200 recent entries.
 - **Embedded preview** requires `frame-src https://drive.google.com https://docs.google.com` in the web
   CSP (`apps/web/public/_headers`); the iframe is sandboxed. It reflects Drive's own sharing — a file you

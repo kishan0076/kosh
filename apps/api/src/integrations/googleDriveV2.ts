@@ -14,6 +14,14 @@ export class GoogleBadRequestError extends Error {
     this.name = "GoogleBadRequestError";
   }
 }
+/** The resource is gone (HTTP 410) — for `changes.list` this means the page token has expired and the
+ *  caller must RE-ANCHOR (fetch a fresh startPageToken) rather than retry the dead token forever. */
+export class GoogleGoneError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GoogleGoneError";
+  }
+}
 
 /**
  * Google Drive V2 — full-CRUD Drive API v3 helpers for the V2 "control center" module.
@@ -76,6 +84,8 @@ function driveHttpError(status: number, ctx: string, reason?: string, message?: 
     return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
   }
   if (status === 400) return new GoogleBadRequestError(`${ctx}${message ? `: ${message}` : "."}`);
+  // 410 Gone: an expired changes page token. Distinct from transient so callers re-anchor, not retry.
+  if (status === 410) return new GoogleGoneError(`${ctx} — the sync page token expired; re-anchoring.`);
   return new GoogleTransientError(`${ctx} (${status}).`);
 }
 

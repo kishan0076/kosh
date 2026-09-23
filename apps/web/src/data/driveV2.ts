@@ -465,9 +465,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
           }
         }
       } catch (err) {
-        // A stale/invalid page token (Google 400/404/410) can't be reused — re-anchor next tick.
-        if (err instanceof ApiError && (err.status === 400 || err.status === 404 || err.status === 410)) syncToken = null;
-        if (gen === syncGen) set((s) => ({ sync: { ...s.sync, status: "error" } }));
+        // A stale/invalid page token (Google 400/404/410 — an expired token now surfaces as a real 410)
+        // can't be reused — re-anchor next tick AND refresh the current view to close the change gap
+        // between the dead token and "now". Show "syncing" (recovering) for this case, not "error".
+        const gone = err instanceof ApiError && (err.status === 400 || err.status === 404 || err.status === 410);
+        if (gone) { syncToken = null; if (gen === syncGen) void load(true); }
+        if (gen === syncGen) set((s) => ({ sync: { ...s.sync, status: gone ? "syncing" : "error" } }));
       } finally {
         syncInFlight = false;
       }
@@ -488,19 +491,30 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     let lastOpenAt = 0; // when the current connection opened — used to tell a stable run from a flap
     es.onopen = () => {
       if (get().accountId !== esAccount) return;
-      sseConnected = true;
       lastOpenAt = Date.now();
       // Don't reset `failures` here: a stream that opens then immediately drops (proxy/LB short idle
       // timeout) must still count toward the give-up budget. The budget resets on a STABLE drop below.
+      // NB: do NOT claim push or idle the poller here — wait for the server's push-ready verdict below.
+      // The stream being open doesn't mean a watch channel exists (it may have failed to register).
       if (openedOnce) void load(true); // a RECONNECT may have missed pushes while down — refresh the view
       openedOnce = true;
-      set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied, via: "push" } }));
     };
     es.onmessage = (ev) => {
       if (get().accountId !== esAccount) return;
       try {
         const msg = JSON.parse(ev.data) as { type?: string; changes?: DriveChange[] };
-        if (msg?.type === "changes" && Array.isArray(msg.changes)) {
+        if (msg?.type === "push-ready") {
+          // The server confirmed a live watch channel — only NOW is push authoritative + the poller idles.
+          sseConnected = true;
+          set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied, via: "push" } }));
+        } else if (msg?.type === "push-unavailable") {
+          // The watch channel couldn't be created — stay on polling and never show a false "Live" pill.
+          sseConnected = false;
+          closeEventSource();
+          set((s) => ({ sync: { ...s.sync, status: "syncing", via: "poll" } }));
+          scheduleSync(0);
+        } else if (msg?.type === "changes" && Array.isArray(msg.changes)) {
+          sseConnected = true; // receiving pushes ⇒ push is live (covers a missed push-ready frame)
           const added = applyChanges(msg.changes);
           set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + added, via: "push" } }));
         }
