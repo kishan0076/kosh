@@ -360,6 +360,8 @@ driveV2Router.patch(
           .record(z.string().min(1).max(124), z.string().max(124).nullable())
           .refine((m) => Object.keys(m).length <= 30, "Too many properties")
           .optional(),
+        // When true, readers/commenters lose the download/print/copy option.
+        copyRequiresWriterPermission: z.boolean().optional(),
       })
       .parse(req.body);
     res.json({ file: await driveCall(req, updateMeta(token, fileId(String(req.params.fileId)), patch)) });
@@ -466,9 +468,15 @@ driveV2Router.post(
         allowFileDiscovery: z.boolean().optional(),
         sendNotificationEmail: z.boolean().optional(),
         message: z.string().max(2000).optional(),
+        expirationTime: z.string().datetime().optional(),
       })
       .parse(req.body);
     if ((body.type === "user" || body.type === "group") && !body.emailAddress) throw badRequest("BAD_TARGET", "An email address is required to share with a person or group.");
+    // Drive rejects expiry on link/domain grants and on manager/owner roles — fail fast with a clear reason.
+    if (body.expirationTime) {
+      if (body.type !== "user" && body.type !== "group") throw badRequest("BAD_EXPIRY", "An expiry can only be set for a specific person or group.");
+      if (body.role !== "reader" && body.role !== "commenter" && body.role !== "writer") throw badRequest("BAD_EXPIRY", "An expiry can only be set for Viewer, Commenter, or Editor access.");
+    }
     res.status(201).json({ permission: await driveCall(req, createPermission(token, fileId(String(req.params.fileId)), body)) });
   }),
 );
@@ -478,8 +486,19 @@ driveV2Router.patch(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    const { role } = z.object({ role: ROLE }).parse(req.body);
-    res.json({ permission: await driveCall(req, updatePermission(token, fileId(String(req.params.fileId)), String(req.params.permId), role)) });
+    const patch = z
+      .object({
+        role: ROLE.optional(),
+        expirationTime: z.string().datetime().optional(),
+        removeExpiration: z.boolean().optional(),
+      })
+      .refine((p) => p.role !== undefined || p.expirationTime !== undefined || p.removeExpiration === true, "Nothing to update.")
+      .refine((p) => !(p.expirationTime && p.removeExpiration), "Set an expiry or clear it, not both.")
+      .parse(req.body);
+    if (patch.expirationTime && patch.role && patch.role !== "reader" && patch.role !== "commenter" && patch.role !== "writer") {
+      throw badRequest("BAD_EXPIRY", "An expiry can only be set for Viewer, Commenter, or Editor access.");
+    }
+    res.json({ permission: await driveCall(req, updatePermission(token, fileId(String(req.params.fileId)), String(req.params.permId), patch)) });
   }),
 );
 

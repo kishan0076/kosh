@@ -37,7 +37,7 @@ export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /** Fields requested for every file/folder resource — enough to power the grid, list and details panel. */
 const FILE_FIELDS =
-  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren,canMoveItemWithinDrive),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension,appProperties";
+  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren,canMoveItemWithinDrive),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension,appProperties,copyRequiresWriterPermission";
 
 /** Escape a value for a single-quoted Drive `q` literal — backslash FIRST, then quote. */
 function qval(value: string): string {
@@ -111,6 +111,7 @@ export interface DriveNode {
   description?: string;
   fileExtension?: string;
   appProperties?: Record<string, string>; // app-private metadata (Kosh tags live here)
+  copyRequiresWriterPermission?: boolean; // when true, readers/commenters can't download, print or copy
   isFolder: boolean;
 }
 
@@ -466,7 +467,7 @@ export function updateMeta(
   accessToken: string,
   id: string,
   // appProperties is a partial patch: a string sets a key, `null` removes it (Drive merges the map).
-  patch: { description?: string; folderColorRgb?: string; appProperties?: Record<string, string | null> },
+  patch: { description?: string; folderColorRgb?: string; appProperties?: Record<string, string | null>; copyRequiresWriterPermission?: boolean },
 ): Promise<DriveNode> {
   return patchFile(accessToken, id, patch, "Couldn't update");
 }
@@ -536,9 +537,10 @@ export interface DrivePermission {
   allowFileDiscovery?: boolean;
   pendingOwner?: boolean;
   deleted?: boolean;
+  expirationTime?: string; // RFC3339; when access auto-revokes (My-Drive user/group grants only)
 }
 
-const PERM_FIELDS = "id,type,role,emailAddress,displayName,photoLink,domain,allowFileDiscovery,pendingOwner,deleted";
+const PERM_FIELDS = "id,type,role,emailAddress,displayName,photoLink,domain,allowFileDiscovery,pendingOwner,deleted,expirationTime";
 
 export async function listPermissions(accessToken: string, fileId: string): Promise<DrivePermission[]> {
   const out: DrivePermission[] = [];
@@ -560,7 +562,7 @@ export async function listPermissions(accessToken: string, fileId: string): Prom
 export async function createPermission(
   accessToken: string,
   fileId: string,
-  input: { role: string; type: string; emailAddress?: string; domain?: string; allowFileDiscovery?: boolean; sendNotificationEmail?: boolean; message?: string },
+  input: { role: string; type: string; emailAddress?: string; domain?: string; allowFileDiscovery?: boolean; sendNotificationEmail?: boolean; message?: string; expirationTime?: string },
 ): Promise<DrivePermission> {
   const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions`);
   u.searchParams.set("fields", PERM_FIELDS);
@@ -571,16 +573,28 @@ export async function createPermission(
   if (input.emailAddress) body.emailAddress = input.emailAddress;
   if (input.domain) body.domain = input.domain;
   if (input.type === "anyone" || input.type === "domain") body.allowFileDiscovery = input.allowFileDiscovery ?? false;
+  // Drive only honours expirationTime for user/group grants (never anyone/domain); the caller enforces role limits.
+  if (input.expirationTime && (input.type === "user" || input.type === "group")) body.expirationTime = input.expirationTime;
   if (input.message) u.searchParams.set("emailMessage", input.message);
   const res = await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Couldn't share");
   return (await res.json()) as DrivePermission;
 }
 
-export async function updatePermission(accessToken: string, fileId: string, permId: string, role: string): Promise<DrivePermission> {
+export async function updatePermission(
+  accessToken: string,
+  fileId: string,
+  permId: string,
+  // `removeExpiration` is Drive's query-param mechanism for clearing an expiry (there is no null-body form).
+  patch: { role?: string; expirationTime?: string; removeExpiration?: boolean },
+): Promise<DrivePermission> {
   const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permId)}`);
   u.searchParams.set("fields", PERM_FIELDS);
   u.searchParams.set("supportsAllDrives", "true");
-  const res = await driveFetch(accessToken, u, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ role }) }, "Couldn't update access");
+  if (patch.removeExpiration) u.searchParams.set("removeExpiration", "true");
+  const body: Record<string, unknown> = {};
+  if (patch.role !== undefined) body.role = patch.role;
+  if (patch.expirationTime !== undefined) body.expirationTime = patch.expirationTime;
+  const res = await driveFetch(accessToken, u, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Couldn't update access");
   return (await res.json()) as DrivePermission;
 }
 

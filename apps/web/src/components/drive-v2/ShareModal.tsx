@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Check, Globe, Link2, Lock, Share2, UserPlus, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Check, Clock, Download, Globe, Link2, Lock, Share2, UserPlus, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Button, Spinner, Toggle } from "@/components/ui";
 import { Modal, SelectMenu } from "@/components/overlays";
@@ -16,16 +16,34 @@ const ASSIGNABLE = [
 
 const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
+const pad = (n: number) => String(n).padStart(2, "0");
+const toDateInput = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+// Drive wants a future expiry within one year; expire at the end of the chosen local day.
+const expiryToIso = (dateStr: string) => new Date(`${dateStr}T23:59:59`).toISOString();
+const fmtExpiry = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
 export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId)!;
+  const spaceId = useDriveV2((s) => s.spaceId); // non-null ⇒ a Shared Drive, where Drive forbids per-grant expiry
   const toast = useUi((s) => s.toast);
   const [perms, setPerms] = useState<DrivePermission[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [email, setEmail] = useState("");
-  const [addRole, setAddRole] = useState("writer");
+  const [addRole, setAddRole] = useState("reader"); // least-privilege default (Viewer)
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [expiryEditId, setExpiryEditId] = useState<string | null>(null);
+  const [copyDisabled, setCopyDisabled] = useState(() => !!node.copyRequiresWriterPermission);
+
+  const canExpire = spaceId == null; // expiry is a My-Drive-only capability
+  const canEditFile = node.capabilities?.canEdit !== false;
+  const dateBounds = useMemo(() => {
+    const now = new Date();
+    const min = new Date(now); min.setDate(min.getDate() + 1); // earliest is tomorrow
+    const max = new Date(now); max.setFullYear(max.getFullYear() + 1); // Drive caps expiry at one year out
+    return { min: toDateInput(min), max: toDateInput(max) };
+  }, []);
 
   async function load() {
     setLoading(true);
@@ -44,6 +62,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   // Include domain grants too — otherwise a file shared with a whole domain wrongly reads "only you".
   const people = perms.filter((p) => p.type === "user" || p.type === "group" || p.type === "domain");
   const anyone = perms.find((p) => p.type === "anyone") ?? null;
+  const isShared = people.length > 0 || !!anyone;
   const personName = (p: DrivePermission) =>
     p.type === "domain" ? `Everyone at ${p.domain ?? "your organization"}` : p.displayName ?? p.emailAddress ?? "Unknown";
 
@@ -66,11 +85,41 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   async function changeRole(perm: DrivePermission, role: string) {
     setBusy(perm.id);
     try {
-      await driveV2Api.updatePermission(accountId, node.id, perm.id, role);
-      setPerms((ps) => ps.map((p) => (p.id === perm.id ? { ...p, role } : p)));
+      // Merge the full returned permission so the row also reflects any expiry Drive kept or dropped.
+      const { permission } = await driveV2Api.updatePermission(accountId, node.id, perm.id, { role });
+      setPerms((ps) => ps.map((p) => (p.id === perm.id ? { ...p, ...permission } : p)));
     } catch (err) {
       // Surface Google's real reason (e.g. "you don't have permission…") instead of a generic line.
       toast({ message: err instanceof Error ? err.message : "Couldn't update access", tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function setExpiry(perm: DrivePermission, dateStr: string) {
+    if (!dateStr) return;
+    setBusy(perm.id);
+    try {
+      const { permission } = await driveV2Api.updatePermission(accountId, node.id, perm.id, { expirationTime: expiryToIso(dateStr) });
+      setPerms((ps) => ps.map((p) => (p.id === perm.id ? { ...p, ...permission } : p)));
+      setExpiryEditId(null);
+      toast({ message: `Access expires ${fmtExpiry(permission.expirationTime ?? expiryToIso(dateStr))}`, tone: "ok" });
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't set an expiry", tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function clearExpiry(perm: DrivePermission) {
+    setBusy(perm.id);
+    try {
+      const { permission } = await driveV2Api.updatePermission(accountId, node.id, perm.id, { removeExpiration: true });
+      // Drive omits expirationTime once cleared, so drop it explicitly rather than trusting the merge.
+      setPerms((ps) => ps.map((p) => (p.id === perm.id ? { ...p, ...permission, expirationTime: undefined } : p)));
+      setExpiryEditId(null);
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't remove the expiry", tone: "danger" });
     } finally {
       setBusy(null);
     }
@@ -92,6 +141,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
     setBusy("anyone");
     try {
       if (on) {
+        // Least privilege: a new link grants Viewer; the owner can raise it below.
         const { permission } = await driveV2Api.addPermission(accountId, node.id, { role: "reader", type: "anyone" });
         setPerms((ps) => [...ps.filter((p) => p.type !== "anyone"), permission]);
       } else if (anyone) {
@@ -100,6 +150,31 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
       }
     } catch {
       toast({ message: "Couldn't change link sharing", tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function changeLinkRole(role: string) {
+    if (!anyone) return;
+    setBusy("anyone");
+    try {
+      const { permission } = await driveV2Api.updatePermission(accountId, node.id, anyone.id, { role });
+      setPerms((ps) => ps.map((p) => (p.id === anyone.id ? { ...p, ...permission } : p)));
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't change link access", tone: "danger" });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggleCopy(allow: boolean) {
+    setBusy("copy");
+    try {
+      await driveV2Api.updateMeta(accountId, node.id, { copyRequiresWriterPermission: !allow });
+      setCopyDisabled(!allow);
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't update download settings", tone: "danger" });
     } finally {
       setBusy(null);
     }
@@ -152,29 +227,59 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
             <div className="space-y-0.5">
               {people.map((p) => {
                 const assignable = ASSIGNABLE.some((r) => r.role === p.role);
+                const showExpiry = canExpire && assignable && (p.type === "user" || p.type === "group");
+                const editingExpiry = expiryEditId === p.id;
                 return (
-                <div key={p.id} className="flex items-center gap-2.5 rounded-[var(--radius-control)] px-1.5 py-1.5 hover:bg-surface-2">
-                  {p.photoLink ? <img src={p.photoLink} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[12px] font-semibold text-primary">{personName(p).slice(0, 1).toUpperCase()}</span>}
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[13px] font-medium">{personName(p)}{p.pendingOwner ? " (pending)" : ""}</div>
-                    {p.emailAddress && p.displayName && <div className="truncate text-[11.5px] text-muted">{p.emailAddress}</div>}
+                <div key={p.id} className="rounded-[var(--radius-control)] hover:bg-surface-2">
+                  <div className="flex items-center gap-2.5 px-1.5 py-1.5">
+                    {p.photoLink ? <img src={p.photoLink} alt="" referrerPolicy="no-referrer" className="h-8 w-8 rounded-full" /> : <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary-soft text-[12px] font-semibold text-primary">{personName(p).slice(0, 1).toUpperCase()}</span>}
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13px] font-medium">{personName(p)}{p.pendingOwner ? " (pending)" : ""}</div>
+                      {p.emailAddress && p.displayName && <div className="truncate text-[11.5px] text-muted">{p.emailAddress}</div>}
+                      {p.expirationTime && <div className="truncate text-[11.5px] text-warn">Access expires {fmtExpiry(p.expirationTime)}</div>}
+                    </div>
+                    {busy === p.id ? (
+                      <Spinner size={15} className="text-muted" />
+                    ) : p.role === "owner" ? (
+                      <span className="shrink-0 text-[12px] text-muted">Owner</span>
+                    ) : assignable ? (
+                      <>
+                        {showExpiry && (
+                          <button
+                            onClick={() => setExpiryEditId(editingExpiry ? null : p.id)}
+                            className={cn("shrink-0 rounded-md p-1 hover:bg-surface-3", p.expirationTime ? "text-warn" : "text-faint hover:text-foreground")}
+                            aria-label={p.expirationTime ? "Change expiration" : "Set expiration"}
+                            aria-expanded={editingExpiry}
+                            title={p.expirationTime ? `Expires ${fmtExpiry(p.expirationTime)}` : "Set an expiry"}
+                          ><Clock size={15} /></button>
+                        )}
+                        <RoleSelect value={p.role} onChange={(r) => void changeRole(p, r)} compact />
+                        <button onClick={() => void remove(p)} className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-3 hover:text-danger" aria-label="Remove access"><X size={15} /></button>
+                      </>
+                    ) : (
+                      // Manager (organizer/fileOrganizer) & domain grants can't be set to an assignable role —
+                      // show the TRUE role read-only (never a fabricated "Editor") but still allow revoking.
+                      <>
+                        <span className="shrink-0 text-[12px] text-muted">{ROLE_LABEL[p.role] ?? p.role}</span>
+                        <button onClick={() => void remove(p)} className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-3 hover:text-danger" aria-label="Remove access"><X size={15} /></button>
+                      </>
+                    )}
                   </div>
-                  {busy === p.id ? (
-                    <Spinner size={15} className="text-muted" />
-                  ) : p.role === "owner" ? (
-                    <span className="shrink-0 text-[12px] text-muted">Owner</span>
-                  ) : assignable ? (
-                    <>
-                      <RoleSelect value={p.role} onChange={(r) => void changeRole(p, r)} compact />
-                      <button onClick={() => void remove(p)} className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-3 hover:text-danger" aria-label="Remove access"><X size={15} /></button>
-                    </>
-                  ) : (
-                    // Manager (organizer/fileOrganizer) & domain grants can't be set to an assignable role —
-                    // show the TRUE role read-only (never a fabricated "Editor") but still allow revoking.
-                    <>
-                      <span className="shrink-0 text-[12px] text-muted">{ROLE_LABEL[p.role] ?? p.role}</span>
-                      <button onClick={() => void remove(p)} className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-3 hover:text-danger" aria-label="Remove access"><X size={15} /></button>
-                    </>
+                  {showExpiry && editingExpiry && (
+                    <div className="flex flex-wrap items-center gap-2 pb-2.5 pl-[46px] pr-2">
+                      <label className="text-[11.5px] text-muted">Access expires</label>
+                      <input
+                        type="date"
+                        min={dateBounds.min}
+                        max={dateBounds.max}
+                        defaultValue={p.expirationTime ? toDateInput(new Date(p.expirationTime)) : ""}
+                        onChange={(e) => { if (e.target.value) void setExpiry(p, e.target.value); }}
+                        className="rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1 text-[12.5px] outline-none focus:border-primary focus:ring-focus"
+                      />
+                      {p.expirationTime && (
+                        <button onClick={() => void clearExpiry(p)} className="text-[12px] text-muted underline-offset-2 hover:text-danger hover:underline">Remove expiry</button>
+                      )}
+                    </div>
                   )}
                 </div>
                 );
@@ -195,7 +300,27 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
                 <div className="text-[11.5px] text-muted">{anyone ? `Anyone on the internet with the link can ${ROLE_LABEL[anyone.role]?.toLowerCase() ?? "view"}` : "Only people with access can open"}</div>
               </div>
               {busy === "anyone" ? <Spinner size={15} className="text-muted" /> : (
-                <Toggle checked={!!anyone} onChange={(on) => void toggleLink(on)} label="Anyone with the link" />
+                <>
+                  {anyone && <RoleSelect value={anyone.role} onChange={(r) => void changeLinkRole(r)} compact />}
+                  <Toggle checked={!!anyone} onChange={(on) => void toggleLink(on)} label="Anyone with the link" />
+                </>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* owner controls: keep viewers from downloading/printing/copying */}
+        {!loading && !error && isShared && canEditFile && (
+          <div className="border-t border-border px-5 py-4">
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-faint">Download &amp; copy</div>
+            <div className="flex items-center gap-2.5">
+              <span className={cn("grid h-9 w-9 shrink-0 place-items-center rounded-full", copyDisabled ? "bg-warn-soft text-warn" : "bg-surface-2 text-muted")}><Download size={17} /></span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-medium">Viewers &amp; commenters can download</div>
+                <div className="text-[11.5px] text-muted">{copyDisabled ? "Download, print and copy are turned off for viewers and commenters" : `They can download, print, and copy this ${node.isFolder ? "folder" : "file"}`}</div>
+              </div>
+              {busy === "copy" ? <Spinner size={15} className="text-muted" /> : (
+                <Toggle checked={!copyDisabled} onChange={(allow) => void toggleCopy(allow)} label="Allow download, print and copy" />
               )}
             </div>
           </div>

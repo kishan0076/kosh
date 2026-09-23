@@ -101,6 +101,7 @@ export interface DriveNode {
   description?: string;
   fileExtension?: string;
   appProperties?: Record<string, string>; // app-private metadata (Kosh tags live here)
+  copyRequiresWriterPermission?: boolean; // when true, readers/commenters can't download, print or copy
   isFolder: boolean;
 }
 
@@ -183,6 +184,7 @@ export interface DrivePermission {
   domain?: string;
   allowFileDiscovery?: boolean;
   pendingOwner?: boolean;
+  expirationTime?: string; // RFC3339; when this grant auto-revokes (My-Drive user/group grants only)
 }
 
 const base = (accountId: string) => `/drive-v2/accounts/${accountId}`;
@@ -252,7 +254,7 @@ export const driveV2Api = {
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/star`, { method: "PATCH", body: JSON.stringify({ starred }) }),
   setTrash: (accountId: string, fileId: string, trashed: boolean) =>
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/trash`, { method: "PATCH", body: JSON.stringify({ trashed }) }),
-  updateMeta: (accountId: string, fileId: string, patch: { description?: string; folderColorRgb?: string; appProperties?: Record<string, string | null> }) =>
+  updateMeta: (accountId: string, fileId: string, patch: { description?: string; folderColorRgb?: string; appProperties?: Record<string, string | null>; copyRequiresWriterPermission?: boolean }) =>
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/meta`, { method: "PATCH", body: JSON.stringify(patch) }),
   move: (accountId: string, fileId: string, addParents: string[], removeParents: string[]) =>
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/move`, { method: "POST", body: JSON.stringify({ addParents, removeParents }) }),
@@ -262,10 +264,13 @@ export const driveV2Api = {
   emptyTrash: (accountId: string, driveId?: string) => v2req<{ ok: boolean }>(`${base(accountId)}/empty-trash${driveId ? `?driveId=${encodeURIComponent(driveId)}` : ""}`, { method: "POST" }),
 
   listPermissions: (accountId: string, fileId: string) => v2req<{ permissions: DrivePermission[] }>(`${base(accountId)}/files/${fileId}/permissions`),
-  addPermission: (accountId: string, fileId: string, input: { role: string; type: string; emailAddress?: string; sendNotificationEmail?: boolean; message?: string }) =>
-    v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions`, { method: "POST", body: JSON.stringify(input) }),
-  updatePermission: (accountId: string, fileId: string, permId: string, role: string) =>
-    v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "PATCH", body: JSON.stringify({ role }) }),
+  addPermission: (
+    accountId: string,
+    fileId: string,
+    input: { role: string; type: string; emailAddress?: string; domain?: string; allowFileDiscovery?: boolean; sendNotificationEmail?: boolean; message?: string; expirationTime?: string },
+  ) => v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions`, { method: "POST", body: JSON.stringify(input) }),
+  updatePermission: (accountId: string, fileId: string, permId: string, patch: { role?: string; expirationTime?: string; removeExpiration?: boolean }) =>
+    v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removePermission: (accountId: string, fileId: string, permId: string) =>
     v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "DELETE" }),
 
