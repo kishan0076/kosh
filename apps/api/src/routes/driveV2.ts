@@ -5,7 +5,7 @@ import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
 import { decryptSecret } from "../auth/crypto.js";
 import { GoogleAuthError, GoogleTransientError } from "../integrations/googleDrive.js";
-import { accessTokenFor } from "../integrations/driveTokenCache.js";
+import { accessTokenFor, invalidateAccessToken } from "../integrations/driveTokenCache.js";
 import {
   copyNode,
   createFolderV2,
@@ -69,10 +69,14 @@ function mapGoogleError(err: unknown): never {
   throw err;
 }
 
-async function driveCall<T>(p: Promise<T>): Promise<T> {
+async function driveCall<T>(req: Request, p: Promise<T>): Promise<T> {
   try {
     return await p;
   } catch (err) {
+    // A 401 from a Drive call means the cached access token went stale mid-life (e.g. Google revoked it
+    // early). Drop it so the NEXT request re-mints instead of serving the dead token until its ~1h exp —
+    // the refresh token may still be valid, letting it self-heal without a full reconnect.
+    if (err instanceof GoogleAuthError) invalidateAccessToken(String(req.params.id));
     mapGoogleError(err);
   }
 }
@@ -126,7 +130,7 @@ driveV2Router.get(
     const parent = typeof req.query.parent === "string" && req.query.parent ? fileId(req.query.parent) : "root";
     const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
     const orderBy = typeof req.query.orderBy === "string" ? req.query.orderBy : undefined;
-    res.json(await driveCall(listChildren(token, parent, { pageToken, orderBy, driveId: driveIdOf(req) })));
+    res.json(await driveCall(req, listChildren(token, parent, { pageToken, orderBy, driveId: driveIdOf(req) })));
   }),
 );
 
@@ -137,7 +141,7 @@ driveV2Router.get(
     const token = await auth(req, uid);
     const str = (v: unknown, n: number) => (typeof v === "string" && v ? v.slice(0, n) : undefined);
     res.json(
-      await driveCall(
+      await driveCall(req,
         searchFiles(token, {
           text: str(req.query.text, 200),
           mimeType: str(req.query.mimeType, 120),
@@ -161,7 +165,7 @@ driveV2Router.get(
     const token = await auth(req, uid);
     const orderBy = typeof req.query.orderBy === "string" ? req.query.orderBy.slice(0, 60) : undefined;
     const pageCap = Math.min(Math.max(Number(req.query.cap) || 10, 1), 20);
-    res.json(await driveCall(scanFiles(token, { orderBy, pageCap, driveId: driveIdOf(req) })));
+    res.json(await driveCall(req, scanFiles(token, { orderBy, pageCap, driveId: driveIdOf(req) })));
   }),
 );
 
@@ -172,7 +176,7 @@ const viewRoute = (path: string, fn: (t: string, opts: ViewOpts) => Promise<unkn
       const uid = requireWrite(req);
       const token = await auth(req, uid);
       const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
-      res.json(await driveCall(fn(token, { pageToken, driveId: driveIdOf(req) })));
+      res.json(await driveCall(req, fn(token, { pageToken, driveId: driveIdOf(req) })));
     }),
   );
 viewRoute("/drive-v2/accounts/:id/recent", listRecent);
@@ -187,7 +191,7 @@ driveV2Router.get(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken : undefined;
-    res.json(await driveCall(listDrives(token, pageToken)));
+    res.json(await driveCall(req, listDrives(token, pageToken)));
   }),
 );
 
@@ -197,7 +201,7 @@ driveV2Router.get(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    res.json({ startPageToken: await driveCall(getStartPageToken(token, driveIdOf(req))) });
+    res.json({ startPageToken: await driveCall(req, getStartPageToken(token, driveIdOf(req))) });
   }),
 );
 driveV2Router.get(
@@ -207,7 +211,7 @@ driveV2Router.get(
     const token = await auth(req, uid);
     const pageToken = typeof req.query.pageToken === "string" ? req.query.pageToken.slice(0, 4096) : "";
     if (!pageToken) throw badRequest("BAD_TOKEN", "A pageToken is required to list changes.");
-    res.json(await driveCall(listChanges(token, pageToken, driveIdOf(req))));
+    res.json(await driveCall(req, listChanges(token, pageToken, driveIdOf(req))));
   }),
 );
 
@@ -279,7 +283,7 @@ driveV2Router.get(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    res.json({ file: await driveCall(getFile(token, fileId(String(req.params.fileId)))) });
+    res.json({ file: await driveCall(req, getFile(token, fileId(String(req.params.fileId)))) });
   }),
 );
 
@@ -289,7 +293,7 @@ driveV2Router.get(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const folder = typeof req.query.folder === "string" && req.query.folder ? fileId(req.query.folder) : "root";
-    res.json({ path: await driveCall(folderPath(token, folder)) });
+    res.json({ path: await driveCall(req, folderPath(token, folder)) });
   }),
 );
 
@@ -308,7 +312,7 @@ driveV2Router.post(
         description: z.string().max(1000).optional(),
       })
       .parse(req.body);
-    res.status(201).json({ file: await driveCall(createFolderV2(token, body)) });
+    res.status(201).json({ file: await driveCall(req, createFolderV2(token, body)) });
   }),
 );
 
@@ -318,7 +322,7 @@ driveV2Router.patch(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const { name } = z.object({ name: z.string().min(1).max(255) }).parse(req.body);
-    res.json({ file: await driveCall(renameNode(token, fileId(String(req.params.fileId)), name)) });
+    res.json({ file: await driveCall(req, renameNode(token, fileId(String(req.params.fileId)), name)) });
   }),
 );
 
@@ -328,7 +332,7 @@ driveV2Router.patch(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const { starred } = z.object({ starred: z.boolean() }).parse(req.body);
-    res.json({ file: await driveCall(setStarred(token, fileId(String(req.params.fileId)), starred)) });
+    res.json({ file: await driveCall(req, setStarred(token, fileId(String(req.params.fileId)), starred)) });
   }),
 );
 
@@ -338,7 +342,7 @@ driveV2Router.patch(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const { trashed } = z.object({ trashed: z.boolean() }).parse(req.body);
-    res.json({ file: await driveCall(setTrashed(token, fileId(String(req.params.fileId)), trashed)) });
+    res.json({ file: await driveCall(req, setTrashed(token, fileId(String(req.params.fileId)), trashed)) });
   }),
 );
 
@@ -350,7 +354,7 @@ driveV2Router.patch(
     const patch = z
       .object({ description: z.string().max(1000).optional(), folderColorRgb: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional() })
       .parse(req.body);
-    res.json({ file: await driveCall(updateMeta(token, fileId(String(req.params.fileId)), patch)) });
+    res.json({ file: await driveCall(req, updateMeta(token, fileId(String(req.params.fileId)), patch)) });
   }),
 );
 
@@ -362,7 +366,7 @@ driveV2Router.post(
     const { addParents, removeParents } = z
       .object({ addParents: z.array(z.string().min(1).max(256)).max(20).default([]), removeParents: z.array(z.string().min(1).max(256)).max(20).default([]) })
       .parse(req.body);
-    res.json({ file: await driveCall(moveNode(token, fileId(String(req.params.fileId)), addParents, removeParents)) });
+    res.json({ file: await driveCall(req, moveNode(token, fileId(String(req.params.fileId)), addParents, removeParents)) });
   }),
 );
 
@@ -372,7 +376,7 @@ driveV2Router.post(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const opts = z.object({ name: z.string().min(1).max(255).optional(), parents: z.array(z.string().min(1).max(256)).max(20).optional() }).parse(req.body);
-    res.status(201).json({ file: await driveCall(copyNode(token, fileId(String(req.params.fileId)), opts)) });
+    res.status(201).json({ file: await driveCall(req, copyNode(token, fileId(String(req.params.fileId)), opts)) });
   }),
 );
 
@@ -381,7 +385,7 @@ driveV2Router.delete(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    await driveCall(deleteNode(token, fileId(String(req.params.fileId))));
+    await driveCall(req, deleteNode(token, fileId(String(req.params.fileId))));
     res.json({ ok: true });
   }),
 );
@@ -391,7 +395,7 @@ driveV2Router.post(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    await driveCall(emptyTrash(token, driveIdOf(req)));
+    await driveCall(req, emptyTrash(token, driveIdOf(req)));
     res.json({ ok: true });
   }),
 );
@@ -403,7 +407,7 @@ driveV2Router.get(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    res.json({ revisions: await driveCall(listRevisions(token, fileId(String(req.params.fileId)))) });
+    res.json({ revisions: await driveCall(req, listRevisions(token, fileId(String(req.params.fileId)))) });
   }),
 );
 
@@ -413,7 +417,7 @@ driveV2Router.patch(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const { keepForever } = z.object({ keepForever: z.boolean() }).parse(req.body);
-    res.json({ revision: await driveCall(updateRevision(token, fileId(String(req.params.fileId)), String(req.params.revId), keepForever)) });
+    res.json({ revision: await driveCall(req, updateRevision(token, fileId(String(req.params.fileId)), String(req.params.revId), keepForever)) });
   }),
 );
 
@@ -422,7 +426,7 @@ driveV2Router.delete(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    await driveCall(deleteRevision(token, fileId(String(req.params.fileId)), String(req.params.revId)));
+    await driveCall(req, deleteRevision(token, fileId(String(req.params.fileId)), String(req.params.revId)));
     res.json({ ok: true });
   }),
 );
@@ -436,7 +440,7 @@ driveV2Router.get(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    res.json({ permissions: await driveCall(listPermissions(token, fileId(String(req.params.fileId)))) });
+    res.json({ permissions: await driveCall(req, listPermissions(token, fileId(String(req.params.fileId)))) });
   }),
 );
 
@@ -457,7 +461,7 @@ driveV2Router.post(
       })
       .parse(req.body);
     if ((body.type === "user" || body.type === "group") && !body.emailAddress) throw badRequest("BAD_TARGET", "An email address is required to share with a person or group.");
-    res.status(201).json({ permission: await driveCall(createPermission(token, fileId(String(req.params.fileId)), body)) });
+    res.status(201).json({ permission: await driveCall(req, createPermission(token, fileId(String(req.params.fileId)), body)) });
   }),
 );
 
@@ -467,7 +471,7 @@ driveV2Router.patch(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const { role } = z.object({ role: ROLE }).parse(req.body);
-    res.json({ permission: await driveCall(updatePermission(token, fileId(String(req.params.fileId)), String(req.params.permId), role)) });
+    res.json({ permission: await driveCall(req, updatePermission(token, fileId(String(req.params.fileId)), String(req.params.permId), role)) });
   }),
 );
 
@@ -476,7 +480,7 @@ driveV2Router.delete(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    await driveCall(deletePermission(token, fileId(String(req.params.fileId)), String(req.params.permId)));
+    await driveCall(req, deletePermission(token, fileId(String(req.params.fileId)), String(req.params.permId)));
     res.json({ ok: true });
   }),
 );

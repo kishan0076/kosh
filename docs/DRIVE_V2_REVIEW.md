@@ -307,13 +307,19 @@ Benchmarked against modern tools; effort tags S/M/L. All feasible with the per-u
 
 ## 6. Suggested execution order
 
-- **Phase A — Safety & correctness (P0):** Empty-Trash confirm, bulk-delete type-to-confirm, sort/filter/select-all
-  page-scope, Shared-Drive upload fix, silent-sync-death cluster, error boundary. *(Small, high-trust wins.)*
-- **Phase B — A11y & mobile:** roving-focus keyboard grid, touch controls, responsive rail/bottom-sheet. *(Unlocks a
-  whole user segment; pairs with the keyboard power-mode feature.)*
-- **Phase C — Reliability hardening:** server token cache, stale-while-revalidate loads, retries/timeouts/error
-  surfacing, id-scoped rollback, SSE refocus + cache-invalidation fixes, pagination loops, tests for the extracted
-  `@kosh/shared` logic.
+**Implementation status:** Phases A, B, C — ✅ **shipped** (each: implement → verify typecheck/test/build →
+adversarial review workflow → fix confirmed findings → commit). Phases D–F not started.
+
+- **Phase A — Safety & correctness (P0):** ✅ **shipped.** Empty-Trash confirm, bulk-delete type-to-confirm,
+  sort/filter/select-all page-scope, Shared-Drive upload fix, silent-sync-death cluster, error boundary.
+  *(Small, high-trust wins.)*
+- **Phase B — A11y & mobile:** ✅ **shipped.** roving-focus keyboard grid, touch controls, responsive
+  rail/bottom-sheet. *(Unlocks a whole user segment; pairs with the keyboard power-mode feature.)*
+- **Phase C — Reliability hardening:** ✅ **shipped.** server token cache (2.1), stale-while-revalidate loads (2.2),
+  retries/timeouts/error surfacing + reconnect gate (2.3), id-scoped rollback (2.4), SSE refocus (2.5) +
+  targeted cache-invalidation (2.6), pagination loops + Shared-Drive trash scoping (2.7), extracted + unit-tested
+  `@kosh/shared` pure logic (2.11). Deferred to a later pass: §2.8 breadcrumb walk, §2.9 server recursive-copy,
+  §2.10 OAuth downloads, §2.12 observability/ETag.
 - **Phase D — Perf + UX polish:** memoization + upload-render isolation + marquee/sort perf; non-modal docked
   inspector, Move undo, focus trap, density control, drag ghost.
 - **Phase E — Power features wave 1:** tags/labels, smart collections, bulk download/export, Quick Look upgrade,

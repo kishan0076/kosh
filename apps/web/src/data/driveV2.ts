@@ -183,6 +183,7 @@ const CACHE_TTL = 30_000;
 const folderCache = new Map<string, { nodes: DriveNode[]; nextPageToken?: string; ts: number }>();
 let tokenCache: { accountId: string; token: string; exp: number } | null = null;
 let loadSeq = 0; // bumped on every navigation/load so slow mutations never clobber newer views
+let nodesKey: string | null = null; // cacheKey the currently-shown `nodes` belong to — gates stale-while-revalidate
 const uploadControls = new Map<string, ResumableControl>();
 
 /* Live-sync controller (module-level so it survives re-renders; driven by the page's mount effect). */
@@ -273,15 +274,17 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const cached = folderCache.get(key);
       if (cached && Date.now() - cached.ts < CACHE_TTL) {
         set({ nodes: cached.nodes, nextPageToken: cached.nextPageToken, listLoading: false, refreshing: false, listError: null });
+        nodesKey = key;
         return;
       }
     }
-    // Stale-while-revalidate: keep a listing that's already on screen visible under a thin "refreshing"
-    // bar; only blank to a full skeleton when there's nothing to show. This stops force-refresh flows
-    // (SSE-idle reconcile, overlay close, restore/undo, upload completion) from flashing the grid empty
-    // and losing scroll/loaded pages.
-    const hadNodes = get().nodes.length > 0;
-    set(hadNodes ? { refreshing: true, listError: null } : { listLoading: true, refreshing: false, listError: null });
+    // Stale-while-revalidate — but ONLY for a background refresh of the SAME context (view + space +
+    // folder) that's already on screen. On a genuine navigation to different content (view/space/folder
+    // change) we blank to a full skeleton, so the previous view's live nodes are never left rendered and
+    // interactive under the new view's action set (e.g. "Delete forever" showing for My Drive files while
+    // Trash is selected). SWR keeps scroll/loaded-pages for reconcile, overlay close, restore, upload.
+    const sameContext = get().nodes.length > 0 && nodesKey === key;
+    set(sameContext ? { refreshing: true, listLoading: false, listError: null } : { listLoading: true, refreshing: false, listError: null });
     try {
       let result;
       if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { driveId });
@@ -297,6 +300,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       }
       if (myseq !== loadSeq) return; // superseded by a newer navigation
       set({ nodes: result.files, nextPageToken: result.nextPageToken, listLoading: false, refreshing: false, listError: null });
+      nodesKey = key; // the shown nodes now belong to this context (enables SWR on the next same-context refresh)
       if (view === "myDrive") folderCache.set(key, { nodes: result.files, nextPageToken: result.nextPageToken, ts: Date.now() });
     } catch (err) {
       if (myseq !== loadSeq) return;
@@ -304,7 +308,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const msg = err instanceof Error ? err.message : "Couldn't load your Drive.";
       // A background refresh that fails keeps the stale listing on screen (toast, don't blank the grid);
       // a first load with nothing shown falls through to the full error state.
-      if (hadNodes) { set({ refreshing: false }); toastErr(msg); }
+      if (sameContext) { set({ refreshing: false }); toastErr(msg); }
       else set({ listLoading: false, listError: msg });
     }
   }
@@ -316,12 +320,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     call: () => Promise<void>,
     opts: { refreshQuota?: boolean; invalidate?: string[]; onError?: (msg: string) => void } = {},
   ): Promise<boolean> {
-    // Id-scoped snapshot: capture only the affected nodes' prior state, not the whole array. On rollback
-    // we restore just these ids in place, so overlapping mutations and live-sync inserts/edits folded in
-    // mid-flight aren't clobbered by one failing action's wholesale restore.
+    // Id-scoped snapshot: capture only the affected nodes' prior state (with their index), not the whole
+    // array. On rollback we restore just these ids, so overlapping mutations and live-sync inserts/edits
+    // folded in mid-flight aren't clobbered by one failing action's wholesale restore.
     const idSet = new Set(ids);
-    const beforeById = new Map<string, DriveNode>();
-    for (const n of get().nodes) if (idSet.has(n.id)) beforeById.set(n.id, n);
+    const beforeById = new Map<string, { node: DriveNode; idx: number }>();
+    get().nodes.forEach((n, idx) => { if (idSet.has(n.id)) beforeById.set(n.id, { node: n, idx }); });
     const seq = loadSeq;
     set((s) => ({ nodes: optimistic(s.nodes), busyIds: new Set([...s.busyIds, ...ids]) }));
     try {
@@ -334,8 +338,16 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : "That action failed.";
       // Roll back only the affected ids (and only if the view hasn't moved on); everything else the
-      // current array holds — new synced nodes, other mutations' edits — is preserved.
-      if (seq === loadSeq) set((s) => ({ nodes: s.nodes.map((n) => beforeById.get(n.id) ?? n), busyIds: withoutIds(s.busyIds, ids) }));
+      // current array holds — new synced nodes, other mutations' edits — is preserved. Ids the optimistic
+      // patch EDITED in place are restored via the map; ids it REMOVED (e.g. unstar in the Starred view)
+      // are re-inserted at their captured index so a failed action doesn't leave a row missing.
+      if (seq === loadSeq) set((s) => {
+        const present = new Set(s.nodes.map((n) => n.id));
+        const nodes = s.nodes.map((n) => beforeById.get(n.id)?.node ?? n);
+        const missing = [...beforeById.values()].filter((b) => !present.has(b.node.id)).sort((a, b) => a.idx - b.idx);
+        for (const { node, idx } of missing) nodes.splice(Math.min(idx, nodes.length), 0, node);
+        return { nodes, busyIds: withoutIds(s.busyIds, ids) };
+      });
       else set((s) => ({ busyIds: withoutIds(s.busyIds, ids) }));
       if (isReconnect(err)) offerReconnect();
       else (opts.onError ?? ((m) => toastErr(m)))(msg);
@@ -947,8 +959,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       );
     },
 
-    // Multi-select star: run SEQUENTIALLY. Each toggleStar snapshots the whole node list for rollback,
-    // so firing them concurrently lets one call's rollback resurrect a sibling another already removed.
+    // Multi-select star: run SEQUENTIALLY. Rollback is id-scoped, but concurrent snapshots would still
+    // race (one call captures a sibling mid-flight then rolls it back), so serialize to keep it clean.
     toggleStarMany: async (ids) => {
       for (const id of ids) await get().toggleStar(id);
     },

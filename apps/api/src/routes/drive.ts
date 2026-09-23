@@ -21,6 +21,7 @@ import {
   refreshAccessToken,
   revokeToken,
 } from "../integrations/googleDrive.js";
+import { invalidateAccessToken } from "../integrations/driveTokenCache.js";
 
 export const driveRouter: Router = Router();
 
@@ -171,6 +172,7 @@ driveRouter.delete(
     const refresh = decryptSecret(acc.refreshToken);
     if (refresh) await revokeToken(refresh); // best-effort; never throws
     await getStore().driveAccounts.deleteById(acc.id);
+    invalidateAccessToken(acc.id); // drop any cached V2 access token so it isn't served after disconnect
     res.json({ ok: true });
   }),
 );

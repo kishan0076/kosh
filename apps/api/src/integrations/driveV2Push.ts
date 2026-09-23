@@ -4,7 +4,8 @@ import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getStore } from "../db/index.js";
 import { decryptSecret } from "../auth/crypto.js";
-import { accessTokenFor } from "./driveTokenCache.js";
+import { accessTokenFor, invalidateAccessToken } from "./driveTokenCache.js";
+import { GoogleAuthError } from "./googleDrive.js";
 import { getStartPageToken, GoogleGoneError, listChanges, stopChannel, watchChanges, type DriveChange } from "./googleDriveV2.js";
 
 /**
@@ -272,6 +273,9 @@ async function pollAndBroadcast(ch: Channel): Promise<void> {
         logger.warn({ e: e2, accountId: ch.accountId }, "drive-v2 push: re-anchor after expired token failed");
       }
     } else {
+      // A 401 means the shared cached access token went stale — drop it so the next notification re-mints
+      // rather than replaying the dead token until it expires (~1h of silently-failed pushes).
+      if (e instanceof GoogleAuthError) invalidateAccessToken(ch.accountId);
       logger.warn({ e, accountId: ch.accountId }, "drive-v2 push: poll after notification failed");
     }
   } finally {
