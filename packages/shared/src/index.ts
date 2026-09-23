@@ -8,3 +8,4 @@ export * from "./repo-upload.js";
 export * from "./gitignore-template.js";
 export * from "./format.js";
 export * from "./search.js";
+export * from "./drive-v2.js";

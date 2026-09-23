@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
-import { formatBytes } from "@kosh/shared";
+import { formatBytes, sortDriveNodes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { Button, Spinner } from "@/components/ui";
@@ -14,15 +14,7 @@ import { getDragIds, hasDriveDrag } from "./dnd";
  * the user sees on screen.
  */
 export function sortNodes(nodes: DriveNode[], key: SortKey, dir: "asc" | "desc"): DriveNode[] {
-  return [...nodes].sort((a, b) => {
-    if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1; // folders always first
-    let c = 0;
-    if (key === "name") c = a.name.localeCompare(b.name, undefined, { numeric: true });
-    else if (key === "modified") c = (a.modifiedTime ?? "").localeCompare(b.modifiedTime ?? "");
-    else if (key === "size") c = (a.size ?? 0) - (b.size ?? 0);
-    else c = kindOf(a).localeCompare(kindOf(b)) || a.name.localeCompare(b.name);
-    return dir === "asc" ? c : -c;
-  });
+  return sortDriveNodes(nodes, key, dir); // shared, unit-tested (folders-first + numeric name sort)
 }
 
 /** Shared internal-drag drop handlers for a folder node (move onto folder). */

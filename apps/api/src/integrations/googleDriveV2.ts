@@ -402,13 +402,20 @@ export interface DriveRevision {
 }
 
 export async function listRevisions(accessToken: string, fileId: string): Promise<DriveRevision[]> {
-  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions`);
-  u.searchParams.set("fields", "revisions(id,modifiedTime,size,keepForever,originalFilename,lastModifyingUser(displayName))");
-  u.searchParams.set("pageSize", "200");
-  u.searchParams.set("supportsAllDrives", "true");
-  const res = await driveFetch(accessToken, u, {}, "Couldn't load version history");
-  const json = (await res.json()) as { revisions?: (Omit<DriveRevision, "size"> & { size?: string })[] };
-  return (json.revisions ?? []).map((r) => ({ ...r, size: r.size != null ? Number(r.size) : undefined }));
+  const out: DriveRevision[] = [];
+  let pageToken: string | undefined;
+  do {
+    const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/revisions`);
+    u.searchParams.set("fields", "nextPageToken,revisions(id,modifiedTime,size,keepForever,originalFilename,lastModifyingUser(displayName))");
+    u.searchParams.set("pageSize", "200");
+    u.searchParams.set("supportsAllDrives", "true");
+    if (pageToken) u.searchParams.set("pageToken", pageToken);
+    const res = await driveFetch(accessToken, u, {}, "Couldn't load version history");
+    const json = (await res.json()) as { revisions?: (Omit<DriveRevision, "size"> & { size?: string })[]; nextPageToken?: string };
+    for (const r of json.revisions ?? []) out.push({ ...r, size: r.size != null ? Number(r.size) : undefined });
+    pageToken = json.nextPageToken; // a long-lived doc can have >200 revisions — page through them all
+  } while (pageToken);
+  return out;
 }
 
 export async function deleteRevision(accessToken: string, fileId: string, revId: string): Promise<void> {
@@ -488,8 +495,11 @@ export async function deleteNode(accessToken: string, id: string): Promise<void>
   await driveFetch(accessToken, u, { method: "DELETE" }, "Couldn't delete");
 }
 
-export async function emptyTrash(accessToken: string): Promise<void> {
-  await driveFetch(accessToken, `${DRIVE_API}/files/trash`, { method: "DELETE" }, "Couldn't empty trash");
+export async function emptyTrash(accessToken: string, driveId?: string): Promise<void> {
+  const u = new URL(`${DRIVE_API}/files/trash`);
+  // Scope to a Shared Drive when one is active, else this empties the user's own My-Drive trash.
+  if (driveId) { u.searchParams.set("driveId", driveId); u.searchParams.set("supportsAllDrives", "true"); }
+  await driveFetch(accessToken, u, { method: "DELETE" }, "Couldn't empty trash");
 }
 
 /** Create a folder (optional Drive folder color + description). */
@@ -525,13 +535,20 @@ export interface DrivePermission {
 const PERM_FIELDS = "id,type,role,emailAddress,displayName,photoLink,domain,allowFileDiscovery,pendingOwner,deleted";
 
 export async function listPermissions(accessToken: string, fileId: string): Promise<DrivePermission[]> {
-  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions`);
-  u.searchParams.set("fields", `permissions(${PERM_FIELDS})`);
-  u.searchParams.set("supportsAllDrives", "true");
-  u.searchParams.set("pageSize", "100");
-  const res = await driveFetch(accessToken, u, {}, "Couldn't load sharing");
-  const json = (await res.json()) as { permissions?: DrivePermission[] };
-  return json.permissions ?? [];
+  const out: DrivePermission[] = [];
+  let pageToken: string | undefined;
+  do {
+    const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions`);
+    u.searchParams.set("fields", `nextPageToken,permissions(${PERM_FIELDS})`);
+    u.searchParams.set("supportsAllDrives", "true");
+    u.searchParams.set("pageSize", "100");
+    if (pageToken) u.searchParams.set("pageToken", pageToken);
+    const res = await driveFetch(accessToken, u, {}, "Couldn't load sharing");
+    const json = (await res.json()) as { permissions?: DrivePermission[]; nextPageToken?: string };
+    out.push(...(json.permissions ?? []));
+    pageToken = json.nextPageToken; // a heavily-shared file can have >100 principals — page through them all
+  } while (pageToken);
+  return out;
 }
 
 export async function createPermission(

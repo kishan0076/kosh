@@ -117,6 +117,7 @@ function Shell() {
   const nodes = useDriveV2((s) => s.nodes);
   const prefs = useDriveV2((s) => s.prefs);
   const listLoading = useDriveV2((s) => s.listLoading);
+  const refreshing = useDriveV2((s) => s.refreshing);
   const listError = useDriveV2((s) => s.listError);
   const loadingMore = useDriveV2((s) => s.loadingMore);
   const nextPageToken = useDriveV2((s) => s.nextPageToken);
@@ -140,9 +141,10 @@ function Shell() {
 
   // Live two-way sync: poll changes.list while the module is open; resume promptly on refocus.
   useEffect(() => {
-    const start = store.getState().startSync;
-    start();
-    const onVis = () => { if (document.visibilityState === "visible") start(); };
+    store.getState().startSync();
+    // Refocus reconciles without rebuilding a healthy push stream (see resumeSync) — no token re-mint /
+    // new Drive watch on every tab switch.
+    const onVis = () => { if (document.visibilityState === "visible") store.getState().resumeSync(); };
     document.addEventListener("visibilitychange", onVis);
     return () => { document.removeEventListener("visibilitychange", onVis); store.getState().stopSync(); };
   }, [store]);
@@ -269,6 +271,7 @@ function Shell() {
               handlers={handlers}
               orderedIds={orderedIds}
               listLoading={listLoading}
+              refreshing={refreshing}
               listError={listError}
               onUpload={() => fileInputRef.current?.click()}
               onDropFiles={(files) => void store.getState().uploadFiles(files)}
@@ -724,7 +727,7 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
 
 /* ── content area (grid/list + states + drop) ── */
 function DriveContentArea({
-  view, visible, layout, selection, busyIds, renamingId, handlers, orderedIds, listLoading, listError, onUpload, onDropFiles,
+  view, visible, layout, selection, busyIds, renamingId, handlers, orderedIds, listLoading, refreshing, listError, onUpload, onDropFiles,
 }: {
   view: DriveView;
   visible: DriveNode[];
@@ -735,6 +738,7 @@ function DriveContentArea({
   handlers: ItemHandlers;
   orderedIds: string[];
   listLoading: boolean;
+  refreshing: boolean;
   listError: string | null;
   onUpload: () => void;
   onDropFiles: (files: File[]) => void;
@@ -831,6 +835,11 @@ function DriveContentArea({
     >
       {marquee.box && <div className="pointer-events-none fixed z-30 rounded-[3px] border border-primary bg-primary/10" style={{ left: marquee.box.x, top: marquee.box.y, width: marquee.box.w, height: marquee.box.h }} />}
       {drag && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-primary-soft/40 text-[14px] font-semibold text-primary">Drop to upload here</div>}
+      {/* Stale-while-revalidate: a thin top bar while a background refresh runs over a listing that stays
+          visible — no full-skeleton flash. Indeterminate pulse; respects prefers-reduced-motion. */}
+      {refreshing && !listLoading && (
+        <div className="pointer-events-none sticky top-0 z-20 h-0.5 bg-primary motion-safe:animate-pulse" role="status" aria-label="Refreshing" />
+      )}
       {listLoading ? (
         <DriveContentSkeleton layout={layout} />
       ) : listError ? (

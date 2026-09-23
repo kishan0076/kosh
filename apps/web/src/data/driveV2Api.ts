@@ -1,29 +1,57 @@
+import { driveKindOf } from "@kosh/shared";
 import { API_BASE, ApiError } from "./api";
 
 /* ── typed client for /drive-v2/* (management CRUD is server-proxied) ── */
 
+const REQ_TIMEOUT_MS = 30_000; // abort a stalled request so a hung socket never strands a caller forever
+const RETRY_STATUSES = new Set([429, 502, 503, 504]); // Drive throttling / transient upstream — safe to retry a read
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function v2req<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
-    ...init,
-  });
-  if (!res.ok) {
-    let message = `Request failed (${res.status})`;
-    let code: string | undefined;
-    let details: unknown;
+  const method = (init.method ?? "GET").toUpperCase();
+  const idempotent = method === "GET" || method === "HEAD"; // never auto-retry a write (avoid duplicates)
+  const maxAttempts = idempotent ? 3 : 1;
+  for (let attempt = 1; ; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
     try {
-      const body = await res.json();
-      message = body?.error?.message ?? message;
-      code = body?.error?.code;
-      details = body?.error?.details;
-    } catch {
-      /* ignore */
+      const res = await fetch(`${API_BASE}${path}`, {
+        credentials: "include",
+        ...init,
+        headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
+        signal: ctrl.signal,
+      });
+      if (!res.ok) {
+        if (idempotent && RETRY_STATUSES.has(res.status) && attempt < maxAttempts) {
+          const ra = Number(res.headers.get("retry-after"));
+          await sleep(Number.isFinite(ra) && ra > 0 ? ra * 1000 : Math.min(400 * 2 ** attempt, 4000));
+          continue;
+        }
+        let message = `Request failed (${res.status})`;
+        let code: string | undefined;
+        let details: unknown;
+        try {
+          const body = await res.json();
+          message = body?.error?.message ?? message;
+          code = body?.error?.code;
+          details = body?.error?.details;
+        } catch {
+          /* ignore */
+        }
+        throw new ApiError(message, code, details, res.status);
+      }
+      if (res.status === 204) return undefined as T;
+      return (await res.json()) as T;
+    } catch (err) {
+      // A timeout surfaces as an AbortError — turn it into a typed error rather than a raw DOMException.
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ApiError("The request timed out — check your connection and retry.", "TIMEOUT", undefined, 0);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timer);
     }
-    throw new ApiError(message, code, details, res.status);
   }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
 }
 
 export const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -131,17 +159,7 @@ export type FilterKind = "folder" | "doc" | "image" | "video" | "pdf" | "audio" 
 
 /** Classify a node into a display/filter bucket by its mime type. */
 export function kindOf(node: DriveNode): DriveKind {
-  const m = node.mimeType || "";
-  if (node.isFolder || m === FOLDER_MIME) return "folder";
-  if (m === "application/pdf") return "pdf";
-  if (m.startsWith("image/")) return "image";
-  if (m.startsWith("video/")) return "video";
-  if (m.startsWith("audio/")) return "audio";
-  if (m.includes("spreadsheet") || m === "text/csv") return "sheet";
-  if (m.includes("presentation")) return "slide";
-  if (m.includes("document") || m.startsWith("text/") || m.includes("word")) return "doc";
-  if (/zip|tar|gzip|compressed|rar|7z/.test(m)) return "archive";
-  return "other";
+  return driveKindOf(node); // shared, unit-tested classifier
 }
 
 /** Map a node to a top-level filter bucket (doc-family folds into "doc"). */
@@ -238,7 +256,7 @@ export const driveV2Api = {
   copy: (accountId: string, fileId: string, opts: { name?: string; parents?: string[] } = {}) =>
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/copy`, { method: "POST", body: JSON.stringify(opts) }),
   deletePermanent: (accountId: string, fileId: string) => v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}`, { method: "DELETE" }),
-  emptyTrash: (accountId: string) => v2req<{ ok: boolean }>(`${base(accountId)}/empty-trash`, { method: "POST" }),
+  emptyTrash: (accountId: string, driveId?: string) => v2req<{ ok: boolean }>(`${base(accountId)}/empty-trash${driveId ? `?driveId=${encodeURIComponent(driveId)}` : ""}`, { method: "POST" }),
 
   listPermissions: (accountId: string, fileId: string) => v2req<{ permissions: DrivePermission[] }>(`${base(accountId)}/files/${fileId}/permissions`),
   addPermission: (accountId: string, fileId: string, input: { role: string; type: string; emailAddress?: string; sendNotificationEmail?: boolean; message?: string }) =>

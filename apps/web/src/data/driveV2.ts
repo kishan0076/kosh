@@ -4,6 +4,7 @@ import { API_BASE, ApiError } from "./api";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
 import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
+import { parseDriveSearch, dedupeDriveActivity } from "@kosh/shared";
 
 /** Push a toast without a React hook (store actions run outside components). */
 function pushToast(t: Omit<Toast, "id">): void {
@@ -80,7 +81,8 @@ interface DriveV2State {
 
   nodes: DriveNode[];
   nextPageToken?: string;
-  listLoading: boolean;
+  listLoading: boolean; // full skeleton — only when there's nothing on screen yet
+  refreshing: boolean; // stale-while-revalidate: a background refresh with a listing already visible
   loadingMore: boolean;
   loadingAll: boolean; // draining every remaining page (for a whole-view sort/filter/select-all)
   listError: string | null;
@@ -122,6 +124,7 @@ interface DriveV2State {
   selectAccount: (id: string) => Promise<void>;
   selectSpace: (id: string | null) => Promise<void>;
   startSync: () => void;
+  resumeSync: () => void; // refocus: reconcile without tearing down a healthy push stream
   stopSync: () => void;
   reconnectUrl: () => string;
 
@@ -217,43 +220,9 @@ function savePrefs(p: ViewPrefs) {
 /** The folder currently browsed: the deepest breadcrumb, else the space root (Shared Drive id or "root"). */
 const currentFolderId = (path: { id: string }[], spaceId: string | null = null) => path.at(-1)?.id ?? spaceId ?? "root";
 
-/** Map `type:` operator values to a Drive mime filter. */
-const TYPE_MAP: Record<string, { exact?: string; contains?: string }> = {
-  pdf: { exact: "application/pdf" },
-  image: { contains: "image/" },
-  video: { contains: "video/" },
-  audio: { contains: "audio/" },
-  doc: { contains: "document" },
-  sheet: { contains: "spreadsheet" },
-  slide: { contains: "presentation" },
-  zip: { contains: "zip" },
-  folder: { exact: "application/vnd.google-apps.folder" },
-};
-
 /** Parse a search box query with operators (type: owner: before: after: is:starred) into API params. */
 export function parseSearch(query: string, ownerMe?: string): SearchParams {
-  const params: SearchParams = {};
-  const free: string[] = [];
-  const toDate = (v: string) => (/^\d{4}-\d{2}-\d{2}$/.test(v) ? `${v}T00:00:00` : v);
-  for (const tok of query.trim().split(/\s+/).filter(Boolean)) {
-    const m = tok.match(/^(\w+):(.+)$/);
-    if (!m) { free.push(tok); continue; }
-    const key = m[1]!.toLowerCase();
-    const val = m[2]!;
-    if (key === "type") {
-      const mt = TYPE_MAP[val.toLowerCase()];
-      if (mt?.exact) params.mimeType = mt.exact;
-      else if (mt?.contains) params.mimeContains = mt.contains;
-      else free.push(tok);
-    } else if (key === "owner") params.owner = val.toLowerCase() === "me" ? ownerMe ?? "me" : val;
-    else if (key === "before") params.before = toDate(val);
-    else if (key === "after") params.after = toDate(val);
-    else if (key === "is" && val.toLowerCase() === "starred") params.starred = true;
-    else if (key === "starred") params.starred = val === "true";
-    else free.push(tok);
-  }
-  if (free.length) params.text = free.join(" ");
-  return params;
+  return parseDriveSearch(query, ownerMe); // shared, unit-tested (structurally identical to SearchParams)
 }
 
 export const useDriveV2 = create<DriveV2State>((set, get) => {
@@ -276,6 +245,21 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   }
 
   /** Fetch the current view's first page, cache-first for My Drive. */
+  /** A scope-lost 401 the server flags NEEDS_RECONNECT: gate the module + offer a one-click reconnect. */
+  function isReconnect(err: unknown): boolean {
+    return err instanceof ApiError && err.code === "NEEDS_RECONNECT";
+  }
+  function offerReconnect(): void {
+    set({ scopeOk: false }); // quiesces loads + sync and flips the page to the reconnect gate
+    useUi.getState().toast({
+      message: "Google access expired",
+      description: "Reconnect your account to keep using Drive.",
+      tone: "danger",
+      action: { label: "Reconnect", onClick: () => { window.location.href = driveApi.connectUrl("drive-v2"); } },
+      duration: 8000,
+    });
+  }
+
   async function load(force = false): Promise<void> {
     const { accountId, view, path, searchQuery, searchStarredOnly, spaceId } = get();
     if (!accountId || !get().scopeOk) return;
@@ -288,11 +272,16 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     if (!force && view === "myDrive") {
       const cached = folderCache.get(key);
       if (cached && Date.now() - cached.ts < CACHE_TTL) {
-        set({ nodes: cached.nodes, nextPageToken: cached.nextPageToken, listLoading: false, listError: null });
+        set({ nodes: cached.nodes, nextPageToken: cached.nextPageToken, listLoading: false, refreshing: false, listError: null });
         return;
       }
     }
-    set({ listLoading: true, listError: null });
+    // Stale-while-revalidate: keep a listing that's already on screen visible under a thin "refreshing"
+    // bar; only blank to a full skeleton when there's nothing to show. This stops force-refresh flows
+    // (SSE-idle reconcile, overlay close, restore/undo, upload completion) from flashing the grid empty
+    // and losing scroll/loaded pages.
+    const hadNodes = get().nodes.length > 0;
+    set(hadNodes ? { refreshing: true, listError: null } : { listLoading: true, refreshing: false, listError: null });
     try {
       let result;
       if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { driveId });
@@ -307,11 +296,16 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         result = await driveV2Api.search(accountId, p);
       }
       if (myseq !== loadSeq) return; // superseded by a newer navigation
-      set({ nodes: result.files, nextPageToken: result.nextPageToken, listLoading: false });
+      set({ nodes: result.files, nextPageToken: result.nextPageToken, listLoading: false, refreshing: false, listError: null });
       if (view === "myDrive") folderCache.set(key, { nodes: result.files, nextPageToken: result.nextPageToken, ts: Date.now() });
     } catch (err) {
       if (myseq !== loadSeq) return;
-      set({ listLoading: false, listError: err instanceof Error ? err.message : "Couldn't load your Drive." });
+      if (isReconnect(err)) { set({ listLoading: false, refreshing: false }); offerReconnect(); return; }
+      const msg = err instanceof Error ? err.message : "Couldn't load your Drive.";
+      // A background refresh that fails keeps the stale listing on screen (toast, don't blank the grid);
+      // a first load with nothing shown falls through to the full error state.
+      if (hadNodes) { set({ refreshing: false }); toastErr(msg); }
+      else set({ listLoading: false, listError: msg });
     }
   }
 
@@ -322,7 +316,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     call: () => Promise<void>,
     opts: { refreshQuota?: boolean; invalidate?: string[]; onError?: (msg: string) => void } = {},
   ): Promise<boolean> {
-    const before = get().nodes;
+    // Id-scoped snapshot: capture only the affected nodes' prior state, not the whole array. On rollback
+    // we restore just these ids in place, so overlapping mutations and live-sync inserts/edits folded in
+    // mid-flight aren't clobbered by one failing action's wholesale restore.
+    const idSet = new Set(ids);
+    const beforeById = new Map<string, DriveNode>();
+    for (const n of get().nodes) if (idSet.has(n.id)) beforeById.set(n.id, n);
     const seq = loadSeq;
     set((s) => ({ nodes: optimistic(s.nodes), busyIds: new Set([...s.busyIds, ...ids]) }));
     try {
@@ -334,10 +333,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : "That action failed.";
-      // Roll back only if the view hasn't moved on.
-      if (seq === loadSeq) set((s) => ({ nodes: before, busyIds: withoutIds(s.busyIds, ids) }));
+      // Roll back only the affected ids (and only if the view hasn't moved on); everything else the
+      // current array holds — new synced nodes, other mutations' edits — is preserved.
+      if (seq === loadSeq) set((s) => ({ nodes: s.nodes.map((n) => beforeById.get(n.id) ?? n), busyIds: withoutIds(s.busyIds, ids) }));
       else set((s) => ({ busyIds: withoutIds(s.busyIds, ids) }));
-      (opts.onError ?? ((m) => toastErr(m)))(msg);
+      if (isReconnect(err)) offerReconnect();
+      else (opts.onError ?? ((m) => toastErr(m)))(msg);
       return false;
     }
   }
@@ -345,6 +346,23 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   function invalidateFolderViews() {
     // Drop the time-sensitive caches (recent/starred/trash aren't cached, so this clears My Drive dirs).
     for (const k of [...folderCache.keys()]) if (k.startsWith(`${get().accountId}:`) && k.includes(":myDrive:")) folderCache.delete(k);
+  }
+
+  /** Targeted invalidation for a live-sync batch: drop only the folder caches whose contents actually
+   *  changed (a change's parent folders), instead of nuking every My-Drive cache on each batch — which
+   *  defeats the 30s cache on an actively-changing Drive. The current view is already live via
+   *  applyChanges; this keeps sibling folders fresh without the full-cache storm. */
+  function invalidateChangedFolders(changes: DriveChange[]) {
+    const parents = new Set<string>();
+    for (const c of changes) for (const p of c.file?.parents ?? []) parents.add(p);
+    if (!parents.size) return;
+    const accountId = get().accountId;
+    const space = get().spaceId ?? "";
+    const rootId = get().rootFolderId;
+    for (const p of parents) {
+      folderCache.delete(`${accountId}:${space}:myDrive:${p}`);
+      if (rootId && p === rootId) folderCache.delete(`${accountId}:${space}:myDrive:root`); // root cached under the "root" alias
+    }
   }
 
   /** After a bulk removal, if the loaded page is now empty but more pages exist, refetch so the
@@ -419,7 +437,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       added = merged.length - s.activity.length; // net-new after dedup (unaffected by the display cap)
       return { nodes, detailsNode, activity: merged.slice(0, ACTIVITY_CAP) };
     });
-    invalidateFolderViews(); // next navigation refetches authoritative state
+    invalidateChangedFolders(changes); // next navigation into a changed folder refetches; others keep their cache
     return added;
   }
 
@@ -571,6 +589,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     nodes: [],
     nextPageToken: undefined,
     listLoading: false,
+    refreshing: false,
     loadingMore: false,
     loadingAll: false,
     listError: null,
@@ -651,6 +670,20 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       set((s) => ({ sync: { ...s.sync, status: s.sync.status === "off" ? "syncing" : s.sync.status } }));
       openEventSource(); // near-instant push when the server supports it; no-op otherwise
       scheduleSync(0); // poller: first tick anchors the token (and covers any SSE gaps)
+    },
+    resumeSync: () => {
+      // Called on tab refocus. If a healthy push stream is already live, DON'T tear it down and rebuild
+      // — that re-mints a token and opens a fresh Drive watch on every focus. Just reconcile the view to
+      // catch anything that landed while hidden. Only (re)open push when there's no healthy stream.
+      if (!get().accountId || !get().scopeOk) return;
+      if (!syncActive) { get().startSync(); return; }
+      if (sseConnected && eventSource) {
+        void load(true); // stale-while-revalidate: keeps the listing visible while it refreshes
+        set((s) => ({ sync: { ...s.sync, lastAt: Date.now() } })); // mark reconciled so the idle-poll doesn't double-fetch
+        return;
+      }
+      openEventSource(); // polling, or the stream dropped while hidden → (re)establish push + re-anchor
+      scheduleSync(0);
     },
     stopSync: () => {
       syncActive = false;
@@ -746,8 +779,17 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         }
         if (seq !== loadSeq) { set({ loadingMore: false }); return; } // superseded — still clear the flag
         set((s) => ({ nodes: [...s.nodes, ...result.files], nextPageToken: result.nextPageToken, loadingMore: false }));
-      } catch {
+      } catch (err) {
         set({ loadingMore: false });
+        if (seq !== loadSeq) return; // navigated away mid-fetch — the stale failure isn't worth a toast
+        // Surface it (with a retry) instead of silently stopping — a swallowed failure reads as
+        // "end of list" and the remaining pages just vanish.
+        if (isReconnect(err)) offerReconnect();
+        else useUi.getState().toast({
+          message: err instanceof Error ? err.message : "Couldn't load more.",
+          tone: "danger",
+          action: { label: "Retry", onClick: () => void get().loadMore() },
+        });
       }
     },
 
@@ -1053,7 +1095,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       // A single server-side op with no per-item feedback — show an indeterminate bar so it's tracked.
       set({ bulkOp: { label: "Emptying trash", total: 0, done: 0, indeterminate: true } });
       try {
-        await driveV2Api.emptyTrash(accountId);
+        await driveV2Api.emptyTrash(accountId, get().spaceId ?? undefined);
         // Guard against clobbering a newer view: only blank the list if the user is still on Trash and
         // hasn't navigated away during the (possibly slow) call.
         // Clear pagination too, else a stray "Load more" / "Select all pages" lingers on empty trash.
@@ -1142,15 +1184,7 @@ function withoutIds(set: Set<string>, ids: string[]): Set<string> {
 
 /** Drop duplicate activity rows keyed by (fileId, time, action), keeping the first (newest) seen. */
 function dedupeActivity(list: ActivityEntry[]): ActivityEntry[] {
-  const seen = new Set<string>();
-  const out: ActivityEntry[] = [];
-  for (const e of list) {
-    const key = `${e.fileId}|${e.time}|${e.action}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(e);
-  }
-  return out;
+  return dedupeDriveActivity(list); // shared, unit-tested
 }
 
 /** Run per-id calls at bounded concurrency; remove succeeded ids optimistically, keep failures.

@@ -4,7 +4,8 @@ import { getStore, type DriveAccountDoc } from "../db/index.js";
 import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
 import { decryptSecret } from "../auth/crypto.js";
-import { GoogleAuthError, GoogleTransientError, refreshAccessToken } from "../integrations/googleDrive.js";
+import { GoogleAuthError, GoogleTransientError } from "../integrations/googleDrive.js";
+import { accessTokenFor } from "../integrations/driveTokenCache.js";
 import {
   copyNode,
   createFolderV2,
@@ -76,12 +77,20 @@ async function driveCall<T>(p: Promise<T>): Promise<T> {
   }
 }
 
+const lastUsedWrites = new Map<string, number>(); // accountId → last lastUsedAt write (throttle DB churn)
+const LAST_USED_THROTTLE_MS = 5 * 60 * 1000;
+
 async function tokenFor(acc: DriveAccountDoc): Promise<string> {
   const refresh = decryptSecret(acc.refreshToken);
   if (!refresh) throw badRequest("NEEDS_RECONNECT", "This Google account needs to be reconnected.");
   try {
-    const { accessToken } = await refreshAccessToken(refresh);
-    await getStore().driveAccounts.updateById(acc.id, { lastUsedAt: nowIso() });
+    const accessToken = await accessTokenFor(acc.id, refresh); // cached ~1h; refreshes ~1min early
+    // Throttle the lastUsedAt write — it was on the hot path of every read/poll. Best-effort, fire-and-forget.
+    const now = Date.now();
+    if (now - (lastUsedWrites.get(acc.id) ?? 0) > LAST_USED_THROTTLE_MS) {
+      lastUsedWrites.set(acc.id, now);
+      void getStore().driveAccounts.updateById(acc.id, { lastUsedAt: nowIso() }).catch(() => {});
+    }
     return accessToken;
   } catch (err) {
     mapGoogleError(err);
@@ -382,7 +391,7 @@ driveV2Router.post(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const token = await auth(req, uid);
-    await driveCall(emptyTrash(token));
+    await driveCall(emptyTrash(token, driveIdOf(req)));
     res.json({ ok: true });
   }),
 );

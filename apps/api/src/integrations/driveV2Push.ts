@@ -4,7 +4,7 @@ import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getStore } from "../db/index.js";
 import { decryptSecret } from "../auth/crypto.js";
-import { refreshAccessToken } from "./googleDrive.js";
+import { accessTokenFor } from "./driveTokenCache.js";
 import { getStartPageToken, GoogleGoneError, listChanges, stopChannel, watchChanges, type DriveChange } from "./googleDriveV2.js";
 
 /**
@@ -54,7 +54,7 @@ async function mintFor(accountId: string): Promise<{ token: string; userId: stri
   if (!acc) return null;
   const refresh = decryptSecret(acc.refreshToken);
   if (!refresh) return null;
-  const { accessToken } = await refreshAccessToken(refresh);
+  const accessToken = await accessTokenFor(accountId, refresh); // shared cache with the request routes
   return { token: accessToken, userId: acc.userId };
 }
 
