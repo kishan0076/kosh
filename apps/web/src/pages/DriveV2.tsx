@@ -128,7 +128,9 @@ function Shell() {
   const detailsLoading = useDriveV2((s) => s.detailsLoading);
   const previewNode = useDriveV2((s) => s.previewNode);
   const dialog = useDriveV2((s) => s.dialog);
-  const uploads = useDriveV2((s) => s.uploads);
+  // Subscribe to a derived boolean, NOT the uploads array — otherwise every XHR onProgress write
+  // (many/sec during an upload) re-renders the whole Shell + grid. The tray subscribes to the array itself.
+  const hasUploads = useDriveV2((s) => s.uploads.length > 0);
   const insightsOpen = useDriveV2((s) => s.insightsOpen);
   const activityOpen = useDriveV2((s) => s.activityOpen);
 
@@ -177,17 +179,41 @@ function Shell() {
     }),
     [visible],
   );
+  // id→size map so the inspector's selection total is O(selection), not O(selection × nodes) inline on
+  // every Shell render (which fires on each sync tick).
+  const sizeById = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const n of nodes) m.set(n.id, n.isFolder ? 0 : n.size ?? 0);
+    return m;
+  }, [nodes]);
+  const detailsTotalBytes = useMemo(() => {
+    let t = 0;
+    for (const id of selection) t += sizeById.get(id) ?? 0;
+    return t;
+  }, [selection, sizeById]);
 
+
+  // Route the two frequently-changing values the handlers read (visible order + selection) through refs,
+  // so the `handlers` object below can be built ONCE (stable identity) and still see current values. A
+  // stable handlers object is what lets the memoized FileRow/FileCard skip re-rendering on a sync tick.
+  const orderedIdsRef = useRef(orderedIds);
+  orderedIdsRef.current = orderedIds;
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
 
   /** Ids an action should target: the whole selection if the node is part of a multi-select, else just it. */
-  const targetsFor = useCallback((node: DriveNode): string[] => (selection.has(node.id) && selection.size > 1 ? [...selection] : [node.id]), [selection]);
+  const targetsFor = useCallback((node: DriveNode): string[] => {
+    const sel = selectionRef.current;
+    return sel.has(node.id) && sel.size > 1 ? [...sel] : [node.id];
+  }, []);
 
-  const handlers: ItemHandlers = {
+  const handlers = useMemo<ItemHandlers>(() => ({
     onOpen: (node) => {
       if (node.isFolder) store.getState().openFolder(node);
       else store.getState().setPreview(node);
     },
     onClick: (node, e) => {
+      const orderedIds = orderedIdsRef.current;
       // Modifier-click always extends/toggles the selection (multi-select) — never opens.
       if (e.shiftKey || e.metaKey || e.ctrlKey) {
         store.getState().toggleSelect(node.id, { shift: e.shiftKey, meta: e.metaKey || e.ctrlKey }, orderedIds);
@@ -205,13 +231,13 @@ function Shell() {
     },
     onContext: (node, e) => {
       e.preventDefault();
-      if (!selection.has(node.id)) store.getState().toggleSelect(node.id, {}, orderedIds);
+      if (!selectionRef.current.has(node.id)) store.getState().toggleSelect(node.id, {}, orderedIdsRef.current);
       setMenu({ ids: targetsFor(node), node, x: e.clientX, y: e.clientY });
     },
     onToggleStar: (node) => void store.getState().toggleStar(node.id),
-    onToggleSelect: (node) => store.getState().toggleSelect(node.id, { meta: true }, orderedIds),
+    onToggleSelect: (node) => store.getState().toggleSelect(node.id, { meta: true }, orderedIdsRef.current),
     onMore: (node, e) => {
-      if (!selection.has(node.id)) store.getState().toggleSelect(node.id, {}, orderedIds);
+      if (!selectionRef.current.has(node.id)) store.getState().toggleSelect(node.id, {}, orderedIdsRef.current);
       const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
       setMenu({ ids: targetsFor(node), node, x: r.left, y: r.bottom + 4 });
     },
@@ -219,7 +245,7 @@ function Shell() {
     onRenameCancel: () => setRenamingId(null),
     onDragStart: (node, e) => setDragIds(e, targetsFor(node)),
     onFolderDrop: (folder, ids) => void store.getState().move(ids, folder.id),
-  };
+  }), [store, targetsFor]);
 
   // Keyboard shortcuts scoped to the content region.
   const onKeyDown = (e: ReactKeyboardEvent) => {
@@ -321,7 +347,7 @@ function Shell() {
               <DriveDetails
                 node={detailsNode}
                 count={selection.size}
-                totalBytes={[...selection].reduce((a, id) => a + (nodes.find((n) => n.id === id)?.size ?? 0), 0)}
+                totalBytes={detailsTotalBytes}
                 loading={detailsLoading}
                 onClose={() => void store.getState().loadDetails(null)}
                 onRename={(n) => setRenamingId(n.id)}
@@ -337,7 +363,7 @@ function Shell() {
         )}
       </AnimatePresence>
 
-      {uploads.length > 0 && <UploadTray />}
+      {hasUploads && <UploadTray />}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onUpload={() => fileInputRef.current?.click()} />
       {menu && <ContextMenu x={menu.x} y={menu.y} actions={menuActions} onClose={() => setMenu(null)} />}
@@ -685,13 +711,16 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
   const anchor = useRef<{ x: number; y: number; base: string[]; add: boolean } | null>(null);
 
   useEffect(() => {
-    function move(e: MouseEvent) {
+    let raf = 0;
+    let pending: MouseEvent | null = null;
+    // The heavy part (DOM query + measure every rendered row) runs at most once per frame — mousemove
+    // fires far more often than that, and doing the hit-test on each one janks the drag.
+    function compute(e: MouseEvent) {
       const a = anchor.current;
       if (!a) return;
       const x = Math.min(a.x, e.clientX), y = Math.min(a.y, e.clientY);
       const w = Math.abs(e.clientX - a.x), h = Math.abs(e.clientY - a.y);
       if (w < 5 && h < 5) return; // still a click, not a drag
-      e.preventDefault();
       setBox({ x, y, w, h });
       const sel = { left: x, top: y, right: x + w, bottom: y + h };
       const hits: string[] = [];
@@ -705,10 +734,20 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
       });
       useDriveV2.getState().marqueeSelect(a.add ? [...new Set([...a.base, ...hits])] : hits);
     }
-    function up() { anchor.current = null; setBox(null); }
+    function move(e: MouseEvent) {
+      const a = anchor.current;
+      if (!a) return;
+      // preventDefault synchronously (once past the click threshold) so the browser doesn't start a
+      // native text selection while we coalesce the hit-test into the next frame.
+      if (Math.abs(e.clientX - a.x) >= 5 || Math.abs(e.clientY - a.y) >= 5) e.preventDefault();
+      pending = e;
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; if (pending) compute(pending); });
+    }
+    function up() { anchor.current = null; setBox(null); if (raf) { cancelAnimationFrame(raf); raf = 0; } pending = null; }
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
-    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); if (raf) cancelAnimationFrame(raf); };
   }, [scrollRef]);
 
   const onMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {

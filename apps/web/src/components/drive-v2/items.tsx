@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
 import { formatBytes, sortDriveNodes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
@@ -194,8 +194,10 @@ function SelectDisc({ selected, onToggle, className, reveal = "opacity", tabInde
   );
 }
 
-/* ── list row ── */
-export function FileRow({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+/* ── list row ──
+ * Memoized: with the handlers object made stable upstream, a sync tick or selection change only
+ * re-renders the rows whose own props (node identity, selected, busy, focusable, renaming) changed. */
+function FileRowImpl({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   const innerTab = focusable ? 0 : -1; // only the roving cell contributes its controls to the tab order
   return (
@@ -259,8 +261,10 @@ export function FileRow({ node, index, colIndex, selected, busy, renaming, focus
   );
 }
 
+export const FileRow = memo(FileRowImpl);
+
 /* ── grid card ── */
-export function FileCard({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   const kind = kindOf(node);
   const innerTab = focusable ? 0 : -1; // only the roving cell contributes its controls to the tab order
@@ -349,6 +353,8 @@ export function FileCard({ node, index, colIndex, selected, busy, renaming, focu
     </div>
   );
 }
+
+export const FileCard = memo(FileCardImpl);
 
 /* ── sortable list header (reads sort state from the store) ── */
 export function ListHeader() {

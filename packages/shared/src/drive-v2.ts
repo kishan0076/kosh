@@ -33,6 +33,10 @@ export interface SortableNode {
   size?: number;
 }
 
+// Reused across every comparison instead of constructing an implicit collator per `localeCompare` call
+// — this is the hot path for large folders (re-sorted on each nodes/prefs change).
+const nameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "variant" });
+
 /**
  * Order nodes for display — folders always first, then by the chosen key. Returns a new array; the
  * single source of truth for visible order (grid/list AND bulk-rename sequential numbering).
@@ -41,10 +45,10 @@ export function sortDriveNodes<T extends SortableNode>(nodes: T[], key: DriveSor
   return [...nodes].sort((a, b) => {
     if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1; // folders always first
     let c = 0;
-    if (key === "name") c = a.name.localeCompare(b.name, undefined, { numeric: true });
+    if (key === "name") c = nameCollator.compare(a.name, b.name);
     else if (key === "modified") c = (a.modifiedTime ?? "").localeCompare(b.modifiedTime ?? "");
     else if (key === "size") c = (a.size ?? 0) - (b.size ?? 0);
-    else c = driveKindOf(a).localeCompare(driveKindOf(b)) || a.name.localeCompare(b.name);
+    else c = driveKindOf(a).localeCompare(driveKindOf(b)) || nameCollator.compare(a.name, b.name);
     return dir === "asc" ? c : -c;
   });
 }

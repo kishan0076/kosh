@@ -18,7 +18,9 @@ async function v2req<T>(path: string, init: RequestInit = {}): Promise<T> {
       const res = await fetch(`${API_BASE}${path}`, {
         credentials: "include",
         ...init,
-        headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
+        // Only send Content-Type when there's a body — a JSON content-type on a bodyless GET makes it a
+        // non-simple request and forces a CORS preflight before every read.
+        headers: { ...(idempotent ? {} : { "Content-Type": "application/json" }), ...(init.headers ?? {}) },
         signal: ctrl.signal,
       });
       if (!res.ok) {

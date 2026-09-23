@@ -180,7 +180,18 @@ interface DriveV2State {
 
 /* ── module-level (no re-render) ── */
 const CACHE_TTL = 30_000;
+const CACHE_MAX = 60; // LRU cap so a long browsing session can't grow folderCache without bound
 const folderCache = new Map<string, { nodes: DriveNode[]; nextPageToken?: string; ts: number }>();
+/** Insert (or refresh recency of) a folder-cache entry, evicting the least-recently-used past the cap. */
+function putFolderCache(key: string, val: { nodes: DriveNode[]; nextPageToken?: string; ts: number }): void {
+  folderCache.delete(key); // re-insert at the end so Map iteration order = LRU order
+  folderCache.set(key, val);
+  while (folderCache.size > CACHE_MAX) {
+    const oldest = folderCache.keys().next().value;
+    if (oldest === undefined) break;
+    folderCache.delete(oldest);
+  }
+}
 let tokenCache: { accountId: string; token: string; exp: number } | null = null;
 let loadSeq = 0; // bumped on every navigation/load so slow mutations never clobber newer views
 let nodesKey: string | null = null; // cacheKey the currently-shown `nodes` belong to — gates stale-while-revalidate
@@ -274,6 +285,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const cached = folderCache.get(key);
       if (cached && Date.now() - cached.ts < CACHE_TTL) {
         set({ nodes: cached.nodes, nextPageToken: cached.nextPageToken, listLoading: false, refreshing: false, listError: null });
+        putFolderCache(key, cached); // refresh LRU recency
         nodesKey = key;
         return;
       }
@@ -301,7 +313,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (myseq !== loadSeq) return; // superseded by a newer navigation
       set({ nodes: result.files, nextPageToken: result.nextPageToken, listLoading: false, refreshing: false, listError: null });
       nodesKey = key; // the shown nodes now belong to this context (enables SWR on the next same-context refresh)
-      if (view === "myDrive") folderCache.set(key, { nodes: result.files, nextPageToken: result.nextPageToken, ts: Date.now() });
+      if (view === "myDrive") putFolderCache(key, { nodes: result.files, nextPageToken: result.nextPageToken, ts: Date.now() });
     } catch (err) {
       if (myseq !== loadSeq) return;
       if (isReconnect(err)) { set({ listLoading: false, refreshing: false }); offerReconnect(); return; }
@@ -418,29 +430,50 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const entries: ActivityEntry[] = [];
     let added = 0;
     set((s) => {
-      let nodes = s.nodes;
       let detailsNode = s.detailsNode;
       const folderId = currentFolderId(s.path, s.spaceId);
       // Drive returns the REAL root folder id in a file's `parents`, never the "root" alias — so at My
       // Drive root, match against the resolved root id (falls back to the alias until it's fetched).
       const matchParent = folderId === "root" ? (s.rootFolderId ?? "root") : folderId;
       const now = new Date().toISOString();
+      // O(nodes + changes): index once, edit a single working copy in place, collect removals/prepends —
+      // instead of findIndex + a fresh array allocation per change (O(changes × nodes)).
+      const indexById = new Map<string, number>();
+      s.nodes.forEach((n, i) => indexById.set(n.id, i));
+      let next: DriveNode[] | null = null; // lazily cloned only if something actually mutates
+      const removed = new Set<number>();
+      const prepend: (DriveNode | null)[] = []; // new children of the current folder, arrival order
+      const prependIdx = new Map<string, number>();
+      let mutated = false;
       for (const c of changes) {
-        const idx = nodes.findIndex((n) => n.id === c.fileId);
-        const known = nodes[idx];
+        const idx = indexById.get(c.fileId);
+        const pIdx = prependIdx.get(c.fileId);
+        const known = idx !== undefined ? s.nodes[idx] : pIdx !== undefined ? prepend[pIdx] : undefined;
         const gone = c.removed || c.file?.trashed;
         // Node mutation is view-scoped; the activity log records EVERY change in the corpus.
         if (gone) {
-          if (idx !== -1 && s.view !== "trash") nodes = nodes.filter((n) => n.id !== c.fileId);
+          if (idx !== undefined && s.view !== "trash") { removed.add(idx); mutated = true; }
+          if (pIdx !== undefined) { prepend[pIdx] = null; mutated = true; } // a new child added then removed in the same batch
           if (detailsNode?.id === c.fileId) detailsNode = null;
           entries.push({ fileId: c.fileId, name: known?.name ?? c.file?.name ?? "A file", action: c.removed ? "removed" : "trashed", time: c.time ?? now, isFolder: known?.isFolder ?? c.file?.isFolder ?? false });
         } else if (c.file) {
-          const isNewChild = idx === -1 && s.view === "myDrive" && (c.file.parents ?? []).includes(matchParent);
-          if (idx !== -1) nodes = nodes.map((n) => (n.id === c.fileId ? c.file! : n)); // external edit → reflect it
-          else if (isNewChild) nodes = [c.file, ...nodes]; // a new child of the folder we're looking at
+          const isNewChild = idx === undefined && pIdx === undefined && s.view === "myDrive" && (c.file.parents ?? []).includes(matchParent);
+          if (idx !== undefined) { (next ??= s.nodes.slice())[idx] = c.file; removed.delete(idx); mutated = true; } // external edit → reflect it
+          else if (pIdx !== undefined) prepend[pIdx] = c.file; // edit of a same-batch new child
+          else if (isNewChild) { prependIdx.set(c.fileId, prepend.length); prepend.push(c.file); mutated = true; } // new child of the folder we're looking at
           if (detailsNode?.id === c.fileId) detailsNode = c.file;
           entries.push({ fileId: c.fileId, name: c.file.name, action: isNewChild ? "created" : "edited", time: c.time ?? now, isFolder: c.file.isFolder });
         }
+      }
+      // Materialize once: new children first (reversed → newest-processed frontmost, matching the old
+      // per-change prepend), then the surviving originals (edits already applied in `next`).
+      let nodes = s.nodes;
+      if (mutated) {
+        const base = next ?? s.nodes; // `next` is already a fresh clone when edits happened
+        const survivors = removed.size ? base.filter((_, i) => !removed.has(i)) : base;
+        const heads = prepend.filter((n): n is DriveNode => n !== null).reverse();
+        if (heads.length) nodes = [...heads, ...survivors];
+        else if (survivors !== s.nodes) nodes = survivors; // filtered or edited — already a new array
       }
       // Dedup by (fileId, time, action): the same change can arrive via BOTH the SSE push and a poll
       // during the SSE connect window — without this the timeline would show duplicate rows.

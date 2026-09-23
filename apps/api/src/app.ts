@@ -27,6 +27,7 @@ export function createApp(): Express {
       origin: [config.appUrl],
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization"],
+      maxAge: 86400, // cache preflights for a day so write requests don't re-OPTIONS on every call
     }),
   );
   // JSON everywhere EXCEPT the raw byte-upload endpoint, which reads the body as a Buffer.
