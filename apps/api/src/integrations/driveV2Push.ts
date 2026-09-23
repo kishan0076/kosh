@@ -40,7 +40,7 @@ const subscribers = new Map<string, Set<Response>>(); // accountId → open SSE 
 const channelsById = new Map<string, Channel>();
 const channelByAccount = new Map<string, string>();
 const pollLocks = new Set<string>(); // channelId currently polling (coalesce bursts)
-const pendingWatch = new Set<string>(); // accountId whose channel is being (re)created — avoid duplicates
+const inflightWatch = new Map<string, Promise<boolean>>(); // accountId → in-flight (re)create; joined by concurrent callers
 const renewTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const teardownTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -109,11 +109,19 @@ export async function ensureWatch(accountId: string, userId: string): Promise<bo
 }
 
 /** Create (or replace) the account's watch channel. Returns true on success, false on any failure —
- *  never throws — so both the /events route and the renew timer can branch on the result. */
+ *  never throws. Concurrent callers (multiple tabs, a StrictMode remount, a renewal racing a new tab)
+ *  JOIN the single in-flight create and receive its REAL verdict, so a second caller is never told
+ *  "push unavailable" merely because a create it will benefit from is already running. */
 async function createWatch(accountId: string, userId: string): Promise<boolean> {
   if (!pushEnabled()) return false;
-  if (pendingWatch.has(accountId)) return false; // another (re)create is in flight — one channel per account
-  pendingWatch.add(accountId);
+  const existing = inflightWatch.get(accountId);
+  if (existing) return existing;
+  const p = doCreateWatch(accountId, userId).finally(() => inflightWatch.delete(accountId));
+  inflightWatch.set(accountId, p);
+  return p;
+}
+
+async function doCreateWatch(accountId: string, userId: string): Promise<boolean> {
   try {
     const minted = await mintFor(accountId);
     if (!minted) return false;
@@ -143,15 +151,12 @@ async function createWatch(accountId: string, userId: string): Promise<boolean> 
   } catch (e) {
     logger.warn({ e, accountId }, "drive-v2 push: watch create failed");
     return false;
-  } finally {
-    pendingWatch.delete(accountId);
   }
 }
 
 function scheduleRenew(ch: Channel): void {
   clearRenew(ch.channelId);
-  const delay = Math.max(60_000, ch.expiration - RENEW_BUFFER_MS - Date.now());
-  const t = setTimeout(() => {
+  const attempt = () => {
     // Only renew while someone is still listening; otherwise let it lapse.
     if (!subscribers.get(ch.accountId)?.size) {
       void teardownAccount(ch.accountId).catch(() => {});
@@ -159,17 +164,21 @@ function scheduleRenew(ch: Channel): void {
     }
     void (async () => {
       const ok = await createWatch(ch.accountId, ch.userId);
-      // A transient renewal failure must NOT permanently kill push — retry before the channel expires,
-      // as long as this is still the account's channel and someone is listening. (createWatch no longer
-      // throws; it reports success/failure via its boolean.)
-      if (!ok && channelByAccount.get(ch.accountId) === ch.channelId && subscribers.get(ch.accountId)?.size) {
+      // A transient renewal failure must NOT permanently kill push — KEEP retrying (every
+      // RENEW_RETRY_MS) while this is still the account's channel, listeners remain, and the old
+      // channel hasn't expired yet. On success createWatch registers a NEW channel, so
+      // channelByAccount no longer points at ch.channelId and this loop stops. (createWatch reports
+      // success via its boolean; it never throws.)
+      if (!ok && channelByAccount.get(ch.accountId) === ch.channelId && subscribers.get(ch.accountId)?.size && Date.now() < ch.expiration) {
         logger.warn({ accountId: ch.accountId }, "drive-v2 push: renew failed, retrying");
-        const retry = setTimeout(() => { if (subscribers.get(ch.accountId)?.size) void createWatch(ch.accountId, ch.userId); }, RENEW_RETRY_MS);
+        const retry = setTimeout(attempt, RENEW_RETRY_MS);
         retry.unref?.();
         renewTimers.set(ch.channelId, retry);
       }
     })();
-  }, delay);
+  };
+  const delay = Math.max(60_000, ch.expiration - RENEW_BUFFER_MS - Date.now());
+  const t = setTimeout(attempt, delay);
   t.unref?.();
   renewTimers.set(ch.channelId, t);
 }

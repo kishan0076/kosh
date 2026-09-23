@@ -538,6 +538,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       // Drive watch) and settle into stable polling for the rest of the session.
       if (failures >= MAX_SSE_FAILURES && eventSource === es) {
         closeEventSource();
+        void load(true); // giving up on push — refresh the current view since no reconnect will do it
         scheduleSync(0);
       }
     };
@@ -629,7 +630,10 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       syncToken = null; syncGen++; // new corpus → re-anchor sync; invalidate any in-flight poll
       set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [], rootFolderId: null });
       set({ scopeOk: computeScopeOk() });
-      if (syncActive) openEventSource(); // re-point the push channel at the new account
+      // Re-point push at the new account AND immediately re-arm the poller: openEventSource() drops
+      // sseConnected, but the only pending timer may be the 60s SSE-idle reconcile, which would leave
+      // the new account unsynced for up to a minute until push (re)confirms.
+      if (syncActive) { openEventSource(); scheduleSync(0); }
       if (get().scopeOk) await Promise.all([load(true), get().loadQuota(), loadSpaces(), loadRootId()]);
     },
 
@@ -637,6 +641,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       syncToken = null; syncGen++; // switching spaces re-anchors the change feed; invalidate in-flight poll
       const space = id ? get().spaces.find((d) => d.id === id) ?? null : null;
       set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false });
+      if (syncActive) scheduleSync(0); // re-arm the poller now (don't wait out a 60s idle reconcile)
       await load(true);
     },
 

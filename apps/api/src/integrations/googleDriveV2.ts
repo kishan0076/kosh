@@ -84,8 +84,6 @@ function driveHttpError(status: number, ctx: string, reason?: string, message?: 
     return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
   }
   if (status === 400) return new GoogleBadRequestError(`${ctx}${message ? `: ${message}` : "."}`);
-  // 410 Gone: an expired changes page token. Distinct from transient so callers re-anchor, not retry.
-  if (status === 410) return new GoogleGoneError(`${ctx} — the sync page token expired; re-anchoring.`);
   return new GoogleTransientError(`${ctx} (${status}).`);
 }
 
@@ -128,7 +126,9 @@ function toNode(f: RawFile): DriveNode {
   return { ...(rest as unknown as DriveNode), size: size != null ? Number(size) : undefined, isFolder: f.mimeType === FOLDER_MIME };
 }
 
-async function driveFetch(accessToken: string, url: string | URL, init: RequestInit, ctx: string): Promise<Response> {
+/** `pageTokenSensitive`: for `changes.list`, an expired/invalid page token can come back as 400, 404 OR
+ *  410 — all mean "re-anchor, don't retry the dead token" — so those map to GoogleGoneError. */
+async function driveFetch(accessToken: string, url: string | URL, init: RequestInit, ctx: string, pageTokenSensitive = false): Promise<Response> {
   const res = await fetch(url, { ...init, headers: { Authorization: `Bearer ${accessToken}`, ...(init.headers ?? {}) } });
   if (!res.ok) {
     let reason: string | undefined;
@@ -141,6 +141,9 @@ async function driveFetch(accessToken: string, url: string | URL, init: RequestI
       message = body?.error?.message;
     } catch {
       /* non-JSON error body — fall back to status-only classification */
+    }
+    if (pageTokenSensitive && (res.status === 400 || res.status === 404 || res.status === 410)) {
+      throw new GoogleGoneError(`${ctx} — the sync page token expired; re-anchoring.`);
     }
     throw driveHttpError(res.status, ctx, reason, message, domain);
   }
@@ -260,7 +263,7 @@ export async function listChanges(
   u.searchParams.set("pageSize", "100");
   u.searchParams.set("spaces", "drive");
   if (driveId) u.searchParams.set("driveId", driveId);
-  const res = await driveFetch(accessToken, u, {}, "Couldn't sync changes");
+  const res = await driveFetch(accessToken, u, {}, "Couldn't sync changes", true); // page-token-sensitive: 400/404/410 → re-anchor
   const json = (await res.json()) as {
     newStartPageToken?: string;
     nextPageToken?: string;
