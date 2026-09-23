@@ -307,8 +307,9 @@ Benchmarked against modern tools; effort tags S/M/L. All feasible with the per-u
 
 ## 6. Suggested execution order
 
-**Implementation status:** Phases A, B, C, D, E — ✅ **shipped**. Phase F not started (each shipped item:
-implement → verify typecheck/test/build → code-review → fix findings → commit).
+**Implementation status:** Phases A, B, C, D, E — ✅ **shipped**. Phase F — ✅ **collaboration slice shipped**
+(link-share power controls, background-change notifications, inline comments); AI/offline items remain deferred
+(each shipped item: implement → verify typecheck/test/build → code-review → fix findings → commit).
 
 **Phase E:** tags/labels (Drive `appProperties`), smart collections (named saved searches), keyboard
 palette-on-selection + `?` cheat sheet + vim `j/k`, and the **IO slice** — OAuth-token downloads (fixes
@@ -333,5 +334,13 @@ filtering currently scopes to the loaded view).
   inspector, Move undo, focus trap, density control, drag ghost.
 - **Phase E — Power features wave 1:** tags/labels, smart collections, bulk download/export, Quick Look upgrade,
   keyboard palette-on-selection.
-- **Phase F — AI, offline, collaboration:** semantic search + summaries + cleanup wizard, offline cache, link-share
-  power controls + comments.
+- **Phase F — Collaboration & notifications:** ✅ **shipped.** **F1** link-share power controls — per-grant
+  expiry (`expirationTime` + `removeExpiration`, My-Drive user/group grants only), anyone-with-link role picker,
+  disable-download for viewers/commenters (`copyRequiresWriterPermission`), least-privilege Viewer defaults; the
+  eligibility rule lives in `@kosh/shared` `canGrantExpiry` (tested) and is enforced server-side. **F2**
+  background-change notifications — a hidden-tab unread counter (from SSE push *and* the slower hidden-tab poll),
+  a `(N)` tab-title badge cleared on refocus, and an opt-in, permission-gated desktop notification that focuses
+  the tab on click. **F3** inline Drive comments — read/compose/reply plus resolve/reopen (Drive's reply
+  `action`) in the details inspector, rendering plain-text `content` only (never `htmlContent`). **Still
+  deferred (AI/infra-gated):** semantic search + summaries + auto-tagging + cleanup wizard (need an AI backend),
+  offline read cache, cross-account/space transfer, file-request/upload links.
