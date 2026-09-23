@@ -639,6 +639,8 @@ export interface DriveComment {
 const REPLY_FIELDS = "id,content,htmlContent,createdTime,modifiedTime,deleted,action,author(displayName,photoLink,me)";
 const COMMENT_FIELDS = `id,content,htmlContent,anchor,resolved,createdTime,modifiedTime,deleted,author(displayName,photoLink,me),quotedFileContent(mimeType,value),replies(${REPLY_FIELDS})`;
 
+// NB: unlike the files.* helpers above, the comments/replies endpoints don't accept `supportsAllDrives`
+// (it isn't in their parameter list) — the fileId alone resolves the thread, including on Shared Drives.
 export async function listComments(accessToken: string, fileId: string): Promise<DriveComment[]> {
   const out: DriveComment[] = [];
   let pageToken: string | undefined;

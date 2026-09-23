@@ -176,13 +176,16 @@ function CommentsSection({ node }: { node: DriveNode }) {
 
   useEffect(() => {
     let live = true;
-    setLoading(true);
-    driveV2Api
-      .listComments(accountId, node.id)
-      .then(({ comments }) => { if (live) { setComments([...comments].sort((a, b) => (b.createdTime ?? "").localeCompare(a.createdTime ?? ""))); setError(null); } })
-      .catch((err) => { if (live) setError(err instanceof Error ? err.message : "Couldn't load comments."); })
-      .finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
+    // Debounce: browsing files with j/k shouldn't fire a comments request per transient selection —
+    // only the node you actually land on (>250ms) is fetched.
+    const t = setTimeout(() => {
+      driveV2Api
+        .listComments(accountId, node.id)
+        .then(({ comments }) => { if (live) { setComments([...comments].sort((a, b) => (b.createdTime ?? "").localeCompare(a.createdTime ?? ""))); setError(null); } })
+        .catch((err) => { if (live) setError(err instanceof Error ? err.message : "Couldn't load comments."); })
+        .finally(() => { if (live) setLoading(false); });
+    }, 250);
+    return () => { live = false; clearTimeout(t); };
   }, [accountId, node.id]);
 
   async function postComment() {
@@ -239,15 +242,18 @@ function CommentsSection({ node }: { node: DriveNode }) {
         <MessageSquare size={12} /> Comments{comments.length > 0 && <span className="text-faint">· {comments.length}</span>}
       </div>
 
-      {canComment && (
+      {/* Wait for the initial load before offering the composer, so a post can't be clobbered by a
+          slower in-flight list fetch. */}
+      {canComment && !loading && (
         <div className="mb-3 space-y-2">
           <Textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             rows={2}
             maxLength={4000}
+            disabled={posting}
             placeholder="Add a comment…"
-            className="min-h-0 resize-none text-[12.5px]"
+            className="min-h-0 resize-none text-[12.5px] disabled:opacity-60"
           />
           <div className="flex justify-end">
             <Button variant="primary" size="sm" disabled={!draft.trim() || posting} onClick={() => void postComment()}>
@@ -266,8 +272,8 @@ function CommentsSection({ node }: { node: DriveNode }) {
       ) : (
         <ul className="space-y-3">
           {comments.map((c) => {
-            const replies = (c.replies ?? []).filter((r) => !r.deleted && r.content); // hide tombstones + bare resolve/reopen markers
-            const authorName = c.author?.displayName ?? "Someone";
+            const replies = (c.replies ?? []).filter((r) => r.content); // hide bare resolve/reopen markers (deleted ones are already excluded server-side)
+            const authorName = c.author?.displayName || "Someone";
             return (
               <li key={c.id} className={cn("rounded-[var(--radius-control)] border border-border p-2.5", c.resolved && "opacity-70")}>
                 <div className="flex items-start gap-2">
@@ -285,10 +291,10 @@ function CommentsSection({ node }: { node: DriveNode }) {
                       <ul className="mt-2 space-y-2 border-l border-border pl-2.5">
                         {replies.map((r) => (
                           <li key={r.id} className="flex items-start gap-2">
-                            <AuthorAvatar name={r.author?.displayName ?? "Someone"} photo={r.author?.photoLink} size={20} />
+                            <AuthorAvatar name={r.author?.displayName || "Someone"} photo={r.author?.photoLink} size={20} />
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
-                                <span className="truncate text-[12px] font-medium">{r.author?.displayName ?? "Someone"}</span>
+                                <span className="truncate text-[12px] font-medium">{r.author?.displayName || "Someone"}</span>
                                 {r.createdTime && <span className="text-[11px] text-faint">· {ago(r.createdTime)}</span>}
                               </div>
                               <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px]">{r.content}</p>
