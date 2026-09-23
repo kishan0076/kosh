@@ -8,6 +8,8 @@ import {
   parseTags,
   serializeTags,
   tagColorIndex,
+  isNativeGoogleDoc,
+  driveExportFormats,
   TAG_PROP_KEY,
   MAX_TAG_LEN,
   DRIVE_FOLDER_MIME,
@@ -207,5 +209,26 @@ describe("tags", () => {
     expect(tagColorIndex("work", 8)).toBeGreaterThanOrEqual(0);
     expect(tagColorIndex("work", 8)).toBeLessThan(8);
     expect(tagColorIndex("", 8)).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe("downloads / exports", () => {
+  it("isNativeGoogleDoc flags Google-app files but not folders, shortcuts, or binary", () => {
+    expect(isNativeGoogleDoc("application/vnd.google-apps.document")).toBe(true);
+    expect(isNativeGoogleDoc("application/vnd.google-apps.spreadsheet")).toBe(true);
+    expect(isNativeGoogleDoc(DRIVE_FOLDER_MIME)).toBe(false);
+    expect(isNativeGoogleDoc("application/vnd.google-apps.shortcut")).toBe(false);
+    expect(isNativeGoogleDoc("application/pdf")).toBe(false);
+    expect(isNativeGoogleDoc(undefined)).toBe(false);
+  });
+
+  it("driveExportFormats returns targets for native docs and empty for binary/unknown", () => {
+    const doc = driveExportFormats("application/vnd.google-apps.document");
+    expect(doc.map((f) => f.ext)).toEqual(["pdf", "docx", "md", "txt"]);
+    expect(driveExportFormats("application/vnd.google-apps.spreadsheet").some((f) => f.ext === "csv")).toBe(true);
+    expect(driveExportFormats("application/pdf")).toEqual([]);
+    expect(driveExportFormats(undefined)).toEqual([]);
+    // every format has a non-empty label + a real mime target
+    for (const f of doc) { expect(f.label).toBeTruthy(); expect(f.mimeType).toContain("/"); }
   });
 });

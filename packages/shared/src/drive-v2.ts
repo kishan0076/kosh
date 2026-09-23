@@ -156,6 +156,50 @@ export function tagColorIndex(tag: string, buckets: number): number {
   return Math.abs(h) % Math.max(1, buckets);
 }
 
+/* ── downloads / exports ── */
+
+export interface DriveExportFormat {
+  label: string;
+  mimeType: string; // the target export mime for files.export
+  ext: string; // extension appended to the file name
+}
+
+/** files.export targets per native Google-app mime type. (CSV/TXT export only the first sheet/plain text — a Google limitation.) */
+export const DRIVE_EXPORT_FORMATS: Record<string, DriveExportFormat[]> = {
+  "application/vnd.google-apps.document": [
+    { label: "PDF", mimeType: "application/pdf", ext: "pdf" },
+    { label: "Word (.docx)", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ext: "docx" },
+    { label: "Markdown (.md)", mimeType: "text/markdown", ext: "md" },
+    { label: "Plain text (.txt)", mimeType: "text/plain", ext: "txt" },
+  ],
+  "application/vnd.google-apps.spreadsheet": [
+    { label: "PDF", mimeType: "application/pdf", ext: "pdf" },
+    { label: "Excel (.xlsx)", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ext: "xlsx" },
+    { label: "CSV (.csv)", mimeType: "text/csv", ext: "csv" },
+  ],
+  "application/vnd.google-apps.presentation": [
+    { label: "PDF", mimeType: "application/pdf", ext: "pdf" },
+    { label: "PowerPoint (.pptx)", mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation", ext: "pptx" },
+    { label: "Plain text (.txt)", mimeType: "text/plain", ext: "txt" },
+  ],
+  "application/vnd.google-apps.drawing": [
+    { label: "PNG", mimeType: "image/png", ext: "png" },
+    { label: "PDF", mimeType: "application/pdf", ext: "pdf" },
+    { label: "SVG", mimeType: "image/svg+xml", ext: "svg" },
+  ],
+};
+
+/** A native Google-app file (Doc/Sheet/Slide/Drawing/…) — has no binary bytes, must be EXPORTED, not
+ *  downloaded via alt=media. Folders and shortcuts are excluded. */
+export function isNativeGoogleDoc(mimeType?: string): boolean {
+  return !!mimeType && mimeType.startsWith("application/vnd.google-apps.") && mimeType !== DRIVE_FOLDER_MIME && mimeType !== "application/vnd.google-apps.shortcut";
+}
+
+/** Available export targets for a native Google-app mime (empty for binary files / unknown native types). */
+export function driveExportFormats(mimeType?: string): DriveExportFormat[] {
+  return (mimeType && DRIVE_EXPORT_FORMATS[mimeType]) || [];
+}
+
 export interface ActivityLike {
   fileId: string;
   time?: string;

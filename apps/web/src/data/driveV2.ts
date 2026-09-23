@@ -4,7 +4,9 @@ import { API_BASE, ApiError } from "./api";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
 import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
-import { parseDriveSearch, dedupeDriveActivity, parseTags, normalizeTag, serializeTags, TAG_PROP_KEY } from "@kosh/shared";
+import { parseDriveSearch, dedupeDriveActivity, parseTags, normalizeTag, serializeTags, TAG_PROP_KEY, isNativeGoogleDoc, driveExportFormats } from "@kosh/shared";
+import { saveBlob } from "@/lib/download";
+import { makeZip, uniqueName, type ZipEntry } from "@/lib/zip";
 
 /** Push a toast without a React hook (store actions run outside components). */
 function pushToast(t: Omit<Toast, "id">): void {
@@ -193,6 +195,12 @@ interface DriveV2State {
   invalidateViews: () => void;
   uploadFiles: (files: File[]) => Promise<void>;
   downloadRevision: (fileId: string, revId: string, filename: string) => Promise<void>;
+  /** Download a file to disk: binary via alt=media, native Google docs auto-exported to their default format. */
+  downloadNode: (id: string) => Promise<void>;
+  /** Export a native Google doc to a specific format (files.export) and save it. */
+  exportNode: (id: string, mimeType: string, ext: string) => Promise<void>;
+  /** Fetch the selected FILES and save them as one .zip (folders are skipped; total is size-capped). */
+  downloadZip: (ids: string[]) => Promise<void>;
 }
 
 /* ── module-level (no re-render) ── */
@@ -296,6 +304,27 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   }
   function computeScopeOk(): boolean {
     return get().fullAccess && hasFullDrive(selectedAccount()?.scope);
+  }
+
+  /** Fetch a file's bytes browser→Google directly (never through the API) with a short-lived token —
+   *  the same path as uploads/revision download. Native Google docs have no bytes, so they're exported
+   *  to their default format (first entry, e.g. PDF). Returns the blob + a suggested filename. */
+  async function nodeToBlob(node: DriveNode): Promise<{ blob: Blob; filename: string }> {
+    const accountId = get().accountId;
+    if (!accountId) throw new Error("No account.");
+    const token = await ensureToken(accountId);
+    if (isNativeGoogleDoc(node.mimeType)) {
+      const fmt = driveExportFormats(node.mimeType)[0];
+      if (!fmt) throw new Error("This Google file type can't be downloaded.");
+      const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(node.id)}/export?mimeType=${encodeURIComponent(fmt.mimeType)}`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      return { blob: await res.blob(), filename: `${node.name}.${fmt.ext}` };
+    }
+    const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(node.id)}?alt=media&supportsAllDrives=true`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) throw new Error(`Download failed (${res.status})`);
+    return { blob: await res.blob(), filename: node.name };
   }
 
   function cacheKey(view: DriveView, folderId: string): string {
@@ -1339,6 +1368,75 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       } catch {
         toastErr("Couldn't download that version. Google-native docs (Docs/Sheets/Slides) keep history in Drive itself.");
       }
+    },
+
+    downloadNode: async (id) => {
+      const node = get().nodes.find((n) => n.id === id) ?? (get().detailsId === id ? get().detailsNode : null);
+      if (!node || node.isFolder) return; // folders download via the ZIP path
+      try {
+        const { blob, filename } = await nodeToBlob(node);
+        saveBlob(blob, filename);
+      } catch (err) {
+        toastErr(err instanceof Error ? err.message : "Couldn't download that file.");
+      }
+    },
+
+    exportNode: async (id, mimeType, ext) => {
+      const accountId = get().accountId;
+      if (!accountId) return;
+      const node = get().nodes.find((n) => n.id === id) ?? (get().detailsId === id ? get().detailsNode : null);
+      if (!node) return;
+      try {
+        const token = await ensureToken(accountId);
+        const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(id)}/export?mimeType=${encodeURIComponent(mimeType)}`;
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error(`Export failed (${res.status})`);
+        saveBlob(await res.blob(), `${node.name}.${ext}`);
+        pushToast({ message: `Exported as ${ext.toUpperCase()}`, tone: "ok" });
+      } catch (err) {
+        toastErr(err instanceof Error ? err.message : "Couldn't export that file.");
+      }
+    },
+
+    downloadZip: async (ids) => {
+      if (!get().accountId) return;
+      const nodes = ids.map((id) => get().nodes.find((n) => n.id === id)).filter((n): n is DriveNode => !!n);
+      const files = nodes.filter((n) => !n.isFolder);
+      const skippedFolders = nodes.length - files.length;
+      if (!files.length) { toastErr("Select files to download as a ZIP (whole folders aren't bundled yet)."); return; }
+      const ZIP_CAP = 500 * 1024 * 1024; // in-browser memory guard
+      const est = files.reduce((a, f) => a + (f.size ?? 0), 0);
+      if (est > ZIP_CAP) { toastErr("That selection is over the 500 MB ZIP limit — pick fewer files."); return; }
+
+      const store = useDriveV2;
+      store.setState({ bulkOp: { label: "Preparing ZIP", total: files.length, done: 0 } });
+      const entries: ZipEntry[] = [];
+      const used = new Set<string>();
+      let failed = 0;
+      let i = 0;
+      const worker = async () => {
+        while (i < files.length) {
+          const f = files[i++]!;
+          try {
+            const { blob, filename } = await nodeToBlob(f);
+            entries.push({ name: uniqueName(filename, used), data: new Uint8Array(await blob.arrayBuffer()) });
+          } catch {
+            failed++;
+          }
+          store.setState((s) => (s.bulkOp ? { bulkOp: { ...s.bulkOp, done: s.bulkOp.done + 1 } } : {}));
+        }
+      };
+      try {
+        await Promise.all(Array.from({ length: Math.min(4, files.length) }, worker));
+        if (entries.length) saveBlob(makeZip(entries), `drive-${new Date().toISOString().slice(0, 10)}.zip`);
+      } catch {
+        toastErr("Couldn't build the ZIP.");
+      } finally {
+        store.setState({ bulkOp: null });
+      }
+      if (skippedFolders) pushToast({ message: "Folders were skipped — ZIP bundles files only for now.", tone: "warn" });
+      if (failed) toastErr(`${failed} file${failed === 1 ? "" : "s"} couldn't be added to the ZIP.`);
+      else if (entries.length) pushToast({ message: `Downloaded ${entries.length} file${entries.length === 1 ? "" : "s"} as ZIP`, tone: "ok" });
     },
   };
 });

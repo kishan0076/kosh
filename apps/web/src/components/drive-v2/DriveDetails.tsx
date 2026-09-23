@@ -32,6 +32,7 @@ export function DriveDetails({
   onShare,
   onUpdateMeta,
   onSetTags,
+  onDownload,
 }: {
   node: DriveNode | null;
   count: number;
@@ -46,6 +47,7 @@ export function DriveDetails({
   onShare: (node: DriveNode) => void;
   onUpdateMeta: (node: DriveNode, patch: { description?: string }) => void;
   onSetTags: (node: DriveNode, tags: string[]) => void;
+  onDownload: (node: DriveNode) => void;
 }) {
   // Multi-select aggregate
   if (count > 1) {
@@ -77,7 +79,7 @@ export function DriveDetails({
             {node.capabilities?.canRename !== false && <QuickAction icon={Pencil} label="Rename" onClick={() => onRename(node)} />}
             {node.capabilities?.canMoveItemWithinDrive !== false && <QuickAction icon={CornerUpRight} label="Move" onClick={() => onMove(node)} />}
             {node.webViewLink && <QuickAction icon={ExternalLink} label="Open" href={node.webViewLink} />}
-            {node.webContentLink && <QuickAction icon={Download} label="Download" href={node.webContentLink} />}
+            {!node.isFolder && <QuickAction icon={Download} label="Download" onClick={() => onDownload(node)} />}
             {node.capabilities?.canTrash !== false && <QuickAction icon={Trash2} label="Trash" danger onClick={() => onTrash(node)} />}
           </div>
         </div>

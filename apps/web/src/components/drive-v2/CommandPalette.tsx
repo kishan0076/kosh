@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Clock, CornerDownLeft, CornerUpRight, FolderPlus, HardDrive, Info, LayoutGrid, List as ListIcon, RotateCcw, Search, Share2, Sparkles, Star, Trash2, Upload } from "lucide-react";
+import { Clock, CornerDownLeft, CornerUpRight, Download, FolderPlus, HardDrive, Info, LayoutGrid, List as ListIcon, RotateCcw, Search, Share2, Sparkles, Star, Trash2, Upload } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/ui";
 import { driveV2Api, type DriveNode } from "@/data/driveV2Api";
@@ -72,6 +72,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
         // toggleStarMany toggles each item, so for a single already-starred file the action is "Unstar".
         const starLabel = solo?.starred ? "Unstar item" : `Star${suffix || " item"}`;
         list.push({ id: "sel-star", label: starLabel, icon: Star, keywords: "selection favorite", run: () => void s().toggleStarMany(ids) });
+        list.push({ id: "sel-download", label: n === 1 ? "Download item" : `Download ${n} items (ZIP)`, icon: Download, keywords: "selection export zip", run: () => (n === 1 ? void s().downloadNode(ids[0]!) : void s().downloadZip(ids)) });
         list.push({ id: "sel-move", label: `Move${suffix || " item"} to…`, icon: CornerUpRight, keywords: "selection", run: () => s().openDialog({ kind: "move", ids }) });
         list.push({ id: "sel-trash", label: `Trash${suffix || " item"}`, icon: Trash2, keywords: "selection delete", run: () => s().openDialog({ kind: "delete", ids, permanent: false }) });
         if (n === 1) {

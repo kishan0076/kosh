@@ -33,7 +33,7 @@ import {
   Type,
   X,
 } from "lucide-react";
-import { formatBytes, parseTags } from "@kosh/shared";
+import { formatBytes, parseTags, driveExportFormats } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
@@ -326,6 +326,7 @@ function Shell() {
       onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
       onUpdateMeta={(n, patch) => void store.getState().updateMeta(n.id, patch)}
       onSetTags={(n, tags) => void store.getState().setTags(n.id, tags)}
+      onDownload={(n) => void store.getState().downloadNode(n.id)}
     />
   );
 
@@ -522,7 +523,16 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
     // Details works for folders too (a plain folder click navigates, so this is the way to inspect one).
     a.push({ label: "Details", icon: Info, onClick: () => void s.loadDetails(node.id) });
     if (node.webViewLink) a.push({ label: "Open in Drive", icon: ExternalLink, onClick: () => window.open(node.webViewLink, "_blank", "noopener") });
-    if (node.webContentLink) a.push({ label: "Download", icon: Download, onClick: () => window.open(node.webContentLink, "_blank", "noopener") });
+    if (!node.isFolder) {
+      // Binary files download via the OAuth token (alt=media); native Google docs are exported to a
+      // chosen format (files.export) — they have no downloadable bytes.
+      const exportFmts = driveExportFormats(node.mimeType);
+      if (exportFmts.length) {
+        for (const f of exportFmts) a.push({ label: `Export as ${f.label}`, icon: Download, onClick: () => void s.exportNode(node.id, f.mimeType, f.ext) });
+      } else {
+        a.push({ label: "Download", icon: Download, onClick: () => void s.downloadNode(node.id) });
+      }
+    }
     if (node.capabilities?.canRename !== false) a.push({ label: "Rename", icon: Pencil, shortcut: "F2", onClick: () => ctx.setRenamingId(node.id) });
     if (node.capabilities?.canShare !== false) a.push({ label: "Share…", icon: Share2, onClick: () => s.openDialog({ kind: "share", node }) });
     if (node.isFolder) a.push({ label: "Make a copy", icon: Copy, onClick: () => void s.copyFolder(node.id) });
@@ -835,6 +845,7 @@ function SelectionBar() {
         ) : (
           <>
             <Button variant="ghost" size="sm" onClick={() => void s().toggleStarMany(ids)}><Star size={14} /> Star</Button>
+            <Button variant="ghost" size="sm" onClick={() => (ids.length === 1 ? void s().downloadNode(ids[0]!) : void s().downloadZip(ids))}><Download size={14} /> Download</Button>
             {ids.length > 1 && <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "rename-bulk", ids })}><Type size={14} /> Rename</Button>}
             <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "move", ids })}><CornerUpRight size={14} /> Move</Button>
             <Button variant="ghost" size="sm" className="text-danger" onClick={() => s().openDialog({ kind: "delete", ids, permanent: false })}><Trash2 size={14} /> Trash</Button>
