@@ -32,7 +32,7 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
   const searchQuery = useDriveV2((s) => s.searchQuery);
   const spaceId = useDriveV2((s) => s.spaceId);
   const spaceName = useDriveV2((s) => s.spaceName);
-  const emptyTrash = useDriveV2((s) => s.emptyTrash);
+  const openDialog = useDriveV2((s) => s.openDialog);
   const meta = VIEW_META[view];
   const title = view === "myDrive" && spaceId ? spaceName ?? meta.title : meta.title;
 
@@ -67,7 +67,7 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
         <div className="flex shrink-0 items-center gap-2">
           {statPill && <span className="hidden rounded-[var(--radius-chip)] bg-surface-2 px-2.5 py-1 font-mono text-[11.5px] tabular text-muted sm:inline">{statPill}</span>}
           {view === "trash" ? (
-            <Button variant="outline" size="sm" className="border-danger/40 text-danger hover:bg-danger-soft" onClick={() => void emptyTrash()}><Trash2 size={14} /> Empty trash</Button>
+            <Button variant="outline" size="sm" className="border-danger/40 text-danger hover:bg-danger-soft" onClick={() => openDialog({ kind: "empty-trash" })}><Trash2 size={14} /> Empty trash</Button>
           ) : view === "myDrive" ? (
             <>
               <Button variant="secondary" size="sm" onClick={onNewFolder}><FolderPlus size={15} /> New folder</Button>

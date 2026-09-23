@@ -41,7 +41,7 @@ import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileR
 import { PageHeader } from "@/components/drive-v2/PageHeader";
 import { DriveRail } from "@/components/drive-v2/DriveRail";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
-import { CreateFolderModal, DeleteConfirmModal, MoveToModal } from "@/components/drive-v2/modals";
+import { CreateFolderModal, DeleteConfirmModal, EmptyTrashModal, MoveToModal } from "@/components/drive-v2/modals";
 import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
@@ -250,6 +250,7 @@ function Shell() {
             />
             <DriveToolbar orderedIds={orderedIds} />
             {selection.size > 0 && <SelectionBar />}
+            <MoreToLoadNotice />
             <DriveContentArea
               view={view}
               visible={visible}
@@ -328,6 +329,7 @@ function Shell() {
       {dialog?.kind === "share" && <ShareModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "rename-bulk" && <BulkRenameModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "revisions" && <RevisionsModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
+      {dialog?.kind === "empty-trash" && <EmptyTrashModal onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} onClose={() => store.getState().setPreview(null)} />}
     </div>
   );
@@ -399,24 +401,57 @@ function SyncPill() {
 /** Tri-state "Select all / Deselect all" over the currently visible items. */
 function SelectAllToggle({ orderedIds }: { orderedIds: string[] }) {
   const selection = useDriveV2((s) => s.selection);
+  const nextPageToken = useDriveV2((s) => s.nextPageToken);
+  const loadingAll = useDriveV2((s) => s.loadingAll);
   const total = orderedIds.length;
   const sel = orderedIds.reduce((n, id) => n + (selection.has(id) ? 1 : 0), 0);
-  const all = total > 0 && sel === total;
+  const hasMore = !!nextPageToken;
+  // "Everything" only when the whole view is loaded — if pages remain, stay indeterminate so the
+  // control never claims a full selection it can't guarantee.
+  const all = total > 0 && sel === total && !hasMore;
   const some = sel > 0 && !all;
   const Icon = all ? CheckSquare : some ? MinusSquare : Square;
+  const label = all ? "Deselect all" : hasMore ? "Select all pages" : "Select all";
+  // When more pages exist, drain them first so "select all" genuinely covers the whole view — never a
+  // silent subset that a following bulk action would act on.
+  const onClick = async () => {
+    const store = useDriveV2.getState();
+    if (all) { store.clearSelection(); return; }
+    if (hasMore) await store.loadAll();
+    useDriveV2.getState().selectAllLoaded();
+  };
   return (
     <button
-      onClick={() => (all ? useDriveV2.getState().clearSelection() : useDriveV2.getState().selectAll(orderedIds))}
-      disabled={total === 0}
+      onClick={() => void onClick()}
+      disabled={total === 0 || loadingAll}
       aria-pressed={all}
       className={cn(
         "inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] transition-colors hover:bg-surface-2 disabled:opacity-50",
         all || some ? "border-primary text-primary" : "border-border text-muted",
       )}
-      title={all ? "Deselect all" : "Select all"}
+      title={all ? "Deselect all" : hasMore ? "Load every page, then select all" : "Select all"}
     >
-      <Icon size={15} /> <span className="hidden sm:inline">{all ? "Deselect all" : "Select all"}</span>
+      {loadingAll ? <Spinner size={14} /> : <Icon size={15} />} <span className="hidden sm:inline">{label}</span>
     </button>
+  );
+}
+
+/** When a kind filter is active but the folder still has unfetched pages, client-side filtering only
+ *  sees loaded items — warn and offer to drain the rest so the filter covers the whole view. */
+function MoreToLoadNotice() {
+  const filterKind = useDriveV2((s) => s.prefs.filterKind);
+  const nextPageToken = useDriveV2((s) => s.nextPageToken);
+  const loadingAll = useDriveV2((s) => s.loadingAll);
+  const listLoading = useDriveV2((s) => s.listLoading);
+  if (!filterKind || !nextPageToken || listLoading) return null;
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 text-[12.5px] text-muted">
+      <Filter size={14} className="shrink-0 text-primary" />
+      <span className="min-w-0 flex-1">This filter only covers the items loaded so far — matches on later pages aren't shown yet.</span>
+      <Button variant="outline" size="sm" onClick={() => void useDriveV2.getState().loadAll()} disabled={loadingAll}>
+        {loadingAll ? <Spinner size={13} /> : null} Load all
+      </Button>
+    </div>
   );
 }
 

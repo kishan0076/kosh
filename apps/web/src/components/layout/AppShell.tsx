@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Outlet } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 import { WifiOff } from "lucide-react";
+import { ErrorBoundary } from "../ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { CommandPalette } from "../palette/CommandPalette";
@@ -25,6 +26,7 @@ export function AppShell() {
     }
   });
   const [mobileOpen, setMobileOpen] = useState(false);
+  const location = useLocation();
   const setPalette = useUi((s) => s.setPalette);
   const setHelp = useUi((s) => s.setHelp);
   const paletteOpen = useUi((s) => s.paletteOpen);
@@ -93,7 +95,11 @@ export function AppShell() {
         <main className="min-h-0 flex-1 overflow-y-auto">
           {/* Fluid content — fills the width with a small responsive side gutter (16–20px), no fixed max width. */}
           <div className="w-full px-4 py-6 sm:px-5">
-            <Outlet />
+            {/* A page crash shows an in-place recovery card (keeping the shell) instead of white-screening;
+                the resetKey clears it automatically once the user navigates elsewhere. */}
+            <ErrorBoundary resetKey={location.pathname}>
+              <Outlet />
+            </ErrorBoundary>
           </div>
         </main>
       </div>

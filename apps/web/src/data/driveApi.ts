@@ -86,7 +86,9 @@ export const driveApi = {
 
 /* ── resumable direct upload: browser → Google (bytes never touch the API) ── */
 
-const UPLOAD_INIT = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,size,webViewLink,md5Checksum";
+// supportsAllDrives=true is required to create a file whose parent is a Shared Drive (or a folder in
+// one); it is a no-op for ordinary My-Drive uploads, so V1 and V2 can share this one init URL.
+const UPLOAD_INIT = "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&supportsAllDrives=true&fields=id,name,size,webViewLink,md5Checksum";
 // Chunk size must be a multiple of 256 KiB (Google requirement). 8 MiB balances throughput vs retry cost.
 const CHUNK = 8 * 1024 * 1024;
 const MAX_CHUNK_RETRIES = 5;

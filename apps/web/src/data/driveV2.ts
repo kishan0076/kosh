@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { uid } from "@/lib/ids";
 import { API_BASE, ApiError } from "./api";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
-import { driveV2Api, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
+import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
 
 /** Push a toast without a React hook (store actions run outside components). */
@@ -26,6 +26,7 @@ export type Dialog =
   | { kind: "share"; node: DriveNode }
   | { kind: "rename-bulk"; ids: string[] }
   | { kind: "revisions"; node: DriveNode }
+  | { kind: "empty-trash" }
   | null;
 
 export interface UploadTask {
@@ -81,6 +82,7 @@ interface DriveV2State {
   nextPageToken?: string;
   listLoading: boolean;
   loadingMore: boolean;
+  loadingAll: boolean; // draining every remaining page (for a whole-view sort/filter/select-all)
   listError: string | null;
 
   prefs: ViewPrefs;
@@ -132,6 +134,7 @@ interface DriveV2State {
 
   load: (force?: boolean) => Promise<void>;
   loadMore: () => Promise<void>;
+  loadAll: () => Promise<void>;
   loadQuota: () => Promise<void>;
   loadDetails: (id: string | null) => Promise<void>;
 
@@ -144,6 +147,8 @@ interface DriveV2State {
 
   toggleSelect: (id: string, mods: { shift?: boolean; meta?: boolean }, orderedIds: string[]) => void;
   selectAll: (orderedIds: string[]) => void;
+  /** Select every loaded item that passes the active kind filter (order-independent). */
+  selectAllLoaded: () => void;
   marqueeSelect: (ids: string[]) => void;
   clearSelection: () => void;
 
@@ -551,6 +556,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     nextPageToken: undefined,
     listLoading: false,
     loadingMore: false,
+    loadingAll: false,
     listError: null,
     prefs: loadPrefs(),
     searchQuery: "",
@@ -725,6 +731,26 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       }
     },
 
+    /** Drain every remaining page of the current view so client-side sort/filter/select-all see the
+     *  WHOLE view, not just the first page. Bounded so a giant folder can't spin forever. */
+    loadAll: async () => {
+      if (get().loadingAll || !get().nextPageToken) return;
+      const seq = loadSeq;
+      set({ loadingAll: true });
+      try {
+        let guard = 0;
+        while (get().nextPageToken && seq === loadSeq && guard < 100) {
+          guard++;
+          const before = get().nodes.length;
+          await get().loadMore();
+          if (seq !== loadSeq) break; // navigated away — stop draining the old view
+          if (get().nodes.length === before && get().nextPageToken) break; // no progress — bail out
+        }
+      } finally {
+        set({ loadingAll: false });
+      }
+    },
+
     loadQuota: async () => {
       const accountId = get().accountId;
       if (!accountId) return;
@@ -798,6 +824,11 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       });
     },
     selectAll: (orderedIds) => set({ selection: new Set(orderedIds) }),
+    selectAllLoaded: () => {
+      const { nodes, prefs } = get();
+      const matching = prefs.filterKind ? nodes.filter((n) => filterBucket(n) === prefs.filterKind) : nodes;
+      set({ selection: new Set(matching.map((n) => n.id)) });
+    },
     marqueeSelect: (ids) => set({ selection: new Set(ids) }),
     clearSelection: () => set({ selection: new Set() }),
 

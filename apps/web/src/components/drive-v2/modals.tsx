@@ -142,9 +142,11 @@ export function DeleteConfirmModal({ ids, permanent, onClose }: { ids: string[];
 
   useEffect(() => { cancelRef.current?.focus(); }, []);
 
-  // Only require type-to-confirm for a permanent single-item delete (the strongest guard).
-  const requireType = permanent && targets.length === 1 && !!single;
-  const typeOk = !requireType || typed.trim() === single?.name;
+  // Type-to-confirm guards EVERY permanent delete — the guard must scale with blast radius, not
+  // shrink for it. A single item asks for its name; a bulk delete asks for the word DELETE.
+  const requireType = permanent && targets.length > 0;
+  const confirmWord = multi ? "DELETE" : single?.name ?? "";
+  const typeOk = !requireType || (multi ? typed.trim().toUpperCase() === "DELETE" : typed.trim() === confirmWord);
 
   const title = permanent
     ? multi ? `Delete ${ids.length} items forever?` : "Delete forever?"
@@ -199,8 +201,16 @@ export function DeleteConfirmModal({ ids, permanent, onClose }: { ids: string[];
 
         {requireType && (
           <div>
-            <label htmlFor="del-confirm" className="mb-1.5 block text-[12px] text-muted">Type <span className="font-semibold text-foreground">{single?.name}</span> to confirm</label>
-            <input id="del-confirm" value={typed} onChange={(e) => setTyped(e.target.value)} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none focus:border-danger" />
+            <label htmlFor="del-confirm" className="mb-1.5 block text-[12px] text-muted">
+              Type <span className="font-semibold text-foreground">{confirmWord}</span> to confirm
+            </label>
+            <input
+              id="del-confirm"
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void confirm(); }}
+              className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none focus:border-danger"
+            />
           </div>
         )}
       </div>
@@ -208,6 +218,73 @@ export function DeleteConfirmModal({ ids, permanent, onClose }: { ids: string[];
         <Button ref={cancelRef} variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="danger" onClick={confirm} disabled={busy || !typeOk}>
           {busy ? <Spinner size={15} /> : <Trash2 size={15} />} {permanent ? "Delete forever" : "Move to trash"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Empty trash (irreversible — the strongest guard in the module) ── */
+export function EmptyTrashModal({ onClose }: { onClose: () => void }) {
+  const nodes = useDriveV2((s) => s.nodes);
+  const nextPageToken = useDriveV2((s) => s.nextPageToken);
+  const quota = useDriveV2((s) => s.quota);
+  const emptyTrash = useDriveV2((s) => s.emptyTrash);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [typed, setTyped] = useState("");
+
+  useEffect(() => { cancelRef.current?.focus(); }, []);
+
+  // The loaded page may be partial (pagination), so "N+" when more pages exist; the authoritative
+  // reclaimable size comes from the account quota, not the loaded rows.
+  const loaded = nodes.length;
+  const more = !!nextPageToken;
+  const trashBytes = quota?.usageInDriveTrash ?? 0;
+  const CONFIRM = "DELETE";
+  const typeOk = typed.trim().toUpperCase() === CONFIRM;
+
+  async function confirm() {
+    if (busy || !typeOk) return;
+    setBusy(true);
+    try {
+      await emptyTrash();
+      onClose();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} className="max-w-md" labelledBy="et-title">
+      <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-danger-soft text-danger"><AlertTriangle size={20} /></span>
+        <h2 id="et-title" className="text-[15px] font-semibold">Empty trash?</h2>
+      </div>
+      <div className="space-y-3 px-5 py-4">
+        <div className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-surface text-danger"><Trash2 size={18} /></span>
+          <div className="min-w-0">
+            <div className="text-[13.5px] font-medium">{loaded ? `${loaded}${more ? "+" : ""} item${loaded === 1 && !more ? "" : "s"} in trash` : "Everything in trash"}</div>
+            {trashBytes > 0 && <div className="text-[11.5px] text-faint">Frees about {formatBytes(trashBytes)}</div>}
+          </div>
+        </div>
+        <p className="text-[12.5px] text-danger">This permanently deletes <span className="font-semibold">every</span> item in your trash from Google Drive. It can't be undone.</p>
+        <div>
+          <label htmlFor="et-confirm" className="mb-1.5 block text-[12px] text-muted">Type <span className="font-semibold text-foreground">{CONFIRM}</span> to confirm</label>
+          <input
+            id="et-confirm"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void confirm(); }}
+            className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none focus:border-danger"
+          />
+        </div>
+      </div>
+      <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
+        <Button ref={cancelRef} variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="danger" onClick={confirm} disabled={busy || !typeOk}>
+          {busy ? <Spinner size={15} /> : <Trash2 size={15} />} Empty trash
         </Button>
       </div>
     </Modal>
