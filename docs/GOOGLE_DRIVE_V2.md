@@ -140,7 +140,13 @@ DRIVE_WEBHOOK_URL=https://<your-public-api-host>/api/drive-v2/webhook/changes
   live upload tray.
 - **Storage meter**, image **preview** overlay (opens other types in Drive), skeleton loaders, and
   per-view empty and error states with retry.
-- **Keyboard-friendly** — ⌘/Ctrl+A select all, Esc clear, Delete to trash, F2 rename.
+- **Keyboard-friendly** — the file grid/list is a full ARIA grid with a roving focus cursor: Arrow
+  keys move (grid: ←→ by one, ↑↓ by a row; list: by one), Home/End jump, Enter opens, Space toggles
+  selection, Shift+Arrow selects a range, Ctrl/⌘+Arrow moves without selecting; plus ⌘/Ctrl+A select
+  all (drains every page), Esc clear, Delete to trash, F2 rename.
+- **Touch & mobile** — on a phone the sidebar collapses into a hamburger **drawer** so the file list
+  owns the viewport; on touch (coarse-pointer) devices the per-item select and overflow (⋯) controls
+  are always visible (not hover-only), so selecting and acting on files works without a mouse.
 
 ---
 

@@ -17,6 +17,7 @@ import {
   History,
   LayoutGrid,
   List as ListIcon,
+  Menu as MenuIcon,
   Pencil,
   Plug,
   RefreshCw,
@@ -32,7 +33,7 @@ import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
-import { Menu, MenuItem, MenuLabel, MenuSeparator } from "@/components/overlays";
+import { Menu, MenuItem, MenuLabel, MenuSeparator, useBodyScrollLock } from "@/components/overlays";
 import { driveApi } from "@/data/driveApi";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
@@ -149,6 +150,7 @@ function Shell() {
   const [menu, setMenu] = useState<{ ids: string[]; node: DriveNode; x: number; y: number } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Global ⌘K / Ctrl+K opens the command palette.
@@ -231,11 +233,17 @@ function Shell() {
   return (
     <div className="w-full lg:h-[calc(100dvh-7rem)] lg:overflow-hidden" onKeyDown={onKeyDown}>
       <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => { void store.getState().uploadFiles(Array.from(e.target.files ?? [])); if (fileInputRef.current) fileInputRef.current.value = ""; }} />
-      <div className="grid gap-6 lg:h-full lg:min-h-0 lg:grid-cols-[auto_minmax(0,1fr)]">
-        <DriveRail
-          onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
-          onUpload={() => fileInputRef.current?.click()}
-        />
+      <div className="grid gap-4 lg:h-full lg:min-h-0 lg:gap-6 lg:grid-cols-[auto_minmax(0,1fr)]">
+        {/* Mobile: a compact bar with a hamburger that opens the rail as a drawer (the full rail below
+            would otherwise bury the file list under the fold on a phone). */}
+        <MobileDriveBar onOpenNav={() => setMobileNavOpen(true)} />
+        {/* Desktop: the persistent sidebar rail. */}
+        <div className="hidden lg:block lg:h-full lg:min-h-0">
+          <DriveRail
+            onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
+            onUpload={() => fileInputRef.current?.click()}
+          />
+        </div>
         <FadeSwap k={paneKey} className="min-w-0 lg:h-full lg:min-h-0">
           {activityOpen ? (
             <ActivityPanel onClose={() => store.getState().setActivity(false)} />
@@ -276,6 +284,13 @@ function Shell() {
           )}
         </FadeSwap>
       </div>
+
+      <MobileRailDrawer
+        open={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        onNewFolder={() => { setMobileNavOpen(false); store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId }); }}
+        onUpload={() => { setMobileNavOpen(false); fileInputRef.current?.click(); }}
+      />
 
       <BulkProgress />
 
@@ -332,6 +347,63 @@ function Shell() {
       {dialog?.kind === "empty-trash" && <EmptyTrashModal onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} onClose={() => store.getState().setPreview(null)} />}
     </div>
+  );
+}
+
+/* ── mobile top bar + rail drawer (shown below lg, where the full sidebar would bury the file list) ── */
+function MobileDriveBar({ onOpenNav }: { onOpenNav: () => void }) {
+  const accounts = useDriveV2((s) => s.accounts);
+  const accountId = useDriveV2((s) => s.accountId);
+  const spaceId = useDriveV2((s) => s.spaceId);
+  const spaceName = useDriveV2((s) => s.spaceName);
+  const account = accounts.find((a) => a.id === accountId);
+  return (
+    <div className="flex items-center gap-2.5 rounded-[var(--radius-panel)] border border-border bg-surface px-2.5 py-2 lg:hidden">
+      <button onClick={onOpenNav} aria-label="Open navigation menu" className="grid h-9 w-9 shrink-0 place-items-center rounded-[var(--radius-control)] border border-border text-muted transition-colors hover:bg-surface-2">
+        <MenuIcon size={18} />
+      </button>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-semibold leading-tight">{spaceId ? spaceName ?? "Shared drive" : account?.name ?? "Drive"}</div>
+        <div className="truncate text-[11px] text-muted">{spaceId ? "Shared drive" : account?.email ?? ""}</div>
+      </div>
+    </div>
+  );
+}
+
+function MobileRailDrawer({ open, onClose, onNewFolder, onUpload }: { open: boolean; onClose: () => void; onNewFolder: () => void; onUpload: () => void }) {
+  useBodyScrollLock(open);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            key="rail-scrim"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: DUR.base }}
+            onClick={onClose}
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px] lg:hidden"
+          />
+          <motion.div
+            key="rail-panel"
+            initial={{ x: "-100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "-100%" }}
+            transition={{ duration: DUR.slow, ease: EASE.emphasized }}
+            className="fixed inset-y-0 left-0 z-40 w-[84vw] max-w-[300px] p-2 lg:hidden"
+          >
+            <DriveRail variant="drawer" onNavigate={onClose} onNewFolder={onNewFolder} onUpload={onUpload} />
+          </motion.div>
+        </>
+      )}
+    </AnimatePresence>
   );
 }
 

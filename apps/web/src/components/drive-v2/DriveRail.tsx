@@ -61,7 +61,7 @@ const MANAGE: NavDef[] = [
   { v: "activity", label: "Activity", icon: Activity },
 ];
 
-export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; onUpload: () => void }) {
+export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNavigate }: { onNewFolder: () => void; onUpload: () => void; variant?: "sidebar" | "drawer"; onNavigate?: () => void }) {
   const accounts = useDriveV2((s) => s.accounts);
   const accountId = useDriveV2((s) => s.accountId);
   const view = useDriveV2((s) => s.view);
@@ -74,8 +74,10 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
   const account = accounts.find((a) => a.id === accountId);
   const sync = useDriveV2((s) => s.sync);
 
-  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; } });
+  const [collapsedState, setCollapsed] = useState(() => { try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; } });
   const toggleCollapsed = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem(RAIL_KEY, n ? "1" : "0"); } catch { /* ignore */ } return n; });
+  const isDrawer = variant === "drawer";
+  const collapsed = isDrawer ? false : collapsedState; // a drawer is always fully expanded (mobile)
 
   const pctRaw = quota?.limit ? Math.min(100, (quota.usage / quota.limit) * 100) : 0;
   const pct = Math.round(pctRaw); // used for the ring + tone thresholds
@@ -89,6 +91,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
     if (v === "insights") s.setInsights(true);
     else if (v === "activity") s.setActivity(true);
     else s.setView(v);
+    onNavigate?.(); // close the mobile drawer after a nav tap
   };
 
   const Item = ({ def }: { def: NavDef }) => {
@@ -114,7 +117,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
   };
 
   return (
-    <aside className={cn("flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface p-3 lg:h-full lg:overflow-y-auto", collapsed ? "w-[68px]" : "w-full lg:w-[248px]")}>
+    <aside className={cn("flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface p-3 lg:h-full lg:overflow-y-auto", isDrawer && "h-full overflow-y-auto shadow-[var(--shadow-pop)]", collapsed ? "w-[68px]" : "w-full lg:w-[248px]")}>
       {/* WorkspaceCrest */}
       <Menu
         align="start"
@@ -137,7 +140,7 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
       >
         <MenuLabel>Google accounts</MenuLabel>
         {accounts.map((a) => (
-          <MenuItem key={a.id} icon={a.id === accountId ? Check : HardDrive} onClick={() => void useDriveV2.getState().selectAccount(a.id)}>
+          <MenuItem key={a.id} icon={a.id === accountId ? Check : HardDrive} onClick={() => { void useDriveV2.getState().selectAccount(a.id); onNavigate?.(); }}>
             <span className="truncate">{a.email}</span>
           </MenuItem>
         ))}
@@ -146,9 +149,9 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
           <>
             <MenuSeparator />
             <MenuLabel>Spaces</MenuLabel>
-            <MenuItem icon={spaceId === null ? Check : HardDrive} onClick={() => void useDriveV2.getState().selectSpace(null)}>My Drive</MenuItem>
+            <MenuItem icon={spaceId === null ? Check : HardDrive} onClick={() => { void useDriveV2.getState().selectSpace(null); onNavigate?.(); }}>My Drive</MenuItem>
             {spaces.map((d) => (
-              <MenuItem key={d.id} icon={spaceId === d.id ? Check : Users} onClick={() => void useDriveV2.getState().selectSpace(d.id)}>
+              <MenuItem key={d.id} icon={spaceId === d.id ? Check : Users} onClick={() => { void useDriveV2.getState().selectSpace(d.id); onNavigate?.(); }}>
                 <span className="truncate">{d.name}</span>
               </MenuItem>
             ))}
@@ -196,10 +199,12 @@ export function DriveRail({ onNewFolder, onUpload }: { onNewFolder: () => void; 
             <div className="mt-1.5 font-mono text-[10.5px] tabular text-muted">{quota.limit ? `${formatBytes(quota.usage)} / ${formatBytes(quota.limit)}` : "used"}</div>
           </button>
         )}
-        <button onClick={toggleCollapsed} className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[12.5px] font-medium text-faint transition-colors hover:bg-surface-2 hover:text-foreground", collapsed && "justify-center px-0")} aria-label={collapsed ? "Expand" : "Collapse"}>
-          {collapsed ? <PanelLeftClose size={17} className="rotate-180" /> : <ChevronsLeft size={17} />}
-          {!collapsed && "Collapse"}
-        </button>
+        {!isDrawer && (
+          <button onClick={toggleCollapsed} className={cn("flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[12.5px] font-medium text-faint transition-colors hover:bg-surface-2 hover:text-foreground", collapsed && "justify-center px-0")} aria-label={collapsed ? "Expand" : "Collapse"}>
+            {collapsed ? <PanelLeftClose size={17} className="rotate-180" /> : <ChevronsLeft size={17} />}
+            {!collapsed && "Collapse"}
+          </button>
+        )}
       </div>
     </aside>
   );

@@ -179,10 +179,12 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
  * the default uses opacity so an absolutely-positioned card overlay fades in.
  */
 function SelectDisc({ selected, onToggle, className, reveal = "opacity", tabIndex }: { selected: boolean; onToggle: () => void; className?: string; reveal?: "opacity" | "collapse"; tabIndex?: number }) {
+  // On touch/coarse-pointer devices there is no hover, so the disc must be visible by default —
+  // otherwise multi-select is unreachable on a phone/tablet.
   const hidden =
     reveal === "collapse"
-      ? "hidden group-hover:grid focus-visible:grid"
-      : "grid opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100";
+      ? "hidden group-hover:grid focus-visible:grid [@media(pointer:coarse)]:grid"
+      : "grid opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 [@media(pointer:coarse)]:opacity-100";
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
@@ -254,7 +256,7 @@ export function FileRow({ node, index, colIndex, selected, busy, renaming, focus
           <button
             onClick={(e) => { e.stopPropagation(); onMore(node, e); }}
             tabIndex={innerTab}
-            className="grid h-7 w-7 place-items-center rounded-md text-muted opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover:opacity-100"
+            className="grid h-7 w-7 place-items-center rounded-md text-muted opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
             aria-label="More actions"
           >
             <MoreVertical size={16} />
@@ -333,7 +335,7 @@ export function FileCard({ node, index, colIndex, selected, busy, renaming, focu
             <button
               onClick={(e) => { e.stopPropagation(); onMore(node, e); }}
               tabIndex={innerTab}
-              className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 text-muted opacity-0 backdrop-blur transition-opacity hover:bg-surface hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+              className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 text-muted opacity-0 backdrop-blur transition-opacity hover:bg-surface hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
               aria-label="More actions"
             >
               <MoreVertical size={15} />
