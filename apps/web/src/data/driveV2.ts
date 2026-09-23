@@ -132,6 +132,10 @@ interface DriveV2State {
   activityOpen: boolean;
   setActivity: (v: boolean) => void;
   clearActivity: () => void;
+  unread: number; // net-new background changes counted while the tab was hidden; drives the tab-title badge
+  notifyDesktop: boolean; // opted into desktop notifications for background changes (gated by browser permission)
+  clearUnread: () => void;
+  setNotifyDesktop: (on: boolean) => Promise<boolean>;
 
   init: () => Promise<void>;
   selectAccount: (id: string) => Promise<void>;
@@ -280,6 +284,25 @@ function loadCollections(): SmartCollection[] {
 function saveCollections(list: SmartCollection[]) {
   try {
     localStorage.setItem(COLLECTIONS_KEY, JSON.stringify(list));
+  } catch {
+    /* private mode — ignore */
+  }
+}
+
+const NOTIFY_KEY = "kosh.driveV2.notifyDesktop";
+function loadNotifyPref(): boolean {
+  // Only honor a stored opt-in if the browser permission is still granted — a revoked permission (or a
+  // different device) must not silently believe notifications are on.
+  try {
+    if (localStorage.getItem(NOTIFY_KEY) !== "1") return false;
+    return typeof Notification !== "undefined" && Notification.permission === "granted";
+  } catch {
+    return false;
+  }
+}
+function saveNotifyPref(on: boolean) {
+  try {
+    localStorage.setItem(NOTIFY_KEY, on ? "1" : "0");
   } catch {
     /* private mode — ignore */
   }
@@ -567,6 +590,13 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     return added;
   }
 
+  /** Count changes that landed while the tab was hidden so the page can badge its title / notify. */
+  function noteBackground(added: number): void {
+    if (added > 0 && typeof document !== "undefined" && document.hidden) {
+      set((s) => ({ unread: s.unread + added }));
+    }
+  }
+
   /** One sync poll: (re)establish a page token if needed, else fetch+apply changes and advance it. */
   async function syncTick(): Promise<void> {
     if (syncInFlight) return; // a poll is already running; it reschedules itself when done
@@ -603,6 +633,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
           // Account/space switched mid-flight → this batch + token belong to the old corpus. Drop them.
           if (gen === syncGen) {
             const added = applyChanges(changes);
+            noteBackground(added);
             syncToken = nextPageToken ?? newStartPageToken ?? syncToken;
             set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + added, via: "poll" } }));
             if (nextPageToken) nextDelay = 300; // more pages queued — drain promptly
@@ -660,6 +691,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         } else if (msg?.type === "changes" && Array.isArray(msg.changes)) {
           sseConnected = true; // receiving pushes ⇒ push is live (covers a missed push-ready frame)
           const added = applyChanges(msg.changes);
+          noteBackground(added);
           set((s) => ({ sync: { status: "live", lastAt: Date.now(), applied: s.sync.applied + added, via: "push" } }));
         }
       } catch {
@@ -755,6 +787,20 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (closing) void load(true);
     },
     clearActivity: () => set({ activity: [] }),
+    unread: 0,
+    notifyDesktop: loadNotifyPref(),
+    clearUnread: () => { if (get().unread) set({ unread: 0 }); },
+    setNotifyDesktop: async (on) => {
+      if (!on) { set({ notifyDesktop: false }); saveNotifyPref(false); return false; }
+      if (typeof Notification === "undefined") { pushToast({ message: "This browser doesn't support desktop notifications.", tone: "warn" }); return false; }
+      let perm = Notification.permission;
+      if (perm === "default") { try { perm = await Notification.requestPermission(); } catch { perm = "denied"; } }
+      const granted = perm === "granted";
+      set({ notifyDesktop: granted });
+      saveNotifyPref(granted);
+      if (!granted) pushToast({ message: "Notifications are blocked — enable them in your browser settings.", tone: "warn" });
+      return granted;
+    },
 
     init: async () => {
       set({ status: "loading", error: null });
@@ -775,7 +821,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     selectAccount: async (id) => {
       tokenCache = null;
       syncToken = null; syncGen++; // new corpus → re-anchor sync; invalidate any in-flight poll
-      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [], rootFolderId: null });
+      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [], unread: 0, rootFolderId: null });
       set({ scopeOk: computeScopeOk() });
       // Re-point push at the new account AND immediately re-arm the poller: openEventSource() drops
       // sseConnected, but the only pending timer may be the 60s SSE-idle reconcile, which would leave
@@ -787,7 +833,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     selectSpace: async (id) => {
       syncToken = null; syncGen++; // switching spaces re-anchors the change feed; invalidate in-flight poll
       const space = id ? get().spaces.find((d) => d.id === id) ?? null : null;
-      set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false });
+      set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false, unread: 0 });
       if (syncActive) scheduleSync(0); // re-arm the poller now (don't wait out a 60s idle reconcile)
       await load(true);
     },

@@ -1,6 +1,7 @@
-import { Activity, Download, FilePlus2, Folder, Pencil, RotateCcw, Trash2, X } from "lucide-react";
+import { Activity, Bell, BellOff, Download, FilePlus2, Folder, Pencil, RotateCcw, Trash2, X } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
+import { useUi } from "@/data/ui";
 import { Button } from "@/components/ui";
 import { useDriveV2, type ActivityEntry } from "@/data/driveV2";
 
@@ -23,6 +24,15 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
   const activity = useDriveV2((s) => s.activity);
   const sync = useDriveV2((s) => s.sync);
   const clearActivity = useDriveV2((s) => s.clearActivity);
+  const notifyDesktop = useDriveV2((s) => s.notifyDesktop);
+  const setNotifyDesktop = useDriveV2((s) => s.setNotifyDesktop);
+  const toast = useUi((s) => s.toast);
+
+  async function toggleNotify() {
+    const on = await setNotifyDesktop(!notifyDesktop);
+    if (on) toast({ message: "Desktop notifications on — you'll be pinged about changes while this tab is in the background.", tone: "ok" });
+    else if (notifyDesktop) toast({ message: "Desktop notifications off.", tone: "default" });
+  }
 
   function exportCsv() {
     const header = ["time", "action", "type", "name", "fileId"];
@@ -49,6 +59,13 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
             Live changes to your Drive, tracked while this tab is open{sync.lastAt ? ` · synced ${ago(new Date(sync.lastAt).toISOString())}` : ""}.
           </p>
         </div>
+        <button
+          onClick={() => void toggleNotify()}
+          className={cn("grid h-8 w-8 place-items-center rounded-md hover:bg-surface-2", notifyDesktop ? "text-primary" : "text-muted hover:text-foreground")}
+          aria-label={notifyDesktop ? "Turn off desktop notifications" : "Notify me of background changes"}
+          aria-pressed={notifyDesktop}
+          title={notifyDesktop ? "Desktop notifications on" : "Notify me when files change while this tab is in the background"}
+        >{notifyDesktop ? <Bell size={16} /> : <BellOff size={16} />}</button>
         <Button variant="outline" size="sm" onClick={exportCsv} disabled={!activity.length}><Download size={14} /> Export CSV</Button>
         {activity.length > 0 && <Button variant="ghost" size="sm" onClick={clearActivity}>Clear</Button>}
         <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Close activity"><X size={16} /></button>

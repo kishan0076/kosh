@@ -40,7 +40,7 @@ import { Button, Progress, Spinner } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, useBodyScrollLock } from "@/components/overlays";
 import { driveApi } from "@/data/driveApi";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
-import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
+import { useDriveV2, type ActivityEntry, type DriveView, type SortKey } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, sortNodes, type ItemHandlers } from "@/components/drive-v2/items";
 import { PageHeader } from "@/components/drive-v2/PageHeader";
@@ -60,6 +60,14 @@ import { FadeSwap } from "@/components/motion";
 import { AnimatePresence, motion } from "motion/react";
 import { DUR, EASE } from "@/lib/motion";
 import { ago } from "@/lib/time";
+
+/** Past-tense phrasing for a desktop notification body, keyed by activity action. */
+const ACTIVITY_VERB: Record<ActivityEntry["action"], string> = {
+  created: "was added",
+  edited: "was edited",
+  trashed: "was trashed",
+  removed: "was removed",
+};
 
 export function DriveV2() {
   const backend = useData((s) => s.backend);
@@ -162,11 +170,36 @@ function Shell() {
   useEffect(() => {
     store.getState().startSync();
     // Refocus reconciles without rebuilding a healthy push stream (see resumeSync) — no token re-mint /
-    // new Drive watch on every tab switch.
-    const onVis = () => { if (document.visibilityState === "visible") store.getState().resumeSync(); };
+    // new Drive watch on every tab switch — and clears the "changed while you were away" badge.
+    const onVis = () => { if (document.visibilityState === "visible") { store.getState().resumeSync(); store.getState().clearUnread(); } };
     document.addEventListener("visibilitychange", onVis);
     return () => { document.removeEventListener("visibilitychange", onVis); store.getState().stopSync(); };
   }, [store]);
+
+  // Tab-title badge + optional desktop notification for changes that arrive while the tab is hidden.
+  const unread = useDriveV2((s) => s.unread);
+  const baseTitleRef = useRef<string>(typeof document !== "undefined" ? document.title : "Kosh");
+  const prevUnreadRef = useRef(0);
+  useEffect(() => {
+    const base = baseTitleRef.current || "Kosh";
+    document.title = unread > 0 ? `(${unread}) ${base}` : base;
+    // Fire a desktop notification only when the count GROWS (new arrivals), the user opted in, permission
+    // is still granted, and the tab is actually hidden — coalesced under one tag so it replaces, not stacks.
+    const prev = prevUnreadRef.current;
+    prevUnreadRef.current = unread;
+    if (unread > prev) {
+      const s = store.getState();
+      if (s.notifyDesktop && typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
+        const delta = unread - prev;
+        const latest = s.activity[0];
+        const body = latest
+          ? `${latest.name} ${ACTIVITY_VERB[latest.action]}${delta > 1 ? ` · +${delta - 1} more` : ""}`
+          : `${delta} change${delta === 1 ? "" : "s"} in your Drive`;
+        try { new Notification("Kosh · Drive", { body, tag: "kosh-drive-changes" }); } catch { /* notifications unavailable */ }
+      }
+    }
+    return () => { document.title = base; };
+  }, [unread, store]);
 
   const [menu, setMenu] = useState<{ ids: string[]; node: DriveNode; x: number; y: number } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
