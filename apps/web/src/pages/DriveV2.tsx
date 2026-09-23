@@ -654,6 +654,9 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
   // Debounced search.
   useEffect(() => {
     if (view !== "search" && q === "") return;
+    // Already showing results for exactly this query (e.g. a collection just set searchQuery) — don't
+    // fire an identical second search.
+    if (view === "search" && q.trim() === useDriveV2.getState().searchQuery) return;
     const t = window.setTimeout(() => {
       if (q.trim()) useDriveV2.getState().runSearch(q.trim());
       else if (view === "search") useDriveV2.getState().clearSearch();
@@ -929,6 +932,7 @@ function DriveContentArea({
   const scrollRef = useRef<HTMLDivElement>(null);
   const canDrop = view === "myDrive";
   const marquee = useMarqueeSelect(scrollRef);
+  const filterTag = useDriveV2((s) => s.filterTag);
 
   // ── Keyboard focus cursor. Anchored to a node ID (not an index) so it survives live-sync reorders
   // and inserts. Focus lives on the focused gridcell (roving tabindex). Arrows move it, Enter opens,
@@ -1027,7 +1031,17 @@ function DriveContentArea({
       ) : listError ? (
         <DriveErrorState message={listError} onRetry={() => void useDriveV2.getState().load(true)} />
       ) : !visible.length ? (
-        <DriveEmptyState view={view} onUpload={onUpload} />
+        filterTag ? (
+          <div className="grid min-h-[360px] place-items-center p-6 text-center">
+            <div>
+              <div className="font-display text-[15px] font-semibold">No loaded items tagged <span className="text-primary">#{filterTag}</span></div>
+              <p className="mx-auto mt-1.5 max-w-xs text-[13px] text-muted">Tag filtering applies to items already loaded. Load more, or clear the filter.</p>
+              <Button variant="ghost" size="sm" className="mx-auto mt-4" onClick={() => useDriveV2.getState().setFilterTag(null)}>Clear tag filter</Button>
+            </div>
+          </div>
+        ) : (
+          <DriveEmptyState view={view} onUpload={onUpload} />
+        )
       ) : layout === "list" ? (
         <VirtualList scrollRef={scrollRef} visible={visible} rowProps={rowProps} focusIdx={focusIdx} focusNonce={focusNonce} />
       ) : (

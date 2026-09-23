@@ -68,12 +68,14 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
         list.push({ id: "sel-restore", label: `Restore${suffix || " item"}`, icon: RotateCcw, keywords: "selection", run: () => void s().restore(ids) });
         list.push({ id: "sel-purge", label: `Delete${suffix || " item"} forever`, icon: Trash2, keywords: "selection remove", run: () => s().openDialog({ kind: "delete", ids, permanent: true }) });
       } else {
-        list.push({ id: "sel-star", label: `Star${suffix || " item"}`, icon: Star, keywords: "selection favorite", run: () => void s().toggleStarMany(ids) });
+        const solo = n === 1 ? s().nodes.find((x) => x.id === ids[0]) : undefined;
+        // toggleStarMany toggles each item, so for a single already-starred file the action is "Unstar".
+        const starLabel = solo?.starred ? "Unstar item" : `Star${suffix || " item"}`;
+        list.push({ id: "sel-star", label: starLabel, icon: Star, keywords: "selection favorite", run: () => void s().toggleStarMany(ids) });
         list.push({ id: "sel-move", label: `Move${suffix || " item"} to…`, icon: CornerUpRight, keywords: "selection", run: () => s().openDialog({ kind: "move", ids }) });
         list.push({ id: "sel-trash", label: `Trash${suffix || " item"}`, icon: Trash2, keywords: "selection delete", run: () => s().openDialog({ kind: "delete", ids, permanent: false }) });
         if (n === 1) {
-          const node = s().nodes.find((x) => x.id === ids[0]);
-          if (node && node.capabilities?.canShare !== false) list.push({ id: "sel-share", label: "Share…", icon: Share2, keywords: "selection permission", run: () => s().openDialog({ kind: "share", node }) });
+          if (solo && solo.capabilities?.canShare !== false) list.push({ id: "sel-share", label: "Share…", icon: Share2, keywords: "selection permission", run: () => s().openDialog({ kind: "share", node: solo }) });
           list.push({ id: "sel-tags", label: "Edit tags…", icon: Info, keywords: "selection label", run: () => void s().loadDetails(ids[0]!) });
         }
       }

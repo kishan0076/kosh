@@ -4,7 +4,7 @@ import { API_BASE, ApiError } from "./api";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
 import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
-import { parseDriveSearch, dedupeDriveActivity, serializeTags, TAG_PROP_KEY } from "@kosh/shared";
+import { parseDriveSearch, dedupeDriveActivity, parseTags, normalizeTag, serializeTags, TAG_PROP_KEY } from "@kosh/shared";
 
 /** Push a toast without a React hook (store actions run outside components). */
 function pushToast(t: Omit<Toast, "id">): void {
@@ -252,11 +252,15 @@ function loadCollections(): SmartCollection[] {
   try {
     const raw = localStorage.getItem(COLLECTIONS_KEY);
     if (raw) return JSON.parse(raw) as SmartCollection[];
-    // One-time migration from the old unnamed saved-search list ({ query }[]).
+    // One-time migration from the old unnamed saved-search list ({ query }[]) — persist it and drop the
+    // legacy key so this doesn't re-run (and regenerate ids) on every load.
     const legacy = localStorage.getItem(LEGACY_SAVED_KEY);
     if (legacy) {
       const arr = JSON.parse(legacy) as { query: string }[];
-      return arr.filter((x) => x?.query).map((x, i) => ({ id: `c${Date.now()}_${i}`, name: x.query, query: x.query }));
+      const migrated = arr.filter((x) => x?.query).map((x, i) => ({ id: `c${Date.now()}_${i}`, name: x.query, query: x.query }));
+      saveCollections(migrated);
+      try { localStorage.removeItem(LEGACY_SAVED_KEY); } catch { /* ignore */ }
+      return migrated;
     }
   } catch {
     /* private mode / bad JSON — start empty */
@@ -321,6 +325,10 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const driveId = spaceId ?? undefined;
     const key = cacheKey(view, folderId);
     const myseq = ++loadSeq;
+
+    // Navigating to a DIFFERENT context (view/space/folder) drops the client-side tag filter, so a
+    // stale filter can't make a populated view look empty. A same-context refresh keeps it.
+    if (nodesKey !== key && get().filterTag) set({ filterTag: null });
 
     // Cache only My Drive folders (time-sensitive views are always refetched).
     if (!force && view === "myDrive") {
@@ -1002,8 +1010,11 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
     selectAll: (orderedIds) => set({ selection: new Set(orderedIds) }),
     selectAllLoaded: () => {
-      const { nodes, prefs } = get();
-      const matching = prefs.filterKind ? nodes.filter((n) => filterBucket(n) === prefs.filterKind) : nodes;
+      const { nodes, prefs, filterTag } = get();
+      // Must mirror the on-screen `visible` set (kind AND tag filters) — otherwise "Select all" grabs
+      // items hidden by the active filter and a following bulk trash/move/delete would hit them.
+      let matching = prefs.filterKind ? nodes.filter((n) => filterBucket(n) === prefs.filterKind) : nodes;
+      if (filterTag) matching = matching.filter((n) => parseTags(n).includes(filterTag));
       set({ selection: new Set(matching.map((n) => n.id)) });
     },
     marqueeSelect: (ids) => set({ selection: new Set(ids) }),
@@ -1220,6 +1231,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const accountId = get().accountId;
       if (!accountId) return;
       const csv = serializeTags(tags); // normalized, deduped, size-bounded
+      // Warn if the size budget dropped a tag, so an "Add" near the cap isn't a silent no-op.
+      const requested = new Set(tags.map(normalizeTag).filter(Boolean)).size;
+      if ((csv ? csv.split(",").length : 0) < requested) pushToast({ message: "Tag limit reached — some tags weren't saved.", tone: "warn" });
       // Merge into the file's existing appProperties for the optimistic view (keep other app keys), and
       // send only the tag key to the server (null clears it — Drive merges the map).
       const withTags = (n: DriveNode): DriveNode => {

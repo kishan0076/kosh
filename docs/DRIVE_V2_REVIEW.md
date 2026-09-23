@@ -307,8 +307,14 @@ Benchmarked against modern tools; effort tags S/M/L. All feasible with the per-u
 
 ## 6. Suggested execution order
 
-**Implementation status:** Phases A, B, C, D — ✅ **shipped** (each: implement → verify typecheck/test/build →
-adversarial review → fix confirmed findings → commit). Phases E–F not started.
+**Implementation status:** Phases A, B, C, D — ✅ **shipped**. Phase E — 🟡 **partial** (each shipped item:
+implement → verify typecheck/test/build → code-review → fix findings → commit). Phase F not started.
+
+**Phase E shipped so far:** tags/labels (Drive `appProperties`), smart collections (named saved searches),
+keyboard palette-on-selection + `?` cheat sheet + vim `j/k`. **Deferred within Phase E** (all share the
+OAuth-download server infra, §2.10): bulk/ZIP download, native-Doc export (`files.export`), and the deep
+Quick Look upgrade. Also noted: cross-Drive server-side tag search (needs per-key `appProperties` storage;
+current tag filtering scopes to the loaded view).
 
 - **Phase A — Safety & correctness (P0):** ✅ **shipped.** Empty-Trash confirm, bulk-delete type-to-confirm,
   sort/filter/select-all page-scope, Shared-Drive upload fix, silent-sync-death cluster, error boundary.
