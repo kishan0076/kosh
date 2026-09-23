@@ -230,6 +230,7 @@ const uploadControls = new Map<string, ResumableControl>();
 
 /* Live-sync controller (module-level so it survives re-renders; driven by the page's mount effect). */
 const SYNC_INTERVAL = 12_000; // poll cadence when the tab is visible
+const HIDDEN_SYNC_INTERVAL = 45_000; // slower poll while hidden — still catches background changes to badge/notify
 const ACTIVITY_CAP = 200;
 let syncActive = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
@@ -616,8 +617,10 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       return;
     }
 
-    let nextDelay = SYNC_INTERVAL;
-    if (syncActive && accountId && scopeOk && visible) {
+    // Keep polling while hidden (at a slower cadence) so background changes are still detected on
+    // poll-only sync — without it the tab badge / desktop notification would only ever fire over SSE push.
+    let nextDelay = visible ? SYNC_INTERVAL : HIDDEN_SYNC_INTERVAL;
+    if (syncActive && accountId && scopeOk) {
       syncInFlight = true;
       try {
         if (!syncToken) {
@@ -833,7 +836,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     selectSpace: async (id) => {
       syncToken = null; syncGen++; // switching spaces re-anchors the change feed; invalidate in-flight poll
       const space = id ? get().spaces.find((d) => d.id === id) ?? null : null;
-      set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false, unread: 0 });
+      set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false, activity: [], unread: 0 });
       if (syncActive) scheduleSync(0); // re-arm the poller now (don't wait out a 60s idle reconcile)
       await load(true);
     },

@@ -5,11 +5,12 @@ import { useUi } from "@/data/ui";
 import { Button } from "@/components/ui";
 import { useDriveV2, type ActivityEntry } from "@/data/driveV2";
 
-const ACTION_META: Record<ActivityEntry["action"], { label: string; icon: typeof Pencil; tone: string }> = {
-  created: { label: "Created", icon: FilePlus2, tone: "text-ok" },
-  edited: { label: "Edited", icon: Pencil, tone: "text-primary" },
-  trashed: { label: "Trashed", icon: Trash2, tone: "text-warn" },
-  removed: { label: "Removed", icon: RotateCcw, tone: "text-danger" },
+/** Single source of truth for how each activity action is presented — panel label/icon/tone + notification verb. */
+export const ACTION_META: Record<ActivityEntry["action"], { label: string; verb: string; icon: typeof Pencil; tone: string }> = {
+  created: { label: "Created", verb: "was added", icon: FilePlus2, tone: "text-ok" },
+  edited: { label: "Edited", verb: "was edited", icon: Pencil, tone: "text-primary" },
+  trashed: { label: "Trashed", verb: "was trashed", icon: Trash2, tone: "text-warn" },
+  removed: { label: "Removed", verb: "was removed", icon: RotateCcw, tone: "text-danger" },
 };
 
 /** Escape one CSV cell: neutralize spreadsheet formula injection, then RFC-4180-quote. */

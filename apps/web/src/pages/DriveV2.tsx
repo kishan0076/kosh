@@ -40,7 +40,7 @@ import { Button, Progress, Spinner } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, useBodyScrollLock } from "@/components/overlays";
 import { driveApi } from "@/data/driveApi";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
-import { useDriveV2, type ActivityEntry, type DriveView, type SortKey } from "@/data/driveV2";
+import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, sortNodes, type ItemHandlers } from "@/components/drive-v2/items";
 import { PageHeader } from "@/components/drive-v2/PageHeader";
@@ -50,7 +50,7 @@ import { CreateFolderModal, DeleteConfirmModal, EmptyTrashModal, MoveToModal } f
 import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
-import { ActivityPanel } from "@/components/drive-v2/ActivityPanel";
+import { ActivityPanel, ACTION_META } from "@/components/drive-v2/ActivityPanel";
 import { RevisionsModal } from "@/components/drive-v2/RevisionsModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
@@ -60,14 +60,6 @@ import { FadeSwap } from "@/components/motion";
 import { AnimatePresence, motion } from "motion/react";
 import { DUR, EASE } from "@/lib/motion";
 import { ago } from "@/lib/time";
-
-/** Past-tense phrasing for a desktop notification body, keyed by activity action. */
-const ACTIVITY_VERB: Record<ActivityEntry["action"], string> = {
-  created: "was added",
-  edited: "was edited",
-  trashed: "was trashed",
-  removed: "was removed",
-};
 
 export function DriveV2() {
   const backend = useData((s) => s.backend);
@@ -169,6 +161,7 @@ function Shell() {
   // Live two-way sync: poll changes.list while the module is open; resume promptly on refocus.
   useEffect(() => {
     store.getState().startSync();
+    store.getState().clearUnread(); // entering Drive in the foreground clears any stale background badge
     // Refocus reconciles without rebuilding a healthy push stream (see resumeSync) — no token re-mint /
     // new Drive watch on every tab switch — and clears the "changed while you were away" badge.
     const onVis = () => { if (document.visibilityState === "visible") { store.getState().resumeSync(); store.getState().clearUnread(); } };
@@ -178,24 +171,36 @@ function Shell() {
 
   // Tab-title badge + optional desktop notification for changes that arrive while the tab is hidden.
   const unread = useDriveV2((s) => s.unread);
-  const baseTitleRef = useRef<string>(typeof document !== "undefined" ? document.title : "Kosh");
+  const baseTitleRef = useRef<string>("");
   const prevUnreadRef = useRef(0);
+  // Capture the pristine page title once, stripped of any stale "(n) " badge, before the badge effect runs.
+  useEffect(() => { baseTitleRef.current = (document.title || "Kosh").replace(/^\(\d+\)\s*/, ""); }, []);
   useEffect(() => {
-    const base = baseTitleRef.current || "Kosh";
+    const base = baseTitleRef.current || (document.title || "Kosh").replace(/^\(\d+\)\s*/, "");
     document.title = unread > 0 ? `(${unread}) ${base}` : base;
-    // Fire a desktop notification only when the count GROWS (new arrivals), the user opted in, permission
-    // is still granted, and the tab is actually hidden — coalesced under one tag so it replaces, not stacks.
     const prev = prevUnreadRef.current;
     prevUnreadRef.current = unread;
+    // Only act when the count GROWS (new arrivals), and only if the user opted in.
     if (unread > prev) {
       const s = store.getState();
-      if (s.notifyDesktop && typeof Notification !== "undefined" && Notification.permission === "granted" && document.hidden) {
-        const delta = unread - prev;
-        const latest = s.activity[0];
-        const body = latest
-          ? `${latest.name} ${ACTIVITY_VERB[latest.action]}${delta > 1 ? ` · +${delta - 1} more` : ""}`
-          : `${delta} change${delta === 1 ? "" : "s"} in your Drive`;
-        try { new Notification("Kosh · Drive", { body, tag: "kosh-drive-changes" }); } catch { /* notifications unavailable */ }
+      if (s.notifyDesktop && typeof Notification !== "undefined") {
+        if (Notification.permission === "granted") {
+          if (document.hidden) {
+            const delta = unread - prev;
+            const latest = s.activity[0];
+            const body = latest
+              ? `${latest.name} ${ACTION_META[latest.action].verb}${delta > 1 ? ` · +${delta - 1} more` : ""}`
+              : `${delta} change${delta === 1 ? "" : "s"} in your Drive`;
+            try {
+              // One coalescing tag so repeated pings replace rather than stack; click returns to this tab.
+              const n = new Notification("Kosh · Drive", { body, tag: "kosh-drive-changes" });
+              n.onclick = () => { try { window.focus(); } catch { /* ignore */ } n.close(); };
+            } catch { /* notifications unavailable */ }
+          }
+        } else {
+          // Permission was revoked in browser settings after opt-in — reconcile the toggle so it isn't lying.
+          void s.setNotifyDesktop(false);
+        }
       }
     }
     return () => { document.title = base; };
