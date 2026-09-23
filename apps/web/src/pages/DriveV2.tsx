@@ -636,7 +636,7 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
 
 /* ── content area (grid/list + states + drop) ── */
 function DriveContentArea({
-  view, visible, layout, selection, busyIds, renamingId, handlers, listLoading, listError, onUpload, onDropFiles,
+  view, visible, layout, selection, busyIds, renamingId, handlers, orderedIds, listLoading, listError, onUpload, onDropFiles,
 }: {
   view: DriveView;
   visible: DriveNode[];
@@ -654,8 +654,54 @@ function DriveContentArea({
   const [drag, setDrag] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const canDrop = view === "myDrive";
-  const rowProps = (node: DriveNode): ItemRowProps => ({ node, selected: selection.has(node.id), busy: busyIds.has(node.id), renaming: renamingId === node.id, ...handlers });
   const marquee = useMarqueeSelect(scrollRef);
+
+  // ── Roving keyboard focus: one item is tabbable at a time; arrows move a focus cursor, Enter opens,
+  // Space toggles selection, Shift+Arrow extends, Ctrl/Cmd+Arrow moves focus without selecting.
+  const [focusIdx, setFocusIdx] = useState(0);
+  const [focusNonce, setFocusNonce] = useState(0); // bump → the virtualizer scrolls + DOM-focuses focusIdx
+  const [cols, setCols] = useState(1); // 1 for list; the grid reports its real column count
+  useEffect(() => { if (layout === "list") setCols(1); }, [layout]);
+  // Keep the cursor in range as the list changes (navigation, filter, live-sync).
+  useEffect(() => { setFocusIdx((i) => Math.min(Math.max(0, i), Math.max(0, visible.length - 1))); }, [visible.length]);
+
+  const moveFocus = (index: number, e: ReactKeyboardEvent) => {
+    const next = Math.max(0, Math.min(index, visible.length - 1));
+    e.preventDefault();
+    setFocusIdx(next);
+    setFocusNonce((n) => n + 1);
+    const id = visible[next]?.id;
+    if (!id || e.ctrlKey || e.metaKey) return; // Ctrl/Cmd = move the cursor only, keep the selection
+    // Plain arrow selects the focused item (and sets the range anchor); Shift extends the range.
+    useDriveV2.getState().toggleSelect(id, { shift: e.shiftKey }, orderedIds);
+  };
+
+  const onGridKeyDown = (e: ReactKeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return; // inline rename
+    if (!visible.length) return;
+    switch (e.key) {
+      case "ArrowRight": moveFocus(focusIdx + 1, e); break;
+      case "ArrowLeft": moveFocus(focusIdx - 1, e); break;
+      case "ArrowDown": moveFocus(focusIdx + cols, e); break;
+      case "ArrowUp": moveFocus(focusIdx - cols, e); break;
+      case "Home": moveFocus(0, e); break;
+      case "End": moveFocus(visible.length - 1, e); break;
+      case "Enter": { const n = visible[focusIdx]; if (n) { e.preventDefault(); handlers.onOpen(n); } break; }
+      case " ": case "Spacebar": { const n = visible[focusIdx]; if (n) { e.preventDefault(); useDriveV2.getState().toggleSelect(n.id, { meta: true }, orderedIds); } break; }
+      default: break;
+    }
+  };
+
+  const rowProps = (node: DriveNode, index: number): ItemRowProps => ({
+    node,
+    index,
+    selected: selection.has(node.id),
+    busy: busyIds.has(node.id),
+    renaming: renamingId === node.id,
+    focusable: index === focusIdx,
+    onFocusItem: setFocusIdx,
+    ...handlers,
+  });
 
   // The drop target wraps ALL states so external-file drag-and-drop upload works even in an empty
   // folder. It reacts ONLY to external files — internal node drags are handled by folder/breadcrumb
@@ -664,6 +710,7 @@ function DriveContentArea({
     <div
       ref={scrollRef}
       onMouseDown={marquee.onMouseDown}
+      onKeyDown={onGridKeyDown}
       onDragOver={canDrop ? (e) => { if (hasExternalFiles(e) && !hasDriveDrag(e)) { e.preventDefault(); setDrag(true); } } : undefined}
       onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
       onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
@@ -678,28 +725,58 @@ function DriveContentArea({
       ) : !visible.length ? (
         <DriveEmptyState view={view} onUpload={onUpload} />
       ) : layout === "list" ? (
-        <VirtualList scrollRef={scrollRef} visible={visible} rowProps={rowProps} />
+        <VirtualList scrollRef={scrollRef} visible={visible} rowProps={rowProps} focusIdx={focusIdx} focusNonce={focusNonce} />
       ) : (
-        <VirtualGrid scrollRef={scrollRef} visible={visible} rowProps={rowProps} />
+        <VirtualGrid scrollRef={scrollRef} visible={visible} rowProps={rowProps} focusIdx={focusIdx} focusNonce={focusNonce} onCols={setCols} />
       )}
     </div>
   );
 }
 
-type ItemRowProps = { node: DriveNode; selected: boolean; busy: boolean; renaming: boolean } & ItemHandlers;
+type ItemRowProps = { node: DriveNode; index: number; selected: boolean; busy: boolean; renaming: boolean; focusable: boolean; onFocusItem: (index: number) => void } & ItemHandlers;
+
+type VirtualProps = {
+  scrollRef: RefObject<HTMLDivElement | null>;
+  visible: DriveNode[];
+  rowProps: (n: DriveNode, index: number) => ItemRowProps;
+  focusIdx: number;
+  focusNonce: number;
+};
+
+/** Move real DOM focus onto the focused item (roving-tabindex cursor). Uses a double-rAF so focus still
+ *  lands when the target row is virtualized in a frame later, after scrollToIndex re-renders the range. */
+function useFocusScroll(scrollRef: RefObject<HTMLDivElement | null>, focusIdx: number, focusNonce: number, rowIndex: number, deps: unknown[] = []) {
+  useEffect(() => {
+    if (!focusNonce) return; // don't steal focus on first mount, only on an explicit keyboard move
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf2 = 0;
+    const focusTarget = () => (el.querySelector(`[data-idx="${focusIdx}"]`) as HTMLElement | null)?.focus();
+    const raf1 = requestAnimationFrame(() => {
+      const target = el.querySelector(`[data-idx="${focusIdx}"]`) as HTMLElement | null;
+      if (target) target.focus();
+      else raf2 = requestAnimationFrame(focusTarget); // row mounted only after the virtualizer re-rendered
+    });
+    return () => { cancelAnimationFrame(raf1); if (raf2) cancelAnimationFrame(raf2); };
+    // rowIndex/deps are threaded so the effect re-runs across layout changes; focusNonce is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusNonce, rowIndex, ...deps]);
+}
 
 /** Virtualized list — only the visible rows are mounted, so 10k-item folders stay smooth. */
-function VirtualList({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HTMLDivElement | null>; visible: DriveNode[]; rowProps: (n: DriveNode) => ItemRowProps }) {
+function VirtualList({ scrollRef, visible, rowProps, focusIdx, focusNonce }: VirtualProps) {
   const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => 48, overscan: 12 });
+  useEffect(() => { if (focusNonce) virt.scrollToIndex(focusIdx, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
+  useFocusScroll(scrollRef, focusIdx, focusNonce, focusIdx);
   return (
     <div>
       <ListHeader />
-      <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+      <div role="listbox" aria-multiselectable="true" aria-label="Files and folders" style={{ height: virt.getTotalSize(), position: "relative" }}>
         {virt.getVirtualItems().map((vi) => {
           const n = visible[vi.index]!;
           return (
-            <div key={n.id} data-index={vi.index} ref={virt.measureElement} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}>
-              <FileRow {...rowProps(n)} />
+            <div key={n.id} role="presentation" data-index={vi.index} ref={virt.measureElement} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}>
+              <FileRow {...rowProps(n, vi.index)} />
             </div>
           );
         })}
@@ -709,33 +786,37 @@ function VirtualList({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HT
 }
 
 /** Virtualized responsive grid — columns from container width, rows virtualized. */
-function VirtualGrid({ scrollRef, visible, rowProps }: { scrollRef: RefObject<HTMLDivElement | null>; visible: DriveNode[]; rowProps: (n: DriveNode) => ItemRowProps }) {
+function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCols }: VirtualProps & { onCols: (n: number) => void }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
-    const compute = () => { const w = el.clientWidth; const min = 176, gap = 16; setCols(Math.max(1, Math.floor((w + gap) / (min + gap)))); };
+    const compute = () => { const w = el.clientWidth; const min = 176, gap = 16; const c = Math.max(1, Math.floor((w + gap) / (min + gap))); setCols(c); onCols(c); };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [onCols]);
   const rows = Math.ceil(visible.length / cols);
   const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => 208, overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
+  const focusRow = Math.floor(focusIdx / cols);
+  useEffect(() => { if (focusNonce) virt.scrollToIndex(focusRow, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
+  useFocusScroll(scrollRef, focusIdx, focusNonce, focusRow, [cols]);
   return (
     <div ref={gridRef} className="py-2">
-      <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+      <div role="listbox" aria-multiselectable="true" aria-label="Files and folders" style={{ height: virt.getTotalSize(), position: "relative" }}>
         {virt.getVirtualItems().map((vr) => {
           const items = visible.slice(vr.index * cols, vr.index * cols + cols);
           return (
             <div
               key={vr.key}
+              role="presentation"
               data-index={vr.index}
               ref={virt.measureElement}
               style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px", paddingBottom: "16px" }}
             >
-              {items.map((n) => <FileCard key={n.id} {...rowProps(n)} />)}
+              {items.map((n, i) => <FileCard key={n.id} {...rowProps(n, vr.index * cols + i)} />)}
             </div>
           );
         })}

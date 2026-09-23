@@ -120,9 +120,15 @@ export interface ItemHandlers {
 }
 interface ItemProps extends ItemHandlers {
   node: DriveNode;
+  /** Position within the visible list — powers roving-tabindex keyboard focus. */
+  index: number;
   selected: boolean;
   busy: boolean;
   renaming: boolean;
+  /** True for the single roving-focus target (tabIndex 0); all others are tabIndex -1. */
+  focusable: boolean;
+  /** Report focus back so clicking/tabbing an item moves the roving cursor to it. */
+  onFocusItem: (index: number) => void;
 }
 
 function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; onSubmit: (name: string) => void; onCancel: () => void; center?: boolean }) {
@@ -183,20 +189,24 @@ function SelectDisc({ selected, onToggle, className, reveal = "opacity" }: { sel
 }
 
 /* ── list row ── */
-export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+export function FileRow({ node, index, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   return (
     <div
-      tabIndex={-1}
+      role="option"
+      aria-selected={selected}
+      tabIndex={focusable ? 0 : -1}
       data-node-id={node.id}
+      data-idx={index}
       draggable={!renaming}
+      onFocus={() => onFocusItem(index)}
       onDragStart={(e) => onDragStart(node, e)}
       {...dropProps}
       onClick={(e) => onClick(node, e)}
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group grid cursor-pointer grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-1.5 text-[13px] transition-colors md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
+        "group grid cursor-pointer grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-1.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
         over ? "bg-primary-soft ring-1 ring-inset ring-primary" : selected ? "bg-primary-soft shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-surface-2",
       )}
     >
@@ -239,21 +249,25 @@ export function FileRow({ node, selected, busy, renaming, onOpen, onClick, onCon
 }
 
 /* ── grid card ── */
-export function FileCard({ node, selected, busy, renaming, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+export function FileCard({ node, index, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   const kind = kindOf(node);
   return (
     <div
-      tabIndex={-1}
+      role="option"
+      aria-selected={selected}
+      tabIndex={focusable ? 0 : -1}
       data-node-id={node.id}
+      data-idx={index}
       draggable={!renaming}
+      onFocus={() => onFocusItem(index)}
       onDragStart={(e) => onDragStart(node, e)}
       {...dropProps}
       onClick={(e) => onClick(node, e)}
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow,border-color] duration-200 will-change-transform",
+        "group relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow,border-color] duration-200 will-change-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         over
           ? "border-primary bg-primary-soft ring-2 ring-primary"
           : selected
