@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Check, ChevronLeft, ChevronRight, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, RotateCw, Share2, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
-import { formatBytes, normalizeTag, parseTags } from "@kosh/shared";
+import { formatBytes, normalizeTag, parseTags, isNativeGoogleDoc } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { NodeIcon, tagChipClass } from "./items";
@@ -223,7 +223,9 @@ const TEXT_PREVIEW_CAP = 2_000_000; // don't stream huge files into memory for a
 
 /** Which inline Quick Look renderer fits a file, if any (native rendering beats a Drive iframe). */
 function textPreviewKind(node: DriveNode): "markdown" | "csv" | "code" | null {
-  if (node.isFolder) return null;
+  // Native Google docs have no binary bytes (alt=media 403s) — they must use the Drive iframe embed,
+  // even when their NAME ends in .csv/.md/etc.
+  if (node.isFolder || isNativeGoogleDoc(node.mimeType)) return null;
   if (node.size != null && node.size > TEXT_PREVIEW_CAP) return null;
   const mime = node.mimeType || "";
   const ext = (node.name.split(".").pop() || "").toLowerCase();
@@ -254,6 +256,13 @@ function parseDelimited(text: string, delimiter: string, maxRows: number): strin
   return rows;
 }
 
+/** A preview-chrome icon button (module-scope so its type is stable across PreviewOverlay re-renders). */
+function ChromeBtn({ onClick, label, disabled, children }: { onClick: () => void; label: string; disabled?: boolean; children: ReactNode }) {
+  return (
+    <button onClick={onClick} disabled={disabled} aria-label={label} className="grid h-8 w-8 place-items-center rounded-md text-white transition-colors hover:bg-white/10 disabled:opacity-30">{children}</button>
+  );
+}
+
 /** Full-screen Quick Look: native rendering for images (zoom/rotate) and text/markdown/code/CSV; a
  *  Drive iframe for PDF/Docs/Sheets/Slides/video; filmstrip prev/next across the visible list. */
 export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; list?: DriveNode[]; onClose: () => void }) {
@@ -270,7 +279,7 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
 
   // Filmstrip position within the (already sorted+filtered) visible list.
   const idx = list.findIndex((n) => n.id === node.id);
-  const go = (delta: number) => { const t = list[idx + delta]; if (t) useDriveV2.getState().setPreview(t); };
+  const go = (delta: number) => { if (idx < 0) return; const t = list[idx + delta]; if (t) useDriveV2.getState().setPreview(t); };
   const hasPrev = idx > 0;
   const hasNext = idx >= 0 && idx < list.length - 1;
 
@@ -295,10 +304,6 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
     return () => document.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose, idx, list]);
-
-  const ChromeBtn = ({ onClick, label, disabled, children }: { onClick: () => void; label: string; disabled?: boolean; children: ReactNode }) => (
-    <button onClick={onClick} disabled={disabled} aria-label={label} className="grid h-8 w-8 place-items-center rounded-md text-white transition-colors hover:bg-white/10 disabled:opacity-30">{children}</button>
-  );
 
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-black/80 backdrop-blur-sm" onClick={onClose}>
@@ -346,7 +351,7 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
             ) : textKind === "csv" ? (
               <table className="w-full border-collapse text-[12.5px]">
                 <tbody>
-                  {parseDelimited(text!, node.name.toLowerCase().endsWith(".tsv") ? "\t" : ",", 200).map((r, ri) => (
+                  {parseDelimited(text!, node.mimeType === "text/tab-separated-values" || node.name.toLowerCase().endsWith(".tsv") ? "\t" : ",", 200).map((r, ri) => (
                     <tr key={ri} className={ri === 0 ? "bg-surface-2 font-semibold" : ""}>
                       {r.map((cell, ci) => <td key={ci} className="border border-border px-2 py-1 align-top">{cell}</td>)}
                     </tr>

@@ -1373,8 +1373,14 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
 
     downloadNode: async (id) => {
-      const node = get().nodes.find((n) => n.id === id) ?? (get().detailsId === id ? get().detailsNode : null);
-      if (!node || node.isFolder) return; // folders download via the ZIP path
+      // Resolve from the loaded list, the open inspector, OR the current preview (an Insights/scan
+      // preview node isn't in `nodes`), so the preview's Download button never silently no-ops.
+      const node =
+        get().nodes.find((n) => n.id === id) ??
+        (get().detailsId === id ? get().detailsNode : null) ??
+        (get().previewNode?.id === id ? get().previewNode : null);
+      if (!node) return;
+      if (node.isFolder) { void get().downloadZip([id]); return; } // folders → ZIP path (which explains folders aren't bundled)
       try {
         const { blob, filename } = await nodeToBlob(node);
         saveBlob(blob, filename);
@@ -1406,21 +1412,29 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const files = nodes.filter((n) => !n.isFolder);
       const skippedFolders = nodes.length - files.length;
       if (!files.length) { toastErr("Select files to download as a ZIP (whole folders aren't bundled yet)."); return; }
-      const ZIP_CAP = 500 * 1024 * 1024; // in-browser memory guard
-      const est = files.reduce((a, f) => a + (f.size ?? 0), 0);
-      if (est > ZIP_CAP) { toastErr("That selection is over the 500 MB ZIP limit — pick fewer files."); return; }
+      // makeZip buffers everything in memory and the Blob copies it again (~2× peak), so cap conservatively.
+      // The reported-size pre-check is only a hint — native docs report no size — so the REAL guard is the
+      // running byte total accumulated during the fetch below, plus a file-count cap.
+      const ZIP_CAP = 400 * 1024 * 1024;
+      const ZIP_MAX_FILES = 500;
+      if (files.length > ZIP_MAX_FILES) { toastErr(`That's over the ${ZIP_MAX_FILES}-file ZIP limit — pick fewer.`); return; }
+      if (files.reduce((a, f) => a + (f.size ?? 0), 0) > ZIP_CAP) { toastErr("That selection is over the 400 MB ZIP limit — pick fewer files."); return; }
 
       const store = useDriveV2;
       store.setState({ bulkOp: { label: "Preparing ZIP", total: files.length, done: 0 } });
       const entries: ZipEntry[] = [];
       const used = new Set<string>();
       let failed = 0;
+      let fetched = 0; // real bytes pulled so far — enforce the cap even when sizes were unknown
+      let overflow = false;
       let i = 0;
       const worker = async () => {
-        while (i < files.length) {
+        while (i < files.length && !overflow) {
           const f = files[i++]!;
           try {
             const { blob, filename } = await nodeToBlob(f);
+            if (fetched + blob.size > ZIP_CAP) { overflow = true; break; }
+            fetched += blob.size;
             entries.push({ name: uniqueName(filename, used), data: new Uint8Array(await blob.arrayBuffer()) });
           } catch {
             failed++;
@@ -1436,9 +1450,10 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       } finally {
         store.setState({ bulkOp: null });
       }
+      if (overflow) toastErr("Hit the 400 MB ZIP limit — not all files were included.");
       if (skippedFolders) pushToast({ message: "Folders were skipped — ZIP bundles files only for now.", tone: "warn" });
       if (failed) toastErr(`${failed} file${failed === 1 ? "" : "s"} couldn't be added to the ZIP.`);
-      else if (entries.length) pushToast({ message: `Downloaded ${entries.length} file${entries.length === 1 ? "" : "s"} as ZIP`, tone: "ok" });
+      else if (entries.length && !overflow) pushToast({ message: `Downloaded ${entries.length} file${entries.length === 1 ? "" : "s"} as ZIP`, tone: "ok" });
     },
 
     fetchFileText: async (node) => {
