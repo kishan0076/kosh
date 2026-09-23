@@ -672,28 +672,52 @@ function DriveContentArea({
   const canDrop = view === "myDrive";
   const marquee = useMarqueeSelect(scrollRef);
 
-  // ── Roving keyboard focus: one item is tabbable at a time; arrows move a focus cursor, Enter opens,
-  // Space toggles selection, Shift+Arrow extends, Ctrl/Cmd+Arrow moves focus without selecting.
-  const [focusIdx, setFocusIdx] = useState(0);
-  const [focusNonce, setFocusNonce] = useState(0); // bump → the virtualizer scrolls + DOM-focuses focusIdx
+  // ── Keyboard focus cursor. Anchored to a node ID (not an index) so it survives live-sync reorders
+  // and inserts. Focus lives on the focused gridcell (roving tabindex). Arrows move it, Enter opens,
+  // Space toggles selection, Shift+Arrow selects a range, Ctrl/Cmd+Arrow moves without selecting.
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const [focusNonce, setFocusNonce] = useState(0); // bump → scroll + DOM-focus the focused cell
   const [cols, setCols] = useState(1); // 1 for list; the grid reports its real column count
+  const pendingKbFocusRef = useRef(false); // re-land focus after a keyboard-driven folder open
   useEffect(() => { if (layout === "list") setCols(1); }, [layout]);
-  // Keep the cursor in range as the list changes (navigation, filter, live-sync).
-  useEffect(() => { setFocusIdx((i) => Math.min(Math.max(0, i), Math.max(0, visible.length - 1))); }, [visible.length]);
+
+  // Derive the cursor position from the anchored id; falls back to the first item when the id is gone
+  // (navigation) so there is always a valid tab target without index drift.
+  const focusIdx = Math.max(0, visible.findIndex((n) => n.id === focusedId));
+
+  // After a keyboard Enter opens a folder, the old focused cell unmounts and the browser drops focus to
+  // <body> — re-land it on the first cell of the freshly loaded listing so arrow nav keeps working.
+  // Guarded by the ref so mouse navigation and live-sync never steal focus into the grid.
+  useEffect(() => {
+    if (!pendingKbFocusRef.current) return;
+    pendingKbFocusRef.current = false;
+    if (visible.length) { setFocusedId(visible[0]!.id); setFocusNonce((n) => n + 1); }
+  }, [visible]);
 
   const moveFocus = (index: number, e: ReactKeyboardEvent) => {
+    if (!visible.length) return;
     const next = Math.max(0, Math.min(index, visible.length - 1));
     e.preventDefault();
-    setFocusIdx(next);
+    setFocusedId(visible[next]!.id);
     setFocusNonce((n) => n + 1);
-    const id = visible[next]?.id;
-    if (!id || e.ctrlKey || e.metaKey) return; // Ctrl/Cmd = move the cursor only, keep the selection
-    // Plain arrow selects the focused item (and sets the range anchor); Shift extends the range.
-    useDriveV2.getState().toggleSelect(id, { shift: e.shiftKey }, orderedIds);
+    if (e.ctrlKey || e.metaKey) return; // move the cursor only, keep the selection
+    if (e.shiftKey) {
+      // Range from the shared anchor (store.lastClickedId — set by click, plain arrow and Space) to the
+      // new cursor; marqueeSelect REPLACES the selection, so the range both grows and shrinks. The
+      // anchor is intentionally left unchanged so successive Shift+Arrows extend from the same origin.
+      const anchorId = useDriveV2.getState().lastClickedId;
+      const a = anchorId ? orderedIds.indexOf(anchorId) : -1;
+      const from = a < 0 ? next : a;
+      useDriveV2.getState().marqueeSelect(orderedIds.slice(Math.min(from, next), Math.max(from, next) + 1));
+    } else {
+      useDriveV2.getState().toggleSelect(visible[next]!.id, {}, orderedIds); // single-select; sets the anchor
+    }
   };
 
   const onGridKeyDown = (e: ReactKeyboardEvent) => {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return; // inline rename
+    const t = e.target as HTMLElement;
+    if (t.closest("input, textarea")) return; // inline rename input owns its keys
+    if (t.getAttribute("role") !== "gridcell") return; // act only from the focused cell, never its inner buttons
     if (!visible.length) return;
     switch (e.key) {
       case "ArrowRight": moveFocus(focusIdx + 1, e); break;
@@ -702,20 +726,21 @@ function DriveContentArea({
       case "ArrowUp": moveFocus(focusIdx - cols, e); break;
       case "Home": moveFocus(0, e); break;
       case "End": moveFocus(visible.length - 1, e); break;
-      case "Enter": { const n = visible[focusIdx]; if (n) { e.preventDefault(); handlers.onOpen(n); } break; }
+      case "Enter": { const n = visible[focusIdx]; if (n) { e.preventDefault(); if (n.isFolder) pendingKbFocusRef.current = true; handlers.onOpen(n); } break; }
       case " ": case "Spacebar": { const n = visible[focusIdx]; if (n) { e.preventDefault(); useDriveV2.getState().toggleSelect(n.id, { meta: true }, orderedIds); } break; }
       default: break;
     }
   };
 
-  const rowProps = (node: DriveNode, index: number): ItemRowProps => ({
+  const rowProps = (node: DriveNode, index: number, colIndex: number): ItemRowProps => ({
     node,
     index,
+    colIndex,
     selected: selection.has(node.id),
     busy: busyIds.has(node.id),
     renaming: renamingId === node.id,
     focusable: index === focusIdx,
-    onFocusItem: setFocusIdx,
+    onFocusItem: setFocusedId,
     ...handlers,
   });
 
@@ -749,19 +774,20 @@ function DriveContentArea({
   );
 }
 
-type ItemRowProps = { node: DriveNode; index: number; selected: boolean; busy: boolean; renaming: boolean; focusable: boolean; onFocusItem: (index: number) => void } & ItemHandlers;
+type ItemRowProps = { node: DriveNode; index: number; colIndex: number; selected: boolean; busy: boolean; renaming: boolean; focusable: boolean; onFocusItem: (id: string) => void } & ItemHandlers;
 
 type VirtualProps = {
   scrollRef: RefObject<HTMLDivElement | null>;
   visible: DriveNode[];
-  rowProps: (n: DriveNode, index: number) => ItemRowProps;
+  rowProps: (n: DriveNode, index: number, colIndex: number) => ItemRowProps;
   focusIdx: number;
   focusNonce: number;
 };
 
-/** Move real DOM focus onto the focused item (roving-tabindex cursor). Uses a double-rAF so focus still
- *  lands when the target row is virtualized in a frame later, after scrollToIndex re-renders the range. */
-function useFocusScroll(scrollRef: RefObject<HTMLDivElement | null>, focusIdx: number, focusNonce: number, rowIndex: number, deps: unknown[] = []) {
+/** Move real DOM focus onto the focused cell (roving-tabindex cursor). Fires ONLY on an explicit
+ *  keyboard move (focusNonce), never on resize/reflow, so layout changes don't yank focus back into
+ *  the grid. Double-rAF so focus still lands when the target row is virtualized in a frame later. */
+function useFocusScroll(scrollRef: RefObject<HTMLDivElement | null>, focusIdx: number, focusNonce: number) {
   useEffect(() => {
     if (!focusNonce) return; // don't steal focus on first mount, only on an explicit keyboard move
     const el = scrollRef.current;
@@ -774,25 +800,25 @@ function useFocusScroll(scrollRef: RefObject<HTMLDivElement | null>, focusIdx: n
       else raf2 = requestAnimationFrame(focusTarget); // row mounted only after the virtualizer re-rendered
     });
     return () => { cancelAnimationFrame(raf1); if (raf2) cancelAnimationFrame(raf2); };
-    // rowIndex/deps are threaded so the effect re-runs across layout changes; focusNonce is the trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusNonce, rowIndex, ...deps]);
+  }, [focusNonce]);
 }
 
-/** Virtualized list — only the visible rows are mounted, so 10k-item folders stay smooth. */
+/** Virtualized list — only the visible rows are mounted, so 10k-item folders stay smooth. Exposed as a
+ *  single-column ARIA grid (role=grid/row/gridcell) so per-item buttons are valid cell widgets. */
 function VirtualList({ scrollRef, visible, rowProps, focusIdx, focusNonce }: VirtualProps) {
   const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => 48, overscan: 12 });
   useEffect(() => { if (focusNonce) virt.scrollToIndex(focusIdx, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
-  useFocusScroll(scrollRef, focusIdx, focusNonce, focusIdx);
+  useFocusScroll(scrollRef, focusIdx, focusNonce);
   return (
     <div>
       <ListHeader />
-      <div role="listbox" aria-multiselectable="true" aria-label="Files and folders" style={{ height: virt.getTotalSize(), position: "relative" }}>
+      <div role="grid" aria-multiselectable="true" aria-label="Files and folders" aria-rowcount={visible.length} aria-colcount={1} style={{ height: virt.getTotalSize(), position: "relative" }}>
         {virt.getVirtualItems().map((vi) => {
           const n = visible[vi.index]!;
           return (
-            <div key={n.id} role="presentation" data-index={vi.index} ref={virt.measureElement} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}>
-              <FileRow {...rowProps(n, vi.index)} />
+            <div key={n.id} role="row" aria-rowindex={vi.index + 1} data-index={vi.index} ref={virt.measureElement} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}>
+              <FileRow {...rowProps(n, vi.index, 1)} />
             </div>
           );
         })}
@@ -801,7 +827,8 @@ function VirtualList({ scrollRef, visible, rowProps, focusIdx, focusNonce }: Vir
   );
 }
 
-/** Virtualized responsive grid — columns from container width, rows virtualized. */
+/** Virtualized responsive grid — columns from container width, rows virtualized. Exposed as a 2D ARIA
+ *  grid (role=grid/row/gridcell) matching the Left/Right + Up/Down keyboard model. */
 function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCols }: VirtualProps & { onCols: (n: number) => void }) {
   const gridRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
@@ -818,21 +845,22 @@ function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCol
   const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => 208, overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
   const focusRow = Math.floor(focusIdx / cols);
   useEffect(() => { if (focusNonce) virt.scrollToIndex(focusRow, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
-  useFocusScroll(scrollRef, focusIdx, focusNonce, focusRow, [cols]);
+  useFocusScroll(scrollRef, focusIdx, focusNonce);
   return (
     <div ref={gridRef} className="py-2">
-      <div role="listbox" aria-multiselectable="true" aria-label="Files and folders" style={{ height: virt.getTotalSize(), position: "relative" }}>
+      <div role="grid" aria-multiselectable="true" aria-label="Files and folders" aria-rowcount={rows} aria-colcount={cols} style={{ height: virt.getTotalSize(), position: "relative" }}>
         {virt.getVirtualItems().map((vr) => {
           const items = visible.slice(vr.index * cols, vr.index * cols + cols);
           return (
             <div
               key={vr.key}
-              role="presentation"
+              role="row"
+              aria-rowindex={vr.index + 1}
               data-index={vr.index}
               ref={virt.measureElement}
               style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px", paddingBottom: "16px" }}
             >
-              {items.map((n, i) => <FileCard key={n.id} {...rowProps(n, vr.index * cols + i)} />)}
+              {items.map((n, i) => <FileCard key={n.id} {...rowProps(n, vr.index * cols + i, i + 1)} />)}
             </div>
           );
         })}

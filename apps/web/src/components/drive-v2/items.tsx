@@ -120,15 +120,26 @@ export interface ItemHandlers {
 }
 interface ItemProps extends ItemHandlers {
   node: DriveNode;
-  /** Position within the visible list — powers roving-tabindex keyboard focus. */
+  /** Zero-based position within the visible list — powers roving-tabindex keyboard focus. */
   index: number;
+  /** One-based column position within its ARIA row (1 for the list). */
+  colIndex: number;
   selected: boolean;
   busy: boolean;
   renaming: boolean;
   /** True for the single roving-focus target (tabIndex 0); all others are tabIndex -1. */
   focusable: boolean;
   /** Report focus back so clicking/tabbing an item moves the roving cursor to it. */
-  onFocusItem: (index: number) => void;
+  onFocusItem: (id: string) => void;
+}
+
+/** Accessible name for a cell — otherwise a screen reader concatenates every inner control's label. */
+function itemLabel(node: DriveNode): string {
+  const parts: string[] = [node.name, node.isFolder ? "folder" : kindOf(node)];
+  if (!node.isFolder && node.size != null) parts.push(formatBytes(node.size));
+  if (node.starred) parts.push("starred");
+  if (node.modifiedTime) parts.push(`modified ${ago(node.modifiedTime)}`);
+  return parts.join(", ");
 }
 
 function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; onSubmit: (name: string) => void; onCancel: () => void; center?: boolean }) {
@@ -167,7 +178,7 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
  * once the item is selected. `reveal="collapse"` removes it from layout when hidden (inline list rows);
  * the default uses opacity so an absolutely-positioned card overlay fades in.
  */
-function SelectDisc({ selected, onToggle, className, reveal = "opacity" }: { selected: boolean; onToggle: () => void; className?: string; reveal?: "opacity" | "collapse" }) {
+function SelectDisc({ selected, onToggle, className, reveal = "opacity", tabIndex }: { selected: boolean; onToggle: () => void; className?: string; reveal?: "opacity" | "collapse"; tabIndex?: number }) {
   const hidden =
     reveal === "collapse"
       ? "hidden group-hover:grid focus-visible:grid"
@@ -175,6 +186,7 @@ function SelectDisc({ selected, onToggle, className, reveal = "opacity" }: { sel
   return (
     <button
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      tabIndex={tabIndex}
       aria-label={selected ? "Deselect" : "Select"}
       aria-pressed={selected}
       className={cn(
@@ -189,17 +201,20 @@ function SelectDisc({ selected, onToggle, className, reveal = "opacity" }: { sel
 }
 
 /* ── list row ── */
-export function FileRow({ node, index, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+export function FileRow({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
+  const innerTab = focusable ? 0 : -1; // only the roving cell contributes its controls to the tab order
   return (
     <div
-      role="option"
+      role="gridcell"
       aria-selected={selected}
+      aria-label={itemLabel(node)}
+      aria-colindex={colIndex}
       tabIndex={focusable ? 0 : -1}
       data-node-id={node.id}
       data-idx={index}
       draggable={!renaming}
-      onFocus={() => onFocusItem(index)}
+      onFocus={() => onFocusItem(node.id)}
       onDragStart={(e) => onDragStart(node, e)}
       {...dropProps}
       onClick={(e) => onClick(node, e)}
@@ -211,7 +226,7 @@ export function FileRow({ node, index, selected, busy, renaming, focusable, onFo
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} reveal="collapse" className="h-5 w-5" />
+        <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} reveal="collapse" className="h-5 w-5" tabIndex={innerTab} />
         <span className="relative grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface-2">
           <NodeIcon node={node} size={18} thumb />
         </span>
@@ -222,6 +237,7 @@ export function FileRow({ node, index, selected, busy, renaming, focusable, onFo
         )}
         <button
           onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
+          tabIndex={innerTab}
           className={cn("shrink-0 rounded p-0.5 transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
           aria-label={node.starred ? "Unstar" : "Star"}
         >
@@ -237,6 +253,7 @@ export function FileRow({ node, index, selected, busy, renaming, focusable, onFo
         ) : (
           <button
             onClick={(e) => { e.stopPropagation(); onMore(node, e); }}
+            tabIndex={innerTab}
             className="grid h-7 w-7 place-items-center rounded-md text-muted opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover:opacity-100"
             aria-label="More actions"
           >
@@ -249,18 +266,21 @@ export function FileRow({ node, index, selected, busy, renaming, focusable, onFo
 }
 
 /* ── grid card ── */
-export function FileCard({ node, index, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
+export function FileCard({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
   const kind = kindOf(node);
+  const innerTab = focusable ? 0 : -1; // only the roving cell contributes its controls to the tab order
   return (
     <div
-      role="option"
+      role="gridcell"
       aria-selected={selected}
+      aria-label={itemLabel(node)}
+      aria-colindex={colIndex}
       tabIndex={focusable ? 0 : -1}
       data-node-id={node.id}
       data-idx={index}
       draggable={!renaming}
-      onFocus={() => onFocusItem(index)}
+      onFocus={() => onFocusItem(node.id)}
       onDragStart={(e) => onDragStart(node, e)}
       {...dropProps}
       onClick={(e) => onClick(node, e)}
@@ -294,13 +314,14 @@ export function FileCard({ node, index, selected, busy, renaming, focusable, onF
 
         {/* select disc */}
         <div className="absolute left-2 top-2">
-          <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} />
+          <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} tabIndex={innerTab} />
         </div>
 
         {/* star + more (frosted pill) */}
         <div className="absolute right-2 top-2 flex items-center gap-1">
           <button
             onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
+            tabIndex={innerTab}
             className={cn("grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur transition-opacity hover:bg-surface", node.starred ? "opacity-100" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
             aria-label={node.starred ? "Unstar" : "Star"}
           >
@@ -311,6 +332,7 @@ export function FileCard({ node, index, selected, busy, renaming, focusable, onF
           ) : (
             <button
               onClick={(e) => { e.stopPropagation(); onMore(node, e); }}
+              tabIndex={innerTab}
               className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 text-muted opacity-0 backdrop-blur transition-opacity hover:bg-surface hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
               aria-label="More actions"
             >
