@@ -37,7 +37,7 @@ import { formatBytes, parseTags } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
-import { Menu, MenuItem, MenuLabel, MenuSeparator, useBodyScrollLock } from "@/components/overlays";
+import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, useBodyScrollLock } from "@/components/overlays";
 import { driveApi } from "@/data/driveApi";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
@@ -173,6 +173,7 @@ function Shell() {
   const [menu, setMenu] = useState<{ ids: string[]; node: DriveNode; x: number; y: number } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -189,10 +190,17 @@ function Shell() {
   // (the inspector is a separate third column, so it must not vanish when a panel opens).
   const dockInspector = isLg && !!detailsId;
 
-  // Global ⌘K / Ctrl+K opens the command palette.
+  // Global ⌘K / Ctrl+K opens the command palette; "?" opens the shortcuts sheet.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((v) => !v); }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((v) => !v); return; }
+      // "?" (Shift+/) — but never while typing in a field or with a modifier held.
+      if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const t = e.target as HTMLElement | null;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+        e.preventDefault();
+        setShortcutsOpen((v) => !v);
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -428,6 +436,7 @@ function Shell() {
       {hasUploads && <UploadTray />}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onUpload={() => fileInputRef.current?.click()} />
+      <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       {menu && <ContextMenu x={menu.x} y={menu.y} actions={menuActions} onClose={() => setMenu(null)} />}
       {dialog?.kind === "newFolder" && <CreateFolderModal parentId={dialog.parentId} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "delete" && <DeleteConfirmModal ids={dialog.ids} permanent={dialog.permanent} onClose={() => store.getState().closeDialog()} />}
@@ -724,6 +733,41 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
   );
 }
 
+/* ── keyboard shortcuts cheat sheet (opened with "?") ── */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || "");
+const MOD = IS_MAC ? "⌘" : "Ctrl";
+const SHORTCUTS: { keys: string; label: string }[] = [
+  { keys: `${MOD} K`, label: "Command palette (search + actions on the selection)" },
+  { keys: `${MOD} A`, label: "Select everything in the view" },
+  { keys: "↑ ↓ ← → / h j k l", label: "Move the focus cursor" },
+  { keys: "Enter", label: "Open the focused folder or preview the file" },
+  { keys: "Space", label: "Toggle selection of the focused item" },
+  { keys: "F2", label: "Rename the selected item" },
+  { keys: "Del / ⌫", label: "Move selection to trash (delete forever in Trash)" },
+  { keys: "Esc", label: "Clear the selection / close the inspector" },
+  { keys: "?", label: "Show this shortcuts sheet" },
+];
+function ShortcutsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Modal open={open} onClose={onClose} className="max-w-md">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <h2 className="font-display text-[15px] font-semibold">Keyboard shortcuts</h2>
+        <button onClick={onClose} aria-label="Close" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2"><X size={16} /></button>
+      </div>
+      <div className="max-h-[70vh] overflow-y-auto p-4">
+        <dl className="flex flex-col gap-2">
+          {SHORTCUTS.map((s) => (
+            <div key={s.label} className="flex items-center justify-between gap-4">
+              <dt className="text-[13px] text-muted">{s.label}</dt>
+              <dd className="shrink-0"><kbd className="rounded-[var(--radius-chip)] border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[11px] text-foreground">{s.keys}</kbd></dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+    </Modal>
+  );
+}
+
 /* ── tag filter (client-side over the loaded view, like the kind filter) ── */
 function TagFilter() {
   const nodes = useDriveV2((s) => s.nodes);
@@ -938,10 +982,10 @@ function DriveContentArea({
     if (t.getAttribute("role") !== "gridcell") return; // act only from the focused cell, never its inner buttons
     if (!visible.length) return;
     switch (e.key) {
-      case "ArrowRight": moveFocus(focusIdx + 1, e); break;
-      case "ArrowLeft": moveFocus(focusIdx - 1, e); break;
-      case "ArrowDown": moveFocus(focusIdx + cols, e); break;
-      case "ArrowUp": moveFocus(focusIdx - cols, e); break;
+      case "ArrowRight": case "l": moveFocus(focusIdx + 1, e); break;
+      case "ArrowLeft": case "h": moveFocus(focusIdx - 1, e); break;
+      case "ArrowDown": case "j": moveFocus(focusIdx + cols, e); break; // vim-style row nav
+      case "ArrowUp": case "k": moveFocus(focusIdx - cols, e); break;
       case "Home": moveFocus(0, e); break;
       case "End": moveFocus(visible.length - 1, e); break;
       case "Enter": { const n = visible[focusIdx]; if (n) { e.preventDefault(); if (n.isFolder) pendingKbFocusRef.current = true; handlers.onOpen(n); } break; }

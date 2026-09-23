@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Clock, CornerDownLeft, FolderPlus, HardDrive, LayoutGrid, List as ListIcon, Search, Sparkles, Star, Trash2, Upload } from "lucide-react";
+import { Clock, CornerDownLeft, CornerUpRight, FolderPlus, HardDrive, Info, LayoutGrid, List as ListIcon, RotateCcw, Search, Share2, Sparkles, Star, Trash2, Upload } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/ui";
 import { driveV2Api, type DriveNode } from "@/data/driveV2Api";
@@ -19,6 +19,8 @@ interface Command {
 /** ⌘K command palette: jump between views, run actions, and search-and-open any file. */
 export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onClose: () => void; onUpload: () => void }) {
   const accountId = useDriveV2((s) => s.accountId);
+  const selection = useDriveV2((s) => s.selection);
+  const view = useDriveV2((s) => s.view);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<DriveNode[]>([]);
   const [searching, setSearching] = useState(false);
@@ -56,7 +58,27 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
 
   const s = useDriveV2.getState;
   const commands = useMemo<Command[]>(() => {
-    const list: Command[] = [
+    const list: Command[] = [];
+    // Selection-scoped actions come FIRST so ⌘K acts on what's selected (Move/Share/Trash/Star/Tag).
+    const ids = [...selection];
+    if (ids.length) {
+      const n = ids.length;
+      const suffix = n > 1 ? ` ${n} items` : "";
+      if (view === "trash") {
+        list.push({ id: "sel-restore", label: `Restore${suffix || " item"}`, icon: RotateCcw, keywords: "selection", run: () => void s().restore(ids) });
+        list.push({ id: "sel-purge", label: `Delete${suffix || " item"} forever`, icon: Trash2, keywords: "selection remove", run: () => s().openDialog({ kind: "delete", ids, permanent: true }) });
+      } else {
+        list.push({ id: "sel-star", label: `Star${suffix || " item"}`, icon: Star, keywords: "selection favorite", run: () => void s().toggleStarMany(ids) });
+        list.push({ id: "sel-move", label: `Move${suffix || " item"} to…`, icon: CornerUpRight, keywords: "selection", run: () => s().openDialog({ kind: "move", ids }) });
+        list.push({ id: "sel-trash", label: `Trash${suffix || " item"}`, icon: Trash2, keywords: "selection delete", run: () => s().openDialog({ kind: "delete", ids, permanent: false }) });
+        if (n === 1) {
+          const node = s().nodes.find((x) => x.id === ids[0]);
+          if (node && node.capabilities?.canShare !== false) list.push({ id: "sel-share", label: "Share…", icon: Share2, keywords: "selection permission", run: () => s().openDialog({ kind: "share", node }) });
+          list.push({ id: "sel-tags", label: "Edit tags…", icon: Info, keywords: "selection label", run: () => void s().loadDetails(ids[0]!) });
+        }
+      }
+    }
+    list.push(
       { id: "v-my", label: "Go to My Drive", icon: HardDrive, keywords: "home root", run: () => s().setView("myDrive") },
       { id: "v-recent", label: "Go to Recent", icon: Clock, run: () => s().setView("recent") },
       { id: "v-starred", label: "Go to Starred", icon: Star, run: () => s().setView("starred") },
@@ -66,10 +88,10 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
       { id: "a-upload", label: "Upload files", icon: Upload, run: onUpload },
       { id: "a-grid", label: "Switch to grid view", icon: LayoutGrid, run: () => s().setLayout("grid") },
       { id: "a-list", label: "Switch to list view", icon: ListIcon, run: () => s().setLayout("list") },
-    ];
+    );
     const q = query.trim().toLowerCase();
     return q ? list.filter((c) => (c.label + " " + (c.keywords ?? "")).toLowerCase().includes(q)) : list;
-  }, [query, onUpload, s]);
+  }, [query, onUpload, s, selection, view]);
 
   // Combined, index-addressable rows: commands first, then file results.
   const fileRows = results.map((node) => ({
