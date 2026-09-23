@@ -16,6 +16,7 @@ function toastErr(message: string): void {
 
 export type DriveView = "myDrive" | "recent" | "starred" | "trash" | "shared" | "search";
 export type Layout = "grid" | "list";
+export type Density = "comfortable" | "compact";
 export type SortKey = "name" | "modified" | "size" | "kind";
 export type SortDir = "asc" | "desc";
 export type FilterKind = "folder" | "doc" | "image" | "video" | "pdf" | "audio" | "archive";
@@ -41,6 +42,7 @@ export interface UploadTask {
 
 interface ViewPrefs {
   layout: Layout;
+  density: Density;
   sortKey: SortKey;
   sortDir: SortDir;
   filterKind: FilterKind | null;
@@ -143,6 +145,7 @@ interface DriveV2State {
   loadDetails: (id: string | null) => Promise<void>;
 
   setLayout: (l: Layout) => void;
+  setDensity: (d: Density) => void;
   setSort: (key: SortKey) => void;
   setFilter: (k: FilterKind | null) => void;
   runSearch: (text: string) => void;
@@ -212,7 +215,7 @@ const MAX_SSE_FAILURES = 4; // SSE errors without a STABLE open → give up, fal
 const SSE_STABLE_MS = 30_000; // a stream open at least this long counts as healthy (resets the budget)
 
 const PREFS_KEY = "kosh.driveV2.prefs";
-const DEFAULT_PREFS: ViewPrefs = { layout: "grid", sortKey: "name", sortDir: "asc", filterKind: null };
+const DEFAULT_PREFS: ViewPrefs = { layout: "grid", density: "comfortable", sortKey: "name", sortDir: "asc", filterKind: null };
 function loadPrefs(): ViewPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
@@ -894,6 +897,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
 
     setLayout: (l) => set((s) => { const prefs = { ...s.prefs, layout: l }; savePrefs(prefs); return { prefs }; }),
+    setDensity: (d) => set((s) => { const prefs = { ...s.prefs, density: d }; savePrefs(prefs); return { prefs }; }),
     setSort: (key) =>
       set((s) => {
         const sortDir: SortDir = s.prefs.sortKey === key && s.prefs.sortDir === "asc" ? "desc" : "asc";
@@ -970,11 +974,15 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     rename: async (id, name) => {
       const accountId = get().accountId;
       if (!accountId) return;
-      await mutate([id], (nodes) => nodes.map((n) => (n.id === id ? { ...n, name } : n)), async () => {
+      const prevName = get().nodes.find((n) => n.id === id)?.name;
+      const ok = await mutate([id], (nodes) => nodes.map((n) => (n.id === id ? { ...n, name } : n)), async () => {
         const { file } = await driveV2Api.rename(accountId, id, name);
         set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
         invalidateFolderViews(); // else re-navigating within the 30s cache TTL shows the old name
       });
+      if (ok && prevName && prevName !== name) {
+        pushToast({ message: `Renamed to "${name}"`, tone: "default", action: { label: "Undo", onClick: () => void get().rename(id, prevName) } });
+      }
     },
 
     toggleStar: async (id) => {
@@ -1048,19 +1056,34 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       }
       // Detach from each item's REAL parents (not the current view folder) — otherwise a move from
       // Recent/Starred/Search leaves the file in its original folder (duplicated across two parents).
+      // Capture those original parents up front so the move is reversible (Undo).
+      const origParents = new Map<string, string[]>(targets.map((id) => [id, (snapshot.find((n) => n.id === id)?.parents ?? []).filter((p) => p !== destId)]));
       const ok = await bulk(
         targets,
-        (id) => {
-          const removeParents = (snapshot.find((n) => n.id === id)?.parents ?? []).filter((p) => p !== destId);
-          return driveV2Api.move(accountId, id, [destId], removeParents);
-        },
+        (id) => driveV2Api.move(accountId, id, [destId], origParents.get(id) ?? []),
         (nodes, done) => nodes.filter((n) => !done.has(n.id)),
         "Moving",
       );
       invalidateFolderViews();
       set({ selection: new Set() });
       refillIfEmpty();
-      if (ok.done.length) pushToast({ message: `Moved ${ok.done.length} item${ok.done.length === 1 ? "" : "s"}`, tone: "ok" });
+      if (ok.done.length) {
+        // Undo = reverse the parent swap (re-add the original parents, drop the destination) for the
+        // items that actually moved and whose original parent we know.
+        const undoable = ok.done.filter((id) => (origParents.get(id) ?? []).length > 0);
+        pushToast({
+          message: `Moved ${ok.done.length} item${ok.done.length === 1 ? "" : "s"}`,
+          tone: "ok",
+          action: undoable.length
+            ? { label: "Undo", onClick: () => void (async () => {
+                const back = await bulk(undoable, (id) => driveV2Api.move(accountId, id, origParents.get(id) ?? [], [destId]), (nodes, done) => nodes.filter((n) => !done.has(n.id)), "Undoing move");
+                invalidateFolderViews();
+                if (back.done.length) { void load(true); pushToast({ message: "Move undone", tone: "default" }); }
+                if (back.failed.length) toastErr(`${back.failed.length} couldn't be moved back.`);
+              })() }
+            : undefined,
+        });
+      }
       if (ok.failed.length) toastErr(`${ok.failed.length} couldn't be moved.`);
     },
 

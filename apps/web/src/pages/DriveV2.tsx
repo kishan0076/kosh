@@ -15,8 +15,11 @@ import {
   Filter,
   HardDrive,
   History,
+  Info,
   LayoutGrid,
   List as ListIcon,
+  Rows2,
+  Rows3,
   Menu as MenuIcon,
   Pencil,
   Plug,
@@ -111,6 +114,21 @@ function ScopeGate({ reason }: { reason: "not-configured" | "no-account" | "reco
   );
 }
 
+/** Off-screen count chip used as the drag image for a multi-item drag. Plain DOM (drag images can't be
+ *  React), styled with semantic tokens; appended off-screen, snapshotted by the browser, then removed. */
+function makeDragGhost(count: number): HTMLElement {
+  const el = document.createElement("div");
+  el.style.cssText = "position:fixed;top:-9999px;left:-9999px;pointer-events:none;";
+  el.className = "flex items-center gap-2 rounded-[10px] border border-primary bg-elevated px-3 py-2 text-[13px] font-medium text-foreground shadow-[var(--shadow-pop)]";
+  const badge = document.createElement("span");
+  badge.className = "grid h-6 min-w-[24px] place-items-center rounded-full bg-primary px-1.5 text-[12px] font-bold text-primary-foreground";
+  badge.textContent = String(count);
+  const label = document.createElement("span");
+  label.textContent = count === 1 ? "1 item" : `${count} items`;
+  el.append(badge, label);
+  return el;
+}
+
 /* ── shell ── */
 function Shell() {
   const view = useDriveV2((s) => s.view);
@@ -156,6 +174,17 @@ function Shell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Track the lg breakpoint so the inspector renders ONCE — docked as a third column on desktop, an
+  // overlay drawer on narrow — instead of mounting two copies (one hidden per breakpoint).
+  const [isLg, setIsLg] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const on = () => setIsLg(mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  }, []);
+  const dockInspector = isLg && !!detailsId && !activityOpen && !insightsOpen;
 
   // Global ⌘K / Ctrl+K opens the command palette.
   useEffect(() => {
@@ -243,7 +272,18 @@ function Shell() {
     },
     onRenameSubmit: (node, name) => { void store.getState().rename(node.id, name); setRenamingId(null); },
     onRenameCancel: () => setRenamingId(null),
-    onDragStart: (node, e) => setDragIds(e, targetsFor(node)),
+    onDragStart: (node, e) => {
+      const ids = targetsFor(node);
+      setDragIds(e, ids);
+      // For a multi-item drag, replace the single-row native ghost with a labeled count chip so it's
+      // clear how many items are moving.
+      if (ids.length > 1 && e.dataTransfer) {
+        const ghost = makeDragGhost(ids.length);
+        document.body.appendChild(ghost);
+        e.dataTransfer.setDragImage(ghost, 14, 14);
+        setTimeout(() => ghost.remove(), 0); // remove once the browser has snapshotted it
+      }
+    },
     onFolderDrop: (folder, ids) => void store.getState().move(ids, folder.id),
   }), [store, targetsFor]);
 
@@ -258,10 +298,28 @@ function Shell() {
 
   const menuActions = menu ? buildMenuActions(menu.node, menu.ids, view, { setRenamingId, close: () => setMenu(null) }) : [];
 
+  // One inspector element, placed either in the docked column (lg) or the overlay drawer (narrow).
+  const inspectorEl = (
+    <DriveDetails
+      node={detailsNode}
+      count={selection.size}
+      totalBytes={detailsTotalBytes}
+      loading={detailsLoading}
+      onClose={() => void store.getState().loadDetails(null)}
+      onRename={(n) => setRenamingId(n.id)}
+      onStar={(n) => void store.getState().toggleStar(n.id)}
+      onMove={(n) => store.getState().openDialog({ kind: "move", ids: [n.id] })}
+      onTrash={(n) => store.getState().openDialog({ kind: "delete", ids: [n.id], permanent: view === "trash" })}
+      onPreview={(n) => store.getState().setPreview(n)}
+      onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
+      onUpdateMeta={(n, patch) => void store.getState().updateMeta(n.id, patch)}
+    />
+  );
+
   return (
     <div className="w-full lg:h-[calc(100dvh-7rem)] lg:overflow-hidden" onKeyDown={onKeyDown}>
       <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => { void store.getState().uploadFiles(Array.from(e.target.files ?? [])); if (fileInputRef.current) fileInputRef.current.value = ""; }} />
-      <div className="grid gap-4 lg:h-full lg:min-h-0 lg:gap-6 lg:grid-cols-[auto_minmax(0,1fr)]">
+      <div className={cn("grid gap-4 lg:h-full lg:min-h-0 lg:gap-6", dockInspector ? "lg:grid-cols-[auto_minmax(0,1fr)_360px]" : "lg:grid-cols-[auto_minmax(0,1fr)]")}>
         {/* Mobile: a compact bar with a hamburger that opens the rail as a drawer (the full rail below
             would otherwise bury the file list under the fold on a phone). */}
         <MobileDriveBar onOpenNav={() => setMobileNavOpen(true)} />
@@ -312,6 +370,13 @@ function Shell() {
           </div>
           )}
         </FadeSwap>
+        {/* Docked inspector (lg+): a non-modal third column, so browsing file-by-file isn't a
+            click-scrim-click loop. On narrow screens the overlay drawer below is used instead. */}
+        {dockInspector && (
+          <aside className="hidden min-w-0 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface lg:flex lg:h-full lg:min-h-0 lg:flex-col">
+            {inspectorEl}
+          </aside>
+        )}
       </div>
 
       <MobileRailDrawer
@@ -323,45 +388,35 @@ function Shell() {
 
       <BulkProgress />
 
-      {/* Inspector — an animated right drawer with a light scrim. */}
-      <AnimatePresence>
-        {detailsId && (
-          <>
-            <motion.div
-              key="inspector-scrim"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: DUR.base }}
-              onClick={() => void store.getState().loadDetails(null)}
-              className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]"
-            />
-            <motion.aside
-              key="inspector-panel"
-              initial={{ x: "100%" }}
-              animate={{ x: 0 }}
-              exit={{ x: "100%" }}
-              transition={{ duration: DUR.slow, ease: EASE.emphasized }}
-              className="fixed inset-y-0 right-0 z-40 flex w-[88vw] max-w-[380px] flex-col border-l border-border bg-surface shadow-[var(--shadow-pop)]"
-            >
-              <DriveDetails
-                node={detailsNode}
-                count={selection.size}
-                totalBytes={detailsTotalBytes}
-                loading={detailsLoading}
-                onClose={() => void store.getState().loadDetails(null)}
-                onRename={(n) => setRenamingId(n.id)}
-                onStar={(n) => void store.getState().toggleStar(n.id)}
-                onMove={(n) => store.getState().openDialog({ kind: "move", ids: [n.id] })}
-                onTrash={(n) => store.getState().openDialog({ kind: "delete", ids: [n.id], permanent: view === "trash" })}
-                onPreview={(n) => store.getState().setPreview(n)}
-                onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
-                onUpdateMeta={(n, patch) => void store.getState().updateMeta(n.id, patch)}
+      {/* Inspector on narrow screens — an animated right drawer with a light scrim. On lg+ the docked
+          column above is used instead (isLg gate ⇒ exactly one inspector instance mounts). */}
+      {!isLg && (
+        <AnimatePresence>
+          {detailsId && (
+            <>
+              <motion.div
+                key="inspector-scrim"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: DUR.base }}
+                onClick={() => void store.getState().loadDetails(null)}
+                className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]"
               />
-            </motion.aside>
-          </>
-        )}
-      </AnimatePresence>
+              <motion.aside
+                key="inspector-panel"
+                initial={{ x: "100%" }}
+                animate={{ x: 0 }}
+                exit={{ x: "100%" }}
+                transition={{ duration: DUR.slow, ease: EASE.emphasized }}
+                className="fixed inset-y-0 right-0 z-40 flex w-[88vw] max-w-[380px] flex-col border-l border-border bg-surface shadow-[var(--shadow-pop)]"
+              >
+                {inspectorEl}
+              </motion.aside>
+            </>
+          )}
+        </AnimatePresence>
+      )}
 
       {hasUploads && <UploadTray />}
 
@@ -450,6 +505,8 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
   if (!many) {
     if (node.isFolder) a.push({ label: "Open", icon: CornerUpRight, onClick: () => s.openFolder(node) });
     else a.push({ label: "Preview", icon: ExternalLink, onClick: () => s.setPreview(node) });
+    // Details works for folders too (a plain folder click navigates, so this is the way to inspect one).
+    a.push({ label: "Details", icon: Info, onClick: () => void s.loadDetails(node.id) });
     if (node.webViewLink) a.push({ label: "Open in Drive", icon: ExternalLink, onClick: () => window.open(node.webViewLink, "_blank", "noopener") });
     if (node.webContentLink) a.push({ label: "Download", icon: Download, onClick: () => window.open(node.webContentLink, "_blank", "noopener") });
     if (node.capabilities?.canRename !== false) a.push({ label: "Rename", icon: Pencil, shortcut: "F2", onClick: () => ctx.setRenamingId(node.id) });
@@ -648,6 +705,11 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
       <div className="flex h-9 items-center rounded-[var(--radius-control)] border border-border p-0.5">
         <button onClick={() => useDriveV2.getState().setLayout("grid")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid view"><LayoutGrid size={15} /></button>
         <button onClick={() => useDriveV2.getState().setLayout("list")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List view"><ListIcon size={15} /></button>
+      </div>
+
+      <div className="hidden h-9 items-center rounded-[var(--radius-control)] border border-border p-0.5 sm:flex">
+        <button onClick={() => useDriveV2.getState().setDensity("comfortable")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.density === "comfortable" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Comfortable density" aria-pressed={prefs.density === "comfortable"}><Rows2 size={15} /></button>
+        <button onClick={() => useDriveV2.getState().setDensity("compact")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.density === "compact" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Compact density" aria-pressed={prefs.density === "compact"}><Rows3 size={15} /></button>
       </div>
     </div>
   );
@@ -927,7 +989,8 @@ function useFocusScroll(scrollRef: RefObject<HTMLDivElement | null>, focusIdx: n
 /** Virtualized list — only the visible rows are mounted, so 10k-item folders stay smooth. Exposed as a
  *  single-column ARIA grid (role=grid/row/gridcell) so per-item buttons are valid cell widgets. */
 function VirtualList({ scrollRef, visible, rowProps, focusIdx, focusNonce }: VirtualProps) {
-  const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => 48, overscan: 12 });
+  const compact = useDriveV2((s) => s.prefs.density === "compact");
+  const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => (compact ? 40 : 48), overscan: 12 });
   useEffect(() => { if (focusNonce) virt.scrollToIndex(focusIdx, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
   useFocusScroll(scrollRef, focusIdx, focusNonce);
   return (
@@ -961,8 +1024,9 @@ function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCol
     ro.observe(el);
     return () => ro.disconnect();
   }, [onCols]);
+  const compact = useDriveV2((s) => s.prefs.density === "compact");
   const rows = Math.ceil(visible.length / cols);
-  const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => 208, overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
+  const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => (compact ? 176 : 208), overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
   const focusRow = Math.floor(focusIdx / cols);
   useEffect(() => { if (focusNonce) virt.scrollToIndex(focusRow, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
   useFocusScroll(scrollRef, focusIdx, focusNonce);

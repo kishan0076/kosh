@@ -199,6 +199,7 @@ function SelectDisc({ selected, onToggle, className, reveal = "opacity", tabInde
  * re-renders the rows whose own props (node identity, selected, busy, focusable, renaming) changed. */
 function FileRowImpl({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
+  const compact = useDriveV2((s) => s.prefs.density === "compact");
   const innerTab = focusable ? 0 : -1; // only the roving cell contributes its controls to the tab order
   return (
     <div
@@ -217,14 +218,15 @@ function FileRowImpl({ node, index, colIndex, selected, busy, renaming, focusabl
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group grid cursor-pointer grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 py-1.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
+        "group grid cursor-pointer grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
+        compact ? "py-1" : "py-1.5",
         over ? "bg-primary-soft ring-1 ring-inset ring-primary" : selected ? "bg-primary-soft shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-surface-2",
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
         <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} reveal="collapse" className="h-5 w-5" tabIndex={innerTab} />
-        <span className="relative grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface-2">
-          <NodeIcon node={node} size={18} thumb />
+        <span className={cn("relative grid shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface-2", compact ? "h-7 w-7" : "h-8 w-8")}>
+          <NodeIcon node={node} size={compact ? 16 : 18} thumb />
         </span>
         {renaming ? (
           <InlineRename node={node} onSubmit={(name) => onRenameSubmit(node, name)} onCancel={onRenameCancel} />
@@ -266,6 +268,7 @@ export const FileRow = memo(FileRowImpl);
 /* ── grid card ── */
 function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusable, onFocusItem, onOpen, onClick, onContext, onToggleStar, onToggleSelect, onMore, onRenameSubmit, onRenameCancel, onDragStart, onFolderDrop }: ItemProps) {
   const { over, dropProps } = useFolderDrop(node, onFolderDrop);
+  const compact = useDriveV2((s) => s.prefs.density === "compact");
   const kind = kindOf(node);
   const innerTab = focusable ? 0 : -1; // only the roving cell contributes its controls to the tab order
   return (
@@ -297,7 +300,7 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
       {node.isFolder && (
         <span className={cn("h-[3px] w-full shrink-0", !node.folderColorRgb && "bg-primary")} style={node.folderColorRgb ? { backgroundColor: node.folderColorRgb } : undefined} />
       )}
-      <div className={cn("relative flex h-36 items-center justify-center overflow-hidden", KIND_HERO[kind])}>
+      <div className={cn("relative flex items-center justify-center overflow-hidden", compact ? "h-24" : "h-36", KIND_HERO[kind])}>
         {/* faint top light for a physical, lit feel */}
         <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/10 to-transparent dark:from-white/5" />
         {node.isFolder ? (

@@ -271,6 +271,7 @@ export function Modal({
   className?: string;
   labelledBy?: string;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -281,6 +282,34 @@ export function Modal({
       document.body.style.overflow = "";
     };
   }, [open, onClose]);
+
+  // Focus trap + restore: move focus into the dialog on open, keep Tab cycling within it, and return
+  // focus to the trigger on close — so keyboard/AT users aren't stranded on the page behind the modal.
+  useEffect(() => {
+    if (!open) return;
+    const node = dialogRef.current;
+    const restoreTo = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      node
+        ? Array.from(node.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter((el) => el.offsetParent !== null || el === document.activeElement)
+        : [];
+    // Defer the initial focus a frame so entrance animation / async children are mounted.
+    const raf = requestAnimationFrame(() => (focusables()[0] ?? node)?.focus());
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const items = focusables();
+      if (!items.length) { e.preventDefault(); node?.focus(); return; }
+      const first = items[0]!, last = items[items.length - 1]!;
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === node)) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    node?.addEventListener("keydown", onKey);
+    return () => {
+      cancelAnimationFrame(raf);
+      node?.removeEventListener("keydown", onKey);
+      restoreTo?.focus?.();
+    };
+  }, [open]);
 
   return createPortal(
     <AnimatePresence>
@@ -295,15 +324,17 @@ export function Modal({
             onClick={onClose}
           />
           <motion.div
+            ref={dialogRef}
             role="dialog"
             aria-modal="true"
             aria-labelledby={labelledBy}
+            tabIndex={-1}
             initial={{ opacity: 0, y: 12, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.98 }}
             transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
             className={cn(
-              "relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-elevated shadow-[var(--shadow-pop)]",
+              "relative z-10 flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-[var(--radius-panel)] border border-border bg-elevated shadow-[var(--shadow-pop)] focus:outline-none",
               className,
             )}
           >
