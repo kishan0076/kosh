@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
-import { formatBytes, sortDriveNodes } from "@kosh/shared";
+import { formatBytes, sortDriveNodes, parseTags, tagColorIndex } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { Button, Spinner } from "@/components/ui";
@@ -89,6 +89,37 @@ export function NodeIcon({ node, size = 20, thumb = false }: { node: DriveNode; 
     return <img src={node.thumbnailLink} alt="" loading="lazy" referrerPolicy="no-referrer" onError={() => setBroken(true)} className="h-full w-full object-cover" />;
   }
   return <Icon size={size} className={cn("shrink-0", KIND_TINT[kind])} />;
+}
+
+/** Soft-token chip colours for tags — picked deterministically per label so a tag keeps its colour. */
+const TAG_CHIP: string[] = [
+  "bg-primary-soft text-primary",
+  "bg-info-soft text-info",
+  "bg-ok-soft text-ok",
+  "bg-warn-soft text-warn",
+  "bg-danger-soft text-danger",
+  "bg-gold-soft text-gold",
+];
+
+/** The deterministic soft-token classes for a tag label (stable colour per label). */
+export function tagChipClass(tag: string): string {
+  return TAG_CHIP[tagColorIndex(tag, TAG_CHIP.length)]!;
+}
+
+/** Read-only tag chips for a node (folders can be tagged too). Shows up to `max`, then a +N overflow. */
+export function TagChips({ node, max = 3, className }: { node: DriveNode; max?: number; className?: string }) {
+  const tags = parseTags(node);
+  if (!tags.length) return null;
+  const shown = tags.slice(0, max);
+  const extra = tags.length - shown.length;
+  return (
+    <div className={cn("flex flex-wrap items-center gap-1", className)}>
+      {shown.map((t) => (
+        <span key={t} className={cn("max-w-[96px] truncate rounded-[var(--radius-chip)] px-1.5 py-0.5 text-[10px] font-medium", tagChipClass(t))}>{t}</span>
+      ))}
+      {extra > 0 && <span className="text-[10px] text-faint">+{extra}</span>}
+    </div>
+  );
 }
 
 const metaLine = (node: DriveNode): string => {
@@ -352,6 +383,7 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
           </div>
         )}
         <span className="truncate font-mono text-[11px] tabular text-faint">{metaLine(node)}</span>
+        <TagChips node={node} className="mt-1" />
       </div>
     </div>
   );

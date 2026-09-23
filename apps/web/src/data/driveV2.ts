@@ -4,7 +4,7 @@ import { API_BASE, ApiError } from "./api";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
 import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
-import { parseDriveSearch, dedupeDriveActivity } from "@kosh/shared";
+import { parseDriveSearch, dedupeDriveActivity, serializeTags, TAG_PROP_KEY } from "@kosh/shared";
 
 /** Push a toast without a React hook (store actions run outside components). */
 function pushToast(t: Omit<Toast, "id">): void {
@@ -92,6 +92,7 @@ interface DriveV2State {
   prefs: ViewPrefs;
   searchQuery: string;
   searchStarredOnly: boolean;
+  filterTag: string | null; // client-side tag filter over the loaded view (like filterKind); not persisted
 
   selection: Set<string>;
   lastClickedId: string | null;
@@ -148,6 +149,7 @@ interface DriveV2State {
   setDensity: (d: Density) => void;
   setSort: (key: SortKey) => void;
   setFilter: (k: FilterKind | null) => void;
+  setFilterTag: (tag: string | null) => void;
   runSearch: (text: string) => void;
   setSearchStarred: (v: boolean) => void;
   clearSearch: () => void;
@@ -174,6 +176,7 @@ interface DriveV2State {
   copy: (id: string) => Promise<void>;
   copyFolder: (id: string) => Promise<void>;
   updateMeta: (id: string, patch: { description?: string; folderColorRgb?: string }) => Promise<void>;
+  setTags: (id: string, tags: string[]) => Promise<void>;
   emptyTrash: () => Promise<void>;
   /** Drop cached folder views so the next navigation refetches (used after out-of-band mutations). */
   invalidateViews: () => void;
@@ -644,6 +647,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     prefs: loadPrefs(),
     searchQuery: "",
     searchStarredOnly: false,
+    filterTag: null,
     selection: new Set(),
     bulkOp: null,
     lastClickedId: null,
@@ -906,6 +910,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         return { prefs };
       }),
     setFilter: (k) => set((s) => { const prefs = { ...s.prefs, filterKind: k }; savePrefs(prefs); return { prefs }; }),
+    setFilterTag: (tag) => set({ filterTag: tag }),
 
     runSearch: (text) => {
       set({ searchQuery: text, view: "search" });
@@ -1149,6 +1154,32 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         (nodes) => nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
         async () => {
           const { file } = await driveV2Api.updateMeta(accountId, id, patch);
+          set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
+          invalidateFolderViews();
+        },
+        { onError: (m) => { if (get().detailsId === id) set({ detailsNode: beforeDetails }); toastErr(m); } },
+      );
+    },
+
+    setTags: async (id, tags) => {
+      const accountId = get().accountId;
+      if (!accountId) return;
+      const csv = serializeTags(tags); // normalized, deduped, size-bounded
+      // Merge into the file's existing appProperties for the optimistic view (keep other app keys), and
+      // send only the tag key to the server (null clears it — Drive merges the map).
+      const withTags = (n: DriveNode): DriveNode => {
+        const props = { ...(n.appProperties ?? {}) };
+        if (csv) props[TAG_PROP_KEY] = csv;
+        else delete props[TAG_PROP_KEY];
+        return { ...n, appProperties: props };
+      };
+      const beforeDetails = get().detailsNode;
+      if (get().detailsId === id && beforeDetails) set({ detailsNode: withTags(beforeDetails) });
+      await mutate(
+        [id],
+        (nodes) => nodes.map((n) => (n.id === id ? withTags(n) : n)),
+        async () => {
+          const { file } = await driveV2Api.updateMeta(accountId, id, { appProperties: { [TAG_PROP_KEY]: csv || null } });
           set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
           invalidateFolderViews();
         },

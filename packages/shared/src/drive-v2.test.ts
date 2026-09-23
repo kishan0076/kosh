@@ -4,6 +4,12 @@ import {
   sortDriveNodes,
   parseDriveSearch,
   dedupeDriveActivity,
+  normalizeTag,
+  parseTags,
+  serializeTags,
+  tagColorIndex,
+  TAG_PROP_KEY,
+  MAX_TAG_LEN,
   DRIVE_FOLDER_MIME,
   type SortableNode,
   type ActivityLike,
@@ -167,5 +173,39 @@ describe("dedupeDriveActivity", () => {
 
   it("preserves order and returns empty for empty input", () => {
     expect(dedupeDriveActivity([])).toEqual([]);
+  });
+});
+
+describe("tags", () => {
+  it("normalizeTag lowercases, trims, collapses spaces, strips commas, caps length", () => {
+    expect(normalizeTag("  Work Stuff ")).toBe("work stuff");
+    expect(normalizeTag("a,b")).toBe("a b");
+    expect(normalizeTag("URGENT")).toBe("urgent");
+    expect(normalizeTag("x".repeat(50)).length).toBe(MAX_TAG_LEN);
+  });
+
+  it("parseTags reads the CSV appProperty, deduping and dropping empties", () => {
+    expect(parseTags({ appProperties: { [TAG_PROP_KEY]: "work,Work, urgent ,," } })).toEqual(["work", "urgent"]);
+    expect(parseTags({})).toEqual([]);
+    expect(parseTags({ appProperties: {} })).toEqual([]);
+  });
+
+  it("serializeTags normalizes, dedupes, and stays within the size budget", () => {
+    expect(serializeTags(["Work", "work", "urgent"])).toBe("work,urgent");
+    expect(serializeTags([])).toBe("");
+    const many = Array.from({ length: 40 }, (_, i) => `tag${i}`);
+    expect(serializeTags(many).length).toBeLessThanOrEqual(110);
+  });
+
+  it("parse/serialize round-trip is stable", () => {
+    const csv = serializeTags(["Alpha", "beta", "beta", "Gamma"]);
+    expect(parseTags({ appProperties: { [TAG_PROP_KEY]: csv } })).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  it("tagColorIndex is stable and within range", () => {
+    expect(tagColorIndex("work", 8)).toBe(tagColorIndex("work", 8));
+    expect(tagColorIndex("work", 8)).toBeGreaterThanOrEqual(0);
+    expect(tagColorIndex("work", 8)).toBeLessThan(8);
+    expect(tagColorIndex("", 8)).toBeGreaterThanOrEqual(0);
   });
 });

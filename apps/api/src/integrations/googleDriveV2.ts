@@ -37,7 +37,7 @@ export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /** Fields requested for every file/folder resource — enough to power the grid, list and details panel. */
 const FILE_FIELDS =
-  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren,canMoveItemWithinDrive),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension";
+  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren,canMoveItemWithinDrive),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension,appProperties";
 
 /** Escape a value for a single-quoted Drive `q` literal — backslash FIRST, then quote. */
 function qval(value: string): string {
@@ -110,6 +110,7 @@ export interface DriveNode {
   folderColorRgb?: string;
   description?: string;
   fileExtension?: string;
+  appProperties?: Record<string, string>; // app-private metadata (Kosh tags live here)
   isFolder: boolean;
 }
 
@@ -461,7 +462,12 @@ export function setStarred(accessToken: string, id: string, starred: boolean): P
 export function setTrashed(accessToken: string, id: string, trashed: boolean): Promise<DriveNode> {
   return patchFile(accessToken, id, { trashed }, trashed ? "Couldn't move to trash" : "Couldn't restore");
 }
-export function updateMeta(accessToken: string, id: string, patch: { description?: string; folderColorRgb?: string }): Promise<DriveNode> {
+export function updateMeta(
+  accessToken: string,
+  id: string,
+  // appProperties is a partial patch: a string sets a key, `null` removes it (Drive merges the map).
+  patch: { description?: string; folderColorRgb?: string; appProperties?: Record<string, string | null> },
+): Promise<DriveNode> {
   return patchFile(accessToken, id, patch, "Couldn't update");
 }
 

@@ -352,7 +352,15 @@ driveV2Router.patch(
     const uid = requireWrite(req);
     const token = await auth(req, uid);
     const patch = z
-      .object({ description: z.string().max(1000).optional(), folderColorRgb: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional() })
+      .object({
+        description: z.string().max(1000).optional(),
+        folderColorRgb: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
+        // App-private metadata (Kosh tags). A null value removes the key. Bounded to Drive's limits.
+        appProperties: z
+          .record(z.string().min(1).max(124), z.string().max(124).nullable())
+          .refine((m) => Object.keys(m).length <= 30, "Too many properties")
+          .optional(),
+      })
       .parse(req.body);
     res.json({ file: await driveCall(req, updateMeta(token, fileId(String(req.params.fileId)), patch)) });
   }),

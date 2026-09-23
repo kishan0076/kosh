@@ -109,6 +109,53 @@ export function parseDriveSearch(query: string, ownerMe?: string): DriveSearchPa
   return params;
 }
 
+/* ── tags / labels (stored as a CSV in the app-private Drive `appProperties`) ── */
+
+/** The single app-private property key holding a file's comma-separated tags. */
+export const TAG_PROP_KEY = "koshTags";
+/** Drive caps a property (key + value) at ~124 bytes; keep the CSV comfortably under that. */
+export const MAX_TAG_LEN = 32;
+export const MAX_TAGS_LEN = 110; // budget for the serialized CSV value
+
+/** Normalize one tag: lowercase, trim, collapse inner whitespace, drop commas (the separator), cap length. */
+export function normalizeTag(raw: string): string {
+  return raw.toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ").trim().slice(0, MAX_TAG_LEN);
+}
+
+/** Read a file's tags from its appProperties (deduped, order-preserving, empties dropped). */
+export function parseTags(node: { appProperties?: Record<string, string> }): string[] {
+  const raw = node.appProperties?.[TAG_PROP_KEY];
+  if (!raw) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const part of raw.split(",")) {
+    const t = normalizeTag(part);
+    if (t && !seen.has(t)) { seen.add(t); out.push(t); }
+  }
+  return out;
+}
+
+/** Serialize tags back to the CSV value, deduped and length-bounded. Empty string ⇒ clear the property. */
+export function serializeTags(tags: string[]): string {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    const t = normalizeTag(raw);
+    if (!t || seen.has(t)) continue;
+    if ([...out, t].join(",").length > MAX_TAGS_LEN) break; // stay within the property size budget
+    seen.add(t);
+    out.push(t);
+  }
+  return out.join(",");
+}
+
+/** Stable colour bucket [0, buckets) for a tag, so the same label always gets the same chip colour. */
+export function tagColorIndex(tag: string, buckets: number): number {
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) | 0;
+  return Math.abs(h) % Math.max(1, buckets);
+}
+
 export interface ActivityLike {
   fileId: string;
   time?: string;

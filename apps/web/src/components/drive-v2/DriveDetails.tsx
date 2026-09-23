@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Check, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, Share2, Star, Trash2, User, Users, X } from "lucide-react";
-import { formatBytes } from "@kosh/shared";
+import { Check, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, Share2, Star, Tag, Trash2, User, Users, X } from "lucide-react";
+import { formatBytes, normalizeTag, parseTags } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
-import { NodeIcon } from "./items";
+import { NodeIcon, tagChipClass } from "./items";
 import { Button, Textarea } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
 
@@ -31,6 +31,7 @@ export function DriveDetails({
   onPreview,
   onShare,
   onUpdateMeta,
+  onSetTags,
 }: {
   node: DriveNode | null;
   count: number;
@@ -44,6 +45,7 @@ export function DriveDetails({
   onPreview: (node: DriveNode) => void;
   onShare: (node: DriveNode) => void;
   onUpdateMeta: (node: DriveNode, patch: { description?: string }) => void;
+  onSetTags: (node: DriveNode, tags: string[]) => void;
 }) {
   // Multi-select aggregate
   if (count > 1) {
@@ -91,6 +93,8 @@ export function DriveDetails({
           {node.md5Checksum && <Fact label="Checksum" value={node.md5Checksum.slice(0, 12) + "…"} />}
         </div>
 
+        <TagsEditor key={`tags-${node.id}`} node={node} onSetTags={(tags) => onSetTags(node, tags)} />
+
         <NotesEditor key={node.id} node={node} onSave={(desc) => onUpdateMeta(node, { description: desc })} />
 
 
@@ -132,6 +136,47 @@ function NotesEditor({ node, onSave }: { node: DriveNode; onSave: (desc: string)
         <p className="whitespace-pre-wrap text-[12.5px] text-muted">{node.description}</p>
       ) : (
         <p className="text-[12.5px] text-faint">No notes yet.</p>
+      )}
+    </div>
+  );
+}
+
+/** Editable tag chips — persisted to the file's app-private Drive `appProperties`. */
+function TagsEditor({ node, onSetTags }: { node: DriveNode; onSetTags: (tags: string[]) => void }) {
+  const canEdit = node.capabilities?.canEdit !== false;
+  const tags = parseTags(node);
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const t = normalizeTag(draft);
+    setDraft("");
+    if (t && !tags.includes(t)) onSetTags([...tags, t]);
+  };
+  return (
+    <div className="border-t border-border px-4 py-3">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint"><Tag size={12} /> Tags</div>
+      {(tags.length > 0 || !canEdit) && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {tags.map((t) => (
+            <span key={t} className={cn("inline-flex items-center gap-1 rounded-[var(--radius-chip)] px-1.5 py-0.5 text-[11px] font-medium", tagChipClass(t))}>
+              {t}
+              {canEdit && <button onClick={() => onSetTags(tags.filter((x) => x !== t))} aria-label={`Remove tag ${t}`} className="opacity-70 transition-opacity hover:opacity-100"><X size={10} /></button>}
+            </span>
+          ))}
+          {!tags.length && <span className="text-[12.5px] text-faint">No tags.</span>}
+        </div>
+      )}
+      {canEdit && (
+        <div className="mt-2 flex items-center gap-1.5">
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+            placeholder="Add a tag…"
+            maxLength={32}
+            className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2 py-1 text-[12.5px] outline-none focus:border-primary"
+          />
+          <Button variant="ghost" size="sm" disabled={!draft.trim()} onClick={add}><Plus size={13} /> Add</Button>
+        </div>
       )}
     </div>
   );

@@ -16,6 +16,7 @@ import {
   HardDrive,
   History,
   Info,
+  Tag,
   LayoutGrid,
   List as ListIcon,
   Rows2,
@@ -32,7 +33,7 @@ import {
   Type,
   X,
 } from "lucide-react";
-import { formatBytes } from "@kosh/shared";
+import { formatBytes, parseTags } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
@@ -197,12 +198,14 @@ function Shell() {
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
+  const filterTag = useDriveV2((s) => s.filterTag);
   const visible = useMemo(() => {
-    const filtered = prefs.filterKind ? nodes.filter((n) => filterBucket(n) === prefs.filterKind) : nodes;
+    let filtered = prefs.filterKind ? nodes.filter((n) => filterBucket(n) === prefs.filterKind) : nodes;
+    if (filterTag) filtered = filtered.filter((n) => parseTags(n).includes(filterTag));
     return sortNodes(filtered, prefs.sortKey, prefs.sortDir);
     // Depend on the specific fields that affect order — not the whole prefs object, so a density/layout
     // toggle doesn't force a full re-filter + re-sort of a large folder.
-  }, [nodes, prefs.filterKind, prefs.sortKey, prefs.sortDir]);
+  }, [nodes, prefs.filterKind, prefs.sortKey, prefs.sortDir, filterTag]);
   const orderedIds = useMemo(() => visible.map((n) => n.id), [visible]);
   const headerStats = useMemo(
     () => ({
@@ -316,6 +319,7 @@ function Shell() {
       onPreview={(n) => store.getState().setPreview(n)}
       onShare={(n) => store.getState().openDialog({ kind: "share", node: n })}
       onUpdateMeta={(n, patch) => void store.getState().updateMeta(n.id, patch)}
+      onSetTags={(n, tags) => void store.getState().setTags(n.id, tags)}
     />
   );
 
@@ -705,6 +709,8 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
         ))}
       </Menu>
 
+      <TagFilter />
+
       <div className="flex h-9 items-center rounded-[var(--radius-control)] border border-border p-0.5">
         <button onClick={() => useDriveV2.getState().setLayout("grid")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid view"><LayoutGrid size={15} /></button>
         <button onClick={() => useDriveV2.getState().setLayout("list")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List view"><ListIcon size={15} /></button>
@@ -715,6 +721,32 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
         <button onClick={() => useDriveV2.getState().setDensity("compact")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.density === "compact" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Compact density" aria-pressed={prefs.density === "compact"}><Rows3 size={15} /></button>
       </div>
     </div>
+  );
+}
+
+/* ── tag filter (client-side over the loaded view, like the kind filter) ── */
+function TagFilter() {
+  const nodes = useDriveV2((s) => s.nodes);
+  const filterTag = useDriveV2((s) => s.filterTag);
+  const allTags = useMemo(() => {
+    const set = new Set<string>();
+    for (const n of nodes) for (const t of parseTags(n)) set.add(t);
+    if (filterTag) set.add(filterTag); // keep the active tag listed even if it's off the loaded pages
+    return [...set].sort();
+  }, [nodes, filterTag]);
+  if (!allTags.length) return null;
+  return (
+    <Menu align="end" width={220} trigger={({ toggle, ref }) => (
+      <button ref={ref} onClick={toggle} className={cn("inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] hover:bg-surface-2", filterTag ? "border-primary text-primary" : "border-border text-muted")}>
+        <Tag size={15} /> {filterTag ? `#${filterTag}` : "Tags"}
+      </button>
+    )}>
+      <MenuLabel>Filter by tag (loaded items)</MenuLabel>
+      {filterTag && <MenuItem icon={X} onClick={() => useDriveV2.getState().setFilterTag(null)}>Clear tag filter</MenuItem>}
+      {allTags.map((t) => (
+        <MenuItem key={t} icon={filterTag === t ? Check : undefined} onClick={() => useDriveV2.getState().setFilterTag(filterTag === t ? null : t)}>{t}</MenuItem>
+      ))}
+    </Menu>
   );
 }
 

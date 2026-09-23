@@ -100,6 +100,7 @@ export interface DriveNode {
   folderColorRgb?: string;
   description?: string;
   fileExtension?: string;
+  appProperties?: Record<string, string>; // app-private metadata (Kosh tags live here)
   isFolder: boolean;
 }
 
@@ -251,7 +252,7 @@ export const driveV2Api = {
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/star`, { method: "PATCH", body: JSON.stringify({ starred }) }),
   setTrash: (accountId: string, fileId: string, trashed: boolean) =>
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/trash`, { method: "PATCH", body: JSON.stringify({ trashed }) }),
-  updateMeta: (accountId: string, fileId: string, patch: { description?: string; folderColorRgb?: string }) =>
+  updateMeta: (accountId: string, fileId: string, patch: { description?: string; folderColorRgb?: string; appProperties?: Record<string, string | null> }) =>
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/meta`, { method: "PATCH", body: JSON.stringify(patch) }),
   move: (accountId: string, fileId: string, addParents: string[], removeParents: string[]) =>
     v2req<{ file: DriveNode }>(`${base(accountId)}/files/${fileId}/move`, { method: "POST", body: JSON.stringify({ addParents, removeParents }) }),
