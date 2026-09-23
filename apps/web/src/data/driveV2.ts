@@ -201,6 +201,8 @@ interface DriveV2State {
   exportNode: (id: string, mimeType: string, ext: string) => Promise<void>;
   /** Fetch the selected FILES and save them as one .zip (folders are skipped; total is size-capped). */
   downloadZip: (ids: string[]) => Promise<void>;
+  /** Fetch a small text/code/CSV file's contents (alt=media) for inline Quick Look. */
+  fetchFileText: (node: DriveNode) => Promise<string>;
 }
 
 /* ── module-level (no re-render) ── */
@@ -1437,6 +1439,16 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (skippedFolders) pushToast({ message: "Folders were skipped — ZIP bundles files only for now.", tone: "warn" });
       if (failed) toastErr(`${failed} file${failed === 1 ? "" : "s"} couldn't be added to the ZIP.`);
       else if (entries.length) pushToast({ message: `Downloaded ${entries.length} file${entries.length === 1 ? "" : "s"} as ZIP`, tone: "ok" });
+    },
+
+    fetchFileText: async (node) => {
+      const accountId = get().accountId;
+      if (!accountId) throw new Error("No account.");
+      const token = await ensureToken(accountId);
+      const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(node.id)}?alt=media&supportsAllDrives=true`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      if (!res.ok) throw new Error(`Preview failed (${res.status})`);
+      return res.text();
     },
   };
 });

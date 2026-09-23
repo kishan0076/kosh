@@ -444,7 +444,7 @@ function Shell() {
       {dialog?.kind === "rename-bulk" && <BulkRenameModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "revisions" && <RevisionsModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "empty-trash" && <EmptyTrashModal onClose={() => store.getState().closeDialog()} />}
-      {previewNode && <PreviewOverlay node={previewNode} onClose={() => store.getState().setPreview(null)} />}
+      {previewNode && <PreviewOverlay node={previewNode} list={visible} onClose={() => store.getState().setPreview(null)} />}
     </div>
   );
 }

@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
-import { Check, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, Share2, Star, Tag, Trash2, User, Users, X } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Check, ChevronLeft, ChevronRight, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, RotateCw, Share2, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
 import { formatBytes, normalizeTag, parseTags } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { NodeIcon, tagChipClass } from "./items";
-import { Button, Textarea } from "@/components/ui";
+import { Button, Spinner, Textarea } from "@/components/ui";
+import { Markdown } from "@/components/markdown";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
+import { useDriveV2 } from "@/data/driveV2";
 
 function Fact({ label, value }: { label: string; value: string }) {
   return (
@@ -214,32 +216,147 @@ function embedUrl(node: DriveNode): string | null {
   }
 }
 
-/* ── full-screen preview — images render inline; PDFs/Docs/Sheets/Slides/video embed via Drive (CSP frame-src) ── */
-export function PreviewOverlay({ node, onClose }: { node: DriveNode; onClose: () => void }) {
+/* ── Quick Look ── */
+
+const TEXT_EXT = new Set(["txt", "log", "json", "xml", "yaml", "yml", "toml", "ini", "env", "js", "ts", "tsx", "jsx", "mjs", "cjs", "css", "scss", "html", "py", "rb", "go", "rs", "java", "kt", "c", "cpp", "h", "hpp", "sh", "bash", "sql", "swift", "php"]);
+const TEXT_PREVIEW_CAP = 2_000_000; // don't stream huge files into memory for a peek
+
+/** Which inline Quick Look renderer fits a file, if any (native rendering beats a Drive iframe). */
+function textPreviewKind(node: DriveNode): "markdown" | "csv" | "code" | null {
+  if (node.isFolder) return null;
+  if (node.size != null && node.size > TEXT_PREVIEW_CAP) return null;
+  const mime = node.mimeType || "";
+  const ext = (node.name.split(".").pop() || "").toLowerCase();
+  if (mime === "text/markdown" || ext === "md" || ext === "markdown") return "markdown";
+  if (mime === "text/csv" || ext === "csv") return "csv";
+  if (mime === "text/tab-separated-values" || ext === "tsv") return "csv";
+  if (mime.startsWith("text/") || mime === "application/json" || mime === "application/xml" || TEXT_EXT.has(ext)) return "code";
+  return null;
+}
+
+/** Tiny quote-aware CSV/TSV parser — enough for a read-only preview (first rows only). */
+function parseDelimited(text: string, delimiter: string, maxRows: number): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length && rows.length < maxRows; i++) {
+    const c = text[i]!;
+    if (inQuotes) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else if (c === '"') inQuotes = true;
+    else if (c === delimiter) { row.push(field); field = ""; }
+    else if (c === "\n") { row.push(field); rows.push(row); row = []; field = ""; }
+    else if (c !== "\r") field += c;
+  }
+  if ((field || row.length) && rows.length < maxRows) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+/** Full-screen Quick Look: native rendering for images (zoom/rotate) and text/markdown/code/CSV; a
+ *  Drive iframe for PDF/Docs/Sheets/Slides/video; filmstrip prev/next across the visible list. */
+export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; list?: DriveNode[]; onClose: () => void }) {
   const isImage = node.mimeType.startsWith("image/");
   const imgSrc = node.thumbnailLink?.replace(/=s\d+$/, "=s1600") ?? node.webContentLink;
-  const frame = isImage ? null : embedUrl(node);
-  const [loading, setLoading] = useState(!isImage && !!frame);
-  // Close the full-screen preview with Escape (matches every other overlay in the module).
+  const textKind = !isImage ? textPreviewKind(node) : null;
+  const frame = !isImage && !textKind ? embedUrl(node) : null;
+
+  const [loading, setLoading] = useState(!isImage && !textKind && !!frame);
+  const [text, setText] = useState<string | null>(null);
+  const [textErr, setTextErr] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [rot, setRot] = useState(0);
+
+  // Filmstrip position within the (already sorted+filtered) visible list.
+  const idx = list.findIndex((n) => n.id === node.id);
+  const go = (delta: number) => { const t = list[idx + delta]; if (t) useDriveV2.getState().setPreview(t); };
+  const hasPrev = idx > 0;
+  const hasNext = idx >= 0 && idx < list.length - 1;
+
+  // Reset per-node view state whenever the previewed node changes (filmstrip paging reuses this overlay).
+  useEffect(() => { setZoom(1); setRot(0); setText(null); setTextErr(false); setLoading(!isImage && !textKind && !!frame); }, [node.id, isImage, textKind, frame]);
+
+  // Fetch text content for the native text/code/CSV renderer.
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    if (!textKind) return;
+    let live = true;
+    useDriveV2.getState().fetchFileText(node).then((t) => { if (live) setText(t); }).catch(() => { if (live) setTextErr(true); });
+    return () => { live = false; };
+  }, [node, textKind]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowRight") { e.preventDefault(); go(1); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+    };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, idx, list]);
+
+  const ChromeBtn = ({ onClick, label, disabled, children }: { onClick: () => void; label: string; disabled?: boolean; children: ReactNode }) => (
+    <button onClick={onClick} disabled={disabled} aria-label={label} className="grid h-8 w-8 place-items-center rounded-md text-white transition-colors hover:bg-white/10 disabled:opacity-30">{children}</button>
+  );
+
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-black/80 backdrop-blur-sm" onClick={onClose}>
-      <div className="flex items-center gap-3 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>
+      <div className="flex items-center gap-2 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>
         <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{node.name}</span>
+        {list.length > 1 && idx >= 0 && <span className="shrink-0 tabular text-[12px] text-white/60">{idx + 1} / {list.length}</span>}
+        {isImage && (
+          <>
+            <ChromeBtn onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} label="Zoom out"><ZoomOut size={17} /></ChromeBtn>
+            <ChromeBtn onClick={() => setZoom((z) => Math.min(5, z + 0.25))} label="Zoom in"><ZoomIn size={17} /></ChromeBtn>
+            <ChromeBtn onClick={() => setRot((r) => (r + 90) % 360)} label="Rotate"><RotateCw size={17} /></ChromeBtn>
+          </>
+        )}
+        {!node.isFolder && <ChromeBtn onClick={() => void useDriveV2.getState().downloadNode(node.id)} label="Download"><Download size={17} /></ChromeBtn>}
+        <ChromeBtn onClick={() => void useDriveV2.getState().toggleStar(node.id)} label={node.starred ? "Unstar" : "Star"}><Star size={17} className={cn(node.starred && "fill-gold text-gold")} /></ChromeBtn>
         {node.webViewLink && (
-          <a href={node.webViewLink} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-white/10 px-3 py-1.5 text-[12.5px] hover:bg-white/20">
+          <a href={node.webViewLink} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-white/10 px-3 py-1.5 text-[12.5px] hover:bg-white/20">
             <ExternalLink size={14} /> Open in Drive
           </a>
         )}
-        <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md hover:bg-white/10" aria-label="Close preview"><X size={18} /></button>
+        <ChromeBtn onClick={onClose} label="Close preview"><X size={18} /></ChromeBtn>
       </div>
-      <div className="flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6" onClick={(e) => e.stopPropagation()}>
+
+      <div className="relative flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6" onClick={(e) => e.stopPropagation()}>
+        {/* filmstrip arrows */}
+        {hasPrev && <button onClick={() => go(-1)} aria-label="Previous" className="absolute left-2 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"><ChevronLeft size={22} /></button>}
+        {hasNext && <button onClick={() => go(1)} aria-label="Next" className="absolute right-2 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"><ChevronRight size={22} /></button>}
+
         {isImage && imgSrc ? (
-          <img src={imgSrc} alt={node.name} referrerPolicy="no-referrer" className="max-h-full max-w-full rounded-lg object-contain shadow-2xl" />
+          <img
+            src={imgSrc}
+            alt={node.name}
+            referrerPolicy="no-referrer"
+            style={{ transform: `scale(${zoom}) rotate(${rot}deg)` }}
+            className="max-h-full max-w-full rounded-lg object-contain shadow-2xl transition-transform motion-reduce:transition-none"
+          />
+        ) : textKind ? (
+          <div className="h-full w-full max-w-4xl overflow-auto rounded-lg bg-surface p-5 text-foreground shadow-2xl">
+            {text == null && !textErr ? (
+              <div className="grid h-full place-items-center text-muted"><Spinner size={18} /></div>
+            ) : textErr ? (
+              <div className="grid h-full place-items-center text-[13px] text-muted">Couldn't load a preview. Open it in Drive instead.</div>
+            ) : textKind === "markdown" ? (
+              <Markdown>{text!}</Markdown>
+            ) : textKind === "csv" ? (
+              <table className="w-full border-collapse text-[12.5px]">
+                <tbody>
+                  {parseDelimited(text!, node.name.toLowerCase().endsWith(".tsv") ? "\t" : ",", 200).map((r, ri) => (
+                    <tr key={ri} className={ri === 0 ? "bg-surface-2 font-semibold" : ""}>
+                      {r.map((cell, ci) => <td key={ci} className="border border-border px-2 py-1 align-top">{cell}</td>)}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <pre className="whitespace-pre-wrap break-words font-mono text-[12.5px] leading-relaxed">{text}</pre>
+            )}
+          </div>
         ) : frame ? (
           <div className="relative h-full w-full max-w-5xl">
             {loading && <div className="absolute inset-0 grid place-items-center text-white/70"><span className="animate-pulse text-[13px]">Loading preview…</span></div>}
