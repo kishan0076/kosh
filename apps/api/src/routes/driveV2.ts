@@ -9,8 +9,10 @@ import { GoogleAuthError, GoogleTransientError } from "../integrations/googleDri
 import { accessTokenFor, invalidateAccessToken } from "../integrations/driveTokenCache.js";
 import {
   copyNode,
+  createComment,
   createFolderV2,
   createPermission,
+  createReply,
   deleteNode,
   deletePermission,
   deleteRevision,
@@ -23,6 +25,7 @@ import {
   GoogleGoneError,
   listChanges,
   listChildren,
+  listComments,
   listDrives,
   listPermissions,
   listRecent,
@@ -110,6 +113,13 @@ async function auth(req: Request, uid: string): Promise<string> {
 
 const fileId = (v: string): string => {
   if (v !== "root" && !FILE_ID.test(v)) throw badRequest("BAD_ID", "Invalid file id.");
+  return v;
+};
+
+// Comment/reply ids use a slightly wider charset than file ids (they can contain '.'); still no path chars.
+const SUB_ID = /^[A-Za-z0-9_.-]{1,256}$/;
+const subId = (v: string, what: string): string => {
+  if (!SUB_ID.test(v)) throw badRequest("BAD_ID", `Invalid ${what} id.`);
   return v;
 };
 
@@ -513,5 +523,41 @@ driveV2Router.delete(
     const token = await auth(req, uid);
     await driveCall(req, deletePermission(token, fileId(String(req.params.fileId)), String(req.params.permId)));
     res.json({ ok: true });
+  }),
+);
+
+/* ── comments / replies (Drive discussion threads) ── */
+
+driveV2Router.get(
+  "/drive-v2/accounts/:id/files/:fileId/comments",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    res.json({ comments: await driveCall(req, listComments(token, fileId(String(req.params.fileId)))) });
+  }),
+);
+
+driveV2Router.post(
+  "/drive-v2/accounts/:id/files/:fileId/comments",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const { content } = z.object({ content: z.string().trim().min(1).max(4000) }).parse(req.body);
+    res.status(201).json({ comment: await driveCall(req, createComment(token, fileId(String(req.params.fileId)), content)) });
+  }),
+);
+
+driveV2Router.post(
+  "/drive-v2/accounts/:id/files/:fileId/comments/:commentId/replies",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const input = z
+      .object({ content: z.string().trim().min(1).max(4000).optional(), action: z.enum(["resolve", "reopen"]).optional() })
+      .refine((p) => p.content !== undefined || p.action !== undefined, "A reply needs text or an action.")
+      .parse(req.body);
+    res.status(201).json({
+      reply: await driveCall(req, createReply(token, fileId(String(req.params.fileId)), subId(String(req.params.commentId), "comment"), input)),
+    });
   }),
 );

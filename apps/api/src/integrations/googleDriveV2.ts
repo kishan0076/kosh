@@ -37,7 +37,7 @@ export const FOLDER_MIME = "application/vnd.google-apps.folder";
 
 /** Fields requested for every file/folder resource — enough to power the grid, list and details panel. */
 const FILE_FIELDS =
-  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren,canMoveItemWithinDrive),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension,appProperties,copyRequiresWriterPermission";
+  "id,name,mimeType,size,modifiedTime,createdTime,iconLink,thumbnailLink,webViewLink,webContentLink,starred,trashed,parents,shortcutDetails(targetId,targetMimeType),capabilities(canEdit,canComment,canRename,canDelete,canTrash,canCopy,canShare,canAddChildren,canMoveItemWithinDrive),owners(displayName,emailAddress,photoLink),shared,ownedByMe,md5Checksum,folderColorRgb,description,fileExtension,appProperties,copyRequiresWriterPermission";
 
 /** Escape a value for a single-quoted Drive `q` literal — backslash FIRST, then quote. */
 function qval(value: string): string {
@@ -602,6 +602,76 @@ export async function deletePermission(accessToken: string, fileId: string, perm
   const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/permissions/${encodeURIComponent(permId)}`);
   u.searchParams.set("supportsAllDrives", "true");
   await driveFetch(accessToken, u, { method: "DELETE" }, "Couldn't remove access");
+}
+
+/* ── comments / replies (Drive discussion threads) ── */
+
+export interface DriveCommentAuthor {
+  displayName?: string;
+  photoLink?: string;
+  me?: boolean;
+}
+export interface DriveReply {
+  id: string;
+  content?: string;
+  htmlContent?: string;
+  createdTime?: string;
+  modifiedTime?: string;
+  deleted?: boolean;
+  action?: string; // "resolve" | "reopen" for a status-changing reply
+  author?: DriveCommentAuthor;
+}
+export interface DriveComment {
+  id: string;
+  content?: string;
+  htmlContent?: string;
+  anchor?: string;
+  resolved?: boolean;
+  createdTime?: string;
+  modifiedTime?: string;
+  deleted?: boolean;
+  author?: DriveCommentAuthor;
+  quotedFileContent?: { mimeType?: string; value?: string };
+  replies?: DriveReply[];
+}
+
+// Drive's comments endpoints REQUIRE a non-empty `fields` param — request exactly what the UI renders.
+const REPLY_FIELDS = "id,content,htmlContent,createdTime,modifiedTime,deleted,action,author(displayName,photoLink,me)";
+const COMMENT_FIELDS = `id,content,htmlContent,anchor,resolved,createdTime,modifiedTime,deleted,author(displayName,photoLink,me),quotedFileContent(mimeType,value),replies(${REPLY_FIELDS})`;
+
+export async function listComments(accessToken: string, fileId: string): Promise<DriveComment[]> {
+  const out: DriveComment[] = [];
+  let pageToken: string | undefined;
+  do {
+    const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/comments`);
+    u.searchParams.set("fields", `nextPageToken,comments(${COMMENT_FIELDS})`);
+    u.searchParams.set("pageSize", "100");
+    u.searchParams.set("includeDeleted", "false"); // hide tombstones; a thread's own replies still include actions
+    if (pageToken) u.searchParams.set("pageToken", pageToken);
+    const res = await driveFetch(accessToken, u, {}, "Couldn't load comments");
+    const json = (await res.json()) as { comments?: DriveComment[]; nextPageToken?: string };
+    out.push(...(json.comments ?? []));
+    pageToken = json.nextPageToken; // a busy doc can have >100 threads — page through them all
+  } while (pageToken);
+  return out;
+}
+
+export async function createComment(accessToken: string, fileId: string, content: string): Promise<DriveComment> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/comments`);
+  u.searchParams.set("fields", COMMENT_FIELDS);
+  const res = await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) }, "Couldn't add the comment");
+  return (await res.json()) as DriveComment;
+}
+
+/** Post a reply. `action` ("resolve"/"reopen") flips the thread's status; content is optional for those. */
+export async function createReply(accessToken: string, fileId: string, commentId: string, input: { content?: string; action?: "resolve" | "reopen" }): Promise<DriveReply> {
+  const u = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/comments/${encodeURIComponent(commentId)}/replies`);
+  u.searchParams.set("fields", REPLY_FIELDS);
+  const body: Record<string, unknown> = {};
+  if (input.content) body.content = input.content;
+  if (input.action) body.action = input.action;
+  const res = await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Couldn't post the reply");
+  return (await res.json()) as DriveReply;
 }
 
 /** Resolve the ancestor chain (breadcrumb) for a folder id, walking `parents` up to root. */

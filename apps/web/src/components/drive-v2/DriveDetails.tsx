@@ -1,12 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, ChevronLeft, ChevronRight, CornerUpRight, Download, ExternalLink, Eye, Pencil, Plus, RotateCw, Share2, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Pencil, Plus, RotateCcw, RotateCw, Share2, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
 import { formatBytes, normalizeTag, parseTags, isNativeGoogleDoc } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { NodeIcon, tagChipClass } from "./items";
 import { Button, Spinner, Textarea } from "@/components/ui";
 import { Markdown } from "@/components/markdown";
-import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
+import { useUi } from "@/data/ui";
+import { driveV2Api, kindOf, type DriveComment, type DriveKind, type DriveNode } from "@/data/driveV2Api";
 import { useDriveV2 } from "@/data/driveV2";
 
 function Fact({ label, value }: { label: string; value: string }) {
@@ -101,6 +102,7 @@ export function DriveDetails({
 
         <NotesEditor key={node.id} node={node} onSave={(desc) => onUpdateMeta(node, { description: desc })} />
 
+        {!node.isFolder && <CommentsSection key={`comments-${node.id}`} node={node} />}
 
         <div className="border-t border-border px-4 py-3">
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">
@@ -140,6 +142,188 @@ function NotesEditor({ node, onSave }: { node: DriveNode; onSave: (desc: string)
         <p className="whitespace-pre-wrap text-[12.5px] text-muted">{node.description}</p>
       ) : (
         <p className="text-[12.5px] text-faint">No notes yet.</p>
+      )}
+    </div>
+  );
+}
+
+/** Author avatar (photo or initial) shared by comments + replies. */
+function AuthorAvatar({ name, photo, size = 24 }: { name: string; photo?: string; size?: number }) {
+  return photo ? (
+    <img src={photo} alt="" referrerPolicy="no-referrer" className="shrink-0 rounded-full" style={{ height: size, width: size }} />
+  ) : (
+    <span className="grid shrink-0 place-items-center rounded-full bg-primary-soft text-[10px] font-semibold text-primary" style={{ height: size, width: size }}>{name.slice(0, 1).toUpperCase()}</span>
+  );
+}
+
+/**
+ * Inline Drive comment threads. Reads/writes go straight through driveV2Api (like ShareModal) — comments
+ * aren't part of the vault store. Renders plain-text `content` only (never Drive's htmlContent) to keep
+ * collaborator-authored text un-injectable, per the "never render unsanitized markup" rule.
+ */
+function CommentsSection({ node }: { node: DriveNode }) {
+  const accountId = useDriveV2((s) => s.accountId)!;
+  const toast = useUi((s) => s.toast);
+  const canComment = node.capabilities?.canComment !== false;
+  const [comments, setComments] = useState<DriveComment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null); // comment id currently mutating (reply / resolve)
+  const [replyId, setReplyId] = useState<string | null>(null); // which thread's reply box is open
+  const [replyDraft, setReplyDraft] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    driveV2Api
+      .listComments(accountId, node.id)
+      .then(({ comments }) => { if (live) { setComments([...comments].sort((a, b) => (b.createdTime ?? "").localeCompare(a.createdTime ?? ""))); setError(null); } })
+      .catch((err) => { if (live) setError(err instanceof Error ? err.message : "Couldn't load comments."); })
+      .finally(() => { if (live) setLoading(false); });
+    return () => { live = false; };
+  }, [accountId, node.id]);
+
+  async function postComment() {
+    const content = draft.trim();
+    if (!content || posting) return;
+    setPosting(true);
+    try {
+      const { comment } = await driveV2Api.addComment(accountId, node.id, content);
+      setComments((cs) => [comment, ...cs]);
+      setDraft("");
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't add the comment", tone: "danger" });
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  async function postReply(comment: DriveComment) {
+    const content = replyDraft.trim();
+    if (!content || busyId) return;
+    setBusyId(comment.id);
+    try {
+      const { reply } = await driveV2Api.addReply(accountId, node.id, comment.id, { content });
+      setComments((cs) => cs.map((c) => (c.id === comment.id ? { ...c, replies: [...(c.replies ?? []), reply] } : c)));
+      setReplyDraft("");
+      setReplyId(null);
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't post the reply", tone: "danger" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function toggleResolve(comment: DriveComment) {
+    if (busyId) return;
+    const action = comment.resolved ? "reopen" : "resolve";
+    setBusyId(comment.id);
+    try {
+      const { reply } = await driveV2Api.addReply(accountId, node.id, comment.id, { action });
+      setComments((cs) => cs.map((c) => (c.id === comment.id ? { ...c, resolved: action === "resolve", replies: [...(c.replies ?? []), reply] } : c)));
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't update the thread", tone: "danger" });
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // Nothing to show and nothing you can add (e.g. a file type that doesn't support comments) → stay hidden.
+  if (!canComment && comments.length === 0) return null;
+
+  return (
+    <div className="border-t border-border px-4 py-3">
+      <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">
+        <MessageSquare size={12} /> Comments{comments.length > 0 && <span className="text-faint">· {comments.length}</span>}
+      </div>
+
+      {canComment && (
+        <div className="mb-3 space-y-2">
+          <Textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={2}
+            maxLength={4000}
+            placeholder="Add a comment…"
+            className="min-h-0 resize-none text-[12.5px]"
+          />
+          <div className="flex justify-end">
+            <Button variant="primary" size="sm" disabled={!draft.trim() || posting} onClick={() => void postComment()}>
+              {posting ? <Spinner size={13} /> : <MessageSquare size={13} />} Comment
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="grid place-items-center py-4"><Spinner size={16} className="text-muted" /></div>
+      ) : error ? (
+        <p className="py-1 text-[12.5px] text-danger">{error}</p>
+      ) : comments.length === 0 ? (
+        <p className="text-[12.5px] text-faint">No comments yet.</p>
+      ) : (
+        <ul className="space-y-3">
+          {comments.map((c) => {
+            const replies = (c.replies ?? []).filter((r) => !r.deleted && r.content); // hide tombstones + bare resolve/reopen markers
+            const authorName = c.author?.displayName ?? "Someone";
+            return (
+              <li key={c.id} className={cn("rounded-[var(--radius-control)] border border-border p-2.5", c.resolved && "opacity-70")}>
+                <div className="flex items-start gap-2">
+                  <AuthorAvatar name={authorName} photo={c.author?.photoLink} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-[12.5px] font-medium">{authorName}</span>
+                      {c.createdTime && <span className="text-[11px] text-faint">· {ago(c.createdTime)}</span>}
+                      {c.resolved && <span className="inline-flex items-center gap-0.5 rounded-[var(--radius-chip)] bg-ok-soft px-1.5 py-0.5 text-[10px] font-medium text-ok"><CheckCircle2 size={10} /> Resolved</span>}
+                    </div>
+                    {c.quotedFileContent?.value && <p className="mt-1 border-l-2 border-border pl-2 text-[11.5px] italic text-muted">{c.quotedFileContent.value}</p>}
+                    {c.content && <p className="mt-0.5 whitespace-pre-wrap break-words text-[12.5px]">{c.content}</p>}
+
+                    {replies.length > 0 && (
+                      <ul className="mt-2 space-y-2 border-l border-border pl-2.5">
+                        {replies.map((r) => (
+                          <li key={r.id} className="flex items-start gap-2">
+                            <AuthorAvatar name={r.author?.displayName ?? "Someone"} photo={r.author?.photoLink} size={20} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate text-[12px] font-medium">{r.author?.displayName ?? "Someone"}</span>
+                                {r.createdTime && <span className="text-[11px] text-faint">· {ago(r.createdTime)}</span>}
+                              </div>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px]">{r.content}</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {canComment && (
+                      busyId === c.id ? (
+                        <div className="mt-2"><Spinner size={13} className="text-muted" /></div>
+                      ) : replyId === c.id ? (
+                        <div className="mt-2 space-y-1.5">
+                          <Textarea autoFocus value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} rows={2} maxLength={4000} placeholder="Reply…" className="min-h-0 resize-none text-[12px]" />
+                          <div className="flex justify-end gap-1.5">
+                            <Button variant="ghost" size="sm" onClick={() => { setReplyId(null); setReplyDraft(""); }}><X size={12} /> Cancel</Button>
+                            <Button variant="primary" size="sm" disabled={!replyDraft.trim()} onClick={() => void postReply(c)}><CornerDownRight size={12} /> Reply</Button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-1.5 flex items-center gap-3">
+                          <button onClick={() => { setReplyId(c.id); setReplyDraft(""); }} className="inline-flex items-center gap-1 text-[11.5px] text-primary hover:underline"><CornerDownRight size={11} /> Reply</button>
+                          <button onClick={() => void toggleResolve(c)} className="inline-flex items-center gap-1 text-[11.5px] text-muted hover:text-foreground">
+                            {c.resolved ? <><RotateCcw size={11} /> Reopen</> : <><CheckCircle2 size={11} /> Resolve</>}
+                          </button>
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </div>
   );

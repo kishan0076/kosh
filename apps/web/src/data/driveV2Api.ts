@@ -187,6 +187,35 @@ export interface DrivePermission {
   expirationTime?: string; // RFC3339; when this grant auto-revokes (My-Drive user/group grants only)
 }
 
+export interface DriveCommentAuthor {
+  displayName?: string;
+  photoLink?: string;
+  me?: boolean;
+}
+export interface DriveReply {
+  id: string;
+  content?: string;
+  htmlContent?: string;
+  createdTime?: string;
+  modifiedTime?: string;
+  deleted?: boolean;
+  action?: string; // "resolve" | "reopen" for a status-changing reply
+  author?: DriveCommentAuthor;
+}
+export interface DriveComment {
+  id: string;
+  content?: string;
+  htmlContent?: string;
+  anchor?: string;
+  resolved?: boolean;
+  createdTime?: string;
+  modifiedTime?: string;
+  deleted?: boolean;
+  author?: DriveCommentAuthor;
+  quotedFileContent?: { mimeType?: string; value?: string };
+  replies?: DriveReply[];
+}
+
 const base = (accountId: string) => `/drive-v2/accounts/${accountId}`;
 
 interface ViewQuery {
@@ -273,6 +302,12 @@ export const driveV2Api = {
     v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removePermission: (accountId: string, fileId: string, permId: string) =>
     v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "DELETE" }),
+
+  listComments: (accountId: string, fileId: string) => v2req<{ comments: DriveComment[] }>(`${base(accountId)}/files/${fileId}/comments`),
+  addComment: (accountId: string, fileId: string, content: string) =>
+    v2req<{ comment: DriveComment }>(`${base(accountId)}/files/${fileId}/comments`, { method: "POST", body: JSON.stringify({ content }) }),
+  addReply: (accountId: string, fileId: string, commentId: string, input: { content?: string; action?: "resolve" | "reopen" }) =>
+    v2req<{ reply: DriveReply }>(`${base(accountId)}/files/${fileId}/comments/${commentId}/replies`, { method: "POST", body: JSON.stringify(input) }),
 
   listRevisions: (accountId: string, fileId: string) => v2req<{ revisions: DriveRevision[] }>(`${base(accountId)}/files/${fileId}/revisions`),
   deleteRevision: (accountId: string, fileId: string, revId: string) => v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/revisions/${revId}`, { method: "DELETE" }),
