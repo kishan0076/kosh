@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { motion } from "motion/react";
 import {
   Activity,
+  Bookmark,
   Check,
   ChevronRight,
   ChevronsLeft,
@@ -15,6 +16,7 @@ import {
   Trash2,
   Upload,
   Users,
+  X,
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
@@ -73,6 +75,8 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
   const spaceName = useDriveV2((s) => s.spaceName);
   const account = accounts.find((a) => a.id === accountId);
   const sync = useDriveV2((s) => s.sync);
+  const collections = useDriveV2((s) => s.collections);
+  const searchQuery = useDriveV2((s) => s.searchQuery);
 
   const [collapsedState, setCollapsed] = useState(() => { try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; } });
   const toggleCollapsed = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem(RAIL_KEY, n ? "1" : "0"); } catch { /* ignore */ } return n; });
@@ -185,6 +189,35 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
         <div className="my-2 h-px bg-border" />
         {!collapsed && <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">Manage</div>}
         {MANAGE.map((d) => <Item key={d.v} def={d} />)}
+
+        {/* Smart collections — named saved searches, run through the search API on click. */}
+        {!collapsed && (collections.length > 0 || view === "search") && (
+          <>
+            <div className="my-2 h-px bg-border" />
+            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">Collections</div>
+            {collections.map((c) => (
+              <div key={c.id} className="group/col flex items-center gap-1">
+                <button
+                  onClick={() => { useDriveV2.getState().openCollection(c); onNavigate?.(); }}
+                  title={c.query}
+                  className="flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-[13.5px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-foreground"
+                >
+                  <Bookmark size={16} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate text-left">{c.name}</span>
+                </button>
+                <button onClick={() => useDriveV2.getState().removeCollection(c.id)} className="shrink-0 rounded p-1 text-faint opacity-0 transition-opacity hover:text-danger group-hover/col:opacity-100" aria-label={`Remove collection ${c.name}`}><X size={13} /></button>
+              </div>
+            ))}
+            {view === "search" && searchQuery.trim() && !collections.some((c) => c.query === searchQuery.trim()) && (
+              <button
+                onClick={() => useDriveV2.getState().saveCollection(searchQuery.trim(), searchQuery.trim())}
+                className="flex h-9 w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 text-[13px] font-medium text-primary transition-colors hover:bg-surface-2"
+              >
+                <Plus size={16} className="shrink-0" /> <span className="truncate">Save this search</span>
+              </button>
+            )}
+          </>
+        )}
       </nav>
 
       {/* StorageMeter + collapse */}

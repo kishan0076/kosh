@@ -61,8 +61,6 @@ import { AnimatePresence, motion } from "motion/react";
 import { DUR, EASE } from "@/lib/motion";
 import { ago } from "@/lib/time";
 
-const SAVED_KEY = "kosh.driveV2.savedSearches";
-
 export function DriveV2() {
   const backend = useData((s) => s.backend);
   const status = useDriveV2((s) => s.status);
@@ -649,10 +647,8 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
   const view = useDriveV2((s) => s.view);
   const prefs = useDriveV2((s) => s.prefs);
   const searchQuery = useDriveV2((s) => s.searchQuery);
+  const collections = useDriveV2((s) => s.collections);
   const [q, setQ] = useState(searchQuery);
-  const [saved, setSaved] = useState<{ query: string }[]>(() => { try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; } });
-  const persistSaved = (next: { query: string }[]) => { setSaved(next); try { localStorage.setItem(SAVED_KEY, JSON.stringify(next)); } catch { /* private mode */ } };
-  const saveCurrent = () => { const query = q.trim(); if (!query || saved.some((s) => s.query === query)) return; persistSaved([{ query }, ...saved].slice(0, 20)); };
 
   useEffect(() => setQ(searchQuery), [searchQuery]);
   // Debounced search.
@@ -681,19 +677,19 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
 
       <SyncPill />
 
-      <Menu align="end" width={240} trigger={({ toggle, ref }) => (
-        <button ref={ref} onClick={toggle} className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted hover:bg-surface-2" aria-label="Saved searches"><Bookmark size={15} /></button>
+      <Menu align="end" width={248} trigger={({ toggle, ref }) => (
+        <button ref={ref} onClick={toggle} className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted hover:bg-surface-2" aria-label="Smart collections"><Bookmark size={15} /></button>
       )}>
-        <MenuLabel>Saved searches</MenuLabel>
-        {saved.length === 0 && <div className="px-2.5 py-2 text-[12.5px] text-muted">No saved searches yet.</div>}
-        {saved.map((sv) => (
-          <div key={sv.query} className="flex items-center gap-1 pr-1">
-            <button onClick={() => setQ(sv.query)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-surface-2"><Search size={13} className="shrink-0 text-muted" /><span className="min-w-0 flex-1 truncate">{sv.query}</span></button>
-            <button onClick={() => persistSaved(saved.filter((x) => x.query !== sv.query))} className="shrink-0 rounded p-1 text-faint hover:text-danger" aria-label="Remove"><X size={13} /></button>
+        <MenuLabel>Collections</MenuLabel>
+        {collections.length === 0 && <div className="px-2.5 py-2 text-[12.5px] text-muted">No collections yet. Search, then save it.</div>}
+        {collections.map((c) => (
+          <div key={c.id} className="flex items-center gap-1 pr-1">
+            <button onClick={() => useDriveV2.getState().openCollection(c)} className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-surface-2" title={c.query}><Bookmark size={13} className="shrink-0 text-muted" /><span className="min-w-0 flex-1 truncate">{c.name}</span></button>
+            <button onClick={() => useDriveV2.getState().removeCollection(c.id)} className="shrink-0 rounded p-1 text-faint hover:text-danger" aria-label="Remove collection"><X size={13} /></button>
           </div>
         ))}
         <MenuSeparator />
-        <MenuItem icon={BookmarkPlus} disabled={!q.trim()} onClick={saveCurrent}>Save current search</MenuItem>
+        <MenuItem icon={BookmarkPlus} disabled={!q.trim()} onClick={() => useDriveV2.getState().saveCollection(q.trim(), q.trim())}>Save current search</MenuItem>
       </Menu>
 
       <SelectAllToggle orderedIds={orderedIds} />

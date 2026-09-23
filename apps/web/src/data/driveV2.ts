@@ -21,6 +21,13 @@ export type SortKey = "name" | "modified" | "size" | "kind";
 export type SortDir = "asc" | "desc";
 export type FilterKind = "folder" | "doc" | "image" | "video" | "pdf" | "audio" | "archive";
 
+/** A named saved search (smart collection) — a rule-based virtual folder run through the search API. */
+export interface SmartCollection {
+  id: string;
+  name: string;
+  query: string; // search-box text with operators (type:/owner:/before:/after:/is:starred)
+}
+
 export type Dialog =
   | { kind: "newFolder"; parentId: string }
   | { kind: "delete"; ids: string[]; permanent: boolean }
@@ -93,6 +100,7 @@ interface DriveV2State {
   searchQuery: string;
   searchStarredOnly: boolean;
   filterTag: string | null; // client-side tag filter over the loaded view (like filterKind); not persisted
+  collections: SmartCollection[]; // named saved searches (persisted to localStorage)
 
   selection: Set<string>;
   lastClickedId: string | null;
@@ -153,6 +161,9 @@ interface DriveV2State {
   runSearch: (text: string) => void;
   setSearchStarred: (v: boolean) => void;
   clearSearch: () => void;
+  saveCollection: (name: string, query: string) => void;
+  removeCollection: (id: string) => void;
+  openCollection: (c: SmartCollection) => void;
 
   toggleSelect: (id: string, mods: { shift?: boolean; meta?: boolean }, orderedIds: string[]) => void;
   selectAll: (orderedIds: string[]) => void;
@@ -230,6 +241,31 @@ function loadPrefs(): ViewPrefs {
 function savePrefs(p: ViewPrefs) {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+  } catch {
+    /* private mode — ignore */
+  }
+}
+
+const COLLECTIONS_KEY = "kosh.driveV2.collections";
+const LEGACY_SAVED_KEY = "kosh.driveV2.savedSearches"; // old unnamed saved searches — migrated once
+function loadCollections(): SmartCollection[] {
+  try {
+    const raw = localStorage.getItem(COLLECTIONS_KEY);
+    if (raw) return JSON.parse(raw) as SmartCollection[];
+    // One-time migration from the old unnamed saved-search list ({ query }[]).
+    const legacy = localStorage.getItem(LEGACY_SAVED_KEY);
+    if (legacy) {
+      const arr = JSON.parse(legacy) as { query: string }[];
+      return arr.filter((x) => x?.query).map((x, i) => ({ id: `c${Date.now()}_${i}`, name: x.query, query: x.query }));
+    }
+  } catch {
+    /* private mode / bad JSON — start empty */
+  }
+  return [];
+}
+function saveCollections(list: SmartCollection[]) {
+  try {
+    localStorage.setItem(COLLECTIONS_KEY, JSON.stringify(list));
   } catch {
     /* private mode — ignore */
   }
@@ -648,6 +684,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     searchQuery: "",
     searchStarredOnly: false,
     filterTag: null,
+    collections: loadCollections(),
     selection: new Set(),
     bulkOp: null,
     lastClickedId: null,
@@ -923,6 +960,24 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     clearSearch: () => {
       set({ searchQuery: "", view: "myDrive" });
       void load();
+    },
+
+    saveCollection: (name, query) => {
+      const q = query.trim();
+      const nm = name.trim().slice(0, 60) || q.slice(0, 60);
+      if (!q) return;
+      set((s) => {
+        // De-dupe by query; a repeat save just updates the name.
+        const rest = s.collections.filter((c) => c.query !== q);
+        const next = [{ id: uid("col"), name: nm, query: q }, ...rest].slice(0, 30);
+        saveCollections(next);
+        return { collections: next };
+      });
+    },
+    removeCollection: (id) => set((s) => { const next = s.collections.filter((c) => c.id !== id); saveCollections(next); return { collections: next }; }),
+    openCollection: (c) => {
+      set({ insightsOpen: false, activityOpen: false, filterTag: null });
+      get().runSearch(c.query);
     },
 
     toggleSelect: (id, mods, orderedIds) => {
