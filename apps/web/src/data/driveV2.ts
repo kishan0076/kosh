@@ -188,7 +188,7 @@ interface DriveV2State {
   move: (ids: string[], destId: string) => Promise<void>;
   copy: (id: string) => Promise<void>;
   copyFolder: (id: string) => Promise<void>;
-  updateMeta: (id: string, patch: { description?: string; folderColorRgb?: string }) => Promise<void>;
+  updateMeta: (id: string, patch: { description?: string; folderColorRgb?: string; copyRequiresWriterPermission?: boolean }) => Promise<void>;
   setTags: (id: string, tags: string[]) => Promise<void>;
   emptyTrash: () => Promise<void>;
   /** Drop cached folder views so the next navigation refetches (used after out-of-band mutations). */

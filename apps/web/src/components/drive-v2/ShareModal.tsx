@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Clock, Download, Globe, Link2, Lock, Share2, UserPlus, X } from "lucide-react";
+import { canGrantExpiry } from "@kosh/shared";
 import { cn } from "@/lib/cn";
+import { shortDate } from "@/lib/time";
 import { Button, Spinner, Toggle } from "@/components/ui";
 import { Modal, SelectMenu } from "@/components/overlays";
 import { useUi } from "@/data/ui";
@@ -20,7 +22,6 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const toDateInput = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 // Drive wants a future expiry within one year; expire at the end of the chosen local day.
 const expiryToIso = (dateStr: string) => new Date(`${dateStr}T23:59:59`).toISOString();
-const fmtExpiry = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 
 export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId)!;
@@ -41,7 +42,9 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   const dateBounds = useMemo(() => {
     const now = new Date();
     const min = new Date(now); min.setDate(min.getDate() + 1); // earliest is tomorrow
-    const max = new Date(now); max.setFullYear(max.getFullYear() + 1); // Drive caps expiry at one year out
+    // Drive caps expiry at one year out. Since we expire at end-of-day (T23:59:59), the last date one full
+    // year ahead would overshoot the cap — step back a day so the chosen day always lands inside the window.
+    const max = new Date(now); max.setFullYear(max.getFullYear() + 1); max.setDate(max.getDate() - 1);
     return { min: toDateInput(min), max: toDateInput(max) };
   }, []);
 
@@ -62,7 +65,9 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   // Include domain grants too — otherwise a file shared with a whole domain wrongly reads "only you".
   const people = perms.filter((p) => p.type === "user" || p.type === "group" || p.type === "domain");
   const anyone = perms.find((p) => p.type === "anyone") ?? null;
-  const isShared = people.length > 0 || !!anyone;
+  // The owner permission is always present, so a file is only genuinely "shared" once someone other than
+  // the owner has access (or a link exists). This gates the download/copy control below.
+  const isShared = !!anyone || people.some((p) => p.role !== "owner");
   const personName = (p: DrivePermission) =>
     p.type === "domain" ? `Everyone at ${p.domain ?? "your organization"}` : p.displayName ?? p.emailAddress ?? "Unknown";
 
@@ -83,6 +88,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
 
   async function changeRole(perm: DrivePermission, role: string) {
+    if (busy) return;
     setBusy(perm.id);
     try {
       // Merge the full returned permission so the row also reflects any expiry Drive kept or dropped.
@@ -97,13 +103,14 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
 
   async function setExpiry(perm: DrivePermission, dateStr: string) {
-    if (!dateStr) return;
+    if (!dateStr || busy) return;
     setBusy(perm.id);
     try {
-      const { permission } = await driveV2Api.updatePermission(accountId, node.id, perm.id, { expirationTime: expiryToIso(dateStr) });
+      // Send the current role alongside the expiry so the server can enforce the eligibility rule.
+      const { permission } = await driveV2Api.updatePermission(accountId, node.id, perm.id, { role: perm.role, expirationTime: expiryToIso(dateStr) });
       setPerms((ps) => ps.map((p) => (p.id === perm.id ? { ...p, ...permission } : p)));
       setExpiryEditId(null);
-      toast({ message: `Access expires ${fmtExpiry(permission.expirationTime ?? expiryToIso(dateStr))}`, tone: "ok" });
+      toast({ message: `Access expires ${shortDate(permission.expirationTime ?? expiryToIso(dateStr))}`, tone: "ok" });
     } catch (err) {
       toast({ message: err instanceof Error ? err.message : "Couldn't set an expiry", tone: "danger" });
     } finally {
@@ -112,6 +119,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
 
   async function clearExpiry(perm: DrivePermission) {
+    if (busy) return;
     setBusy(perm.id);
     try {
       const { permission } = await driveV2Api.updatePermission(accountId, node.id, perm.id, { removeExpiration: true });
@@ -126,6 +134,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
 
   async function remove(perm: DrivePermission) {
+    if (busy) return;
     setBusy(perm.id);
     try {
       await driveV2Api.removePermission(accountId, node.id, perm.id);
@@ -138,6 +147,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
 
   async function toggleLink(on: boolean) {
+    if (busy) return;
     setBusy("anyone");
     try {
       if (on) {
@@ -156,7 +166,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
 
   async function changeLinkRole(role: string) {
-    if (!anyone) return;
+    if (!anyone || busy) return;
     setBusy("anyone");
     try {
       const { permission } = await driveV2Api.updatePermission(accountId, node.id, anyone.id, { role });
@@ -169,13 +179,19 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
   }
 
   async function toggleCopy(allow: boolean) {
+    if (busy) return;
     setBusy("copy");
     try {
-      await driveV2Api.updateMeta(accountId, node.id, { copyRequiresWriterPermission: !allow });
-      setCopyDisabled(!allow);
-    } catch (err) {
-      toast({ message: err instanceof Error ? err.message : "Couldn't update download settings", tone: "danger" });
+      // Go through the store action (not the raw API) so the cached node + open inspector stay in sync;
+      // it optimistically updates, folds in the server response, and rolls back + toasts on failure.
+      await useDriveV2.getState().updateMeta(node.id, { copyRequiresWriterPermission: !allow });
+    } catch {
+      /* the store surfaces the error toast and rolls back */
     } finally {
+      // Reflect the store's post-mutation truth rather than assuming the optimistic value stuck.
+      const s = useDriveV2.getState();
+      const fresh = s.nodes.find((n) => n.id === node.id) ?? (s.detailsId === node.id ? s.detailsNode : null);
+      setCopyDisabled(fresh ? !!fresh.copyRequiresWriterPermission : !allow);
       setBusy(null);
     }
   }
@@ -227,7 +243,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
             <div className="space-y-0.5">
               {people.map((p) => {
                 const assignable = ASSIGNABLE.some((r) => r.role === p.role);
-                const showExpiry = canExpire && assignable && (p.type === "user" || p.type === "group");
+                const showExpiry = canExpire && canGrantExpiry(p.type, p.role);
                 const editingExpiry = expiryEditId === p.id;
                 return (
                 <div key={p.id} className="rounded-[var(--radius-control)] hover:bg-surface-2">
@@ -236,7 +252,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-[13px] font-medium">{personName(p)}{p.pendingOwner ? " (pending)" : ""}</div>
                       {p.emailAddress && p.displayName && <div className="truncate text-[11.5px] text-muted">{p.emailAddress}</div>}
-                      {p.expirationTime && <div className="truncate text-[11.5px] text-warn">Access expires {fmtExpiry(p.expirationTime)}</div>}
+                      {p.expirationTime && <div className="truncate text-[11.5px] text-warn">Access expires {shortDate(p.expirationTime)}</div>}
                     </div>
                     {busy === p.id ? (
                       <Spinner size={15} className="text-muted" />
@@ -250,7 +266,7 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
                             className={cn("shrink-0 rounded-md p-1 hover:bg-surface-3", p.expirationTime ? "text-warn" : "text-faint hover:text-foreground")}
                             aria-label={p.expirationTime ? "Change expiration" : "Set expiration"}
                             aria-expanded={editingExpiry}
-                            title={p.expirationTime ? `Expires ${fmtExpiry(p.expirationTime)}` : "Set an expiry"}
+                            title={p.expirationTime ? `Expires ${shortDate(p.expirationTime)}` : "Set an expiry"}
                           ><Clock size={15} /></button>
                         )}
                         <RoleSelect value={p.role} onChange={(r) => void changeRole(p, r)} compact />
@@ -272,12 +288,13 @@ export function ShareModal({ node, onClose }: { node: DriveNode; onClose: () => 
                         type="date"
                         min={dateBounds.min}
                         max={dateBounds.max}
+                        disabled={busy === p.id}
                         defaultValue={p.expirationTime ? toDateInput(new Date(p.expirationTime)) : ""}
                         onChange={(e) => { if (e.target.value) void setExpiry(p, e.target.value); }}
-                        className="rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1 text-[12.5px] outline-none focus:border-primary focus:ring-focus"
+                        className="rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1 text-[12.5px] outline-none focus:border-primary focus:ring-focus disabled:opacity-50"
                       />
                       {p.expirationTime && (
-                        <button onClick={() => void clearExpiry(p)} className="text-[12px] text-muted underline-offset-2 hover:text-danger hover:underline">Remove expiry</button>
+                        <button onClick={() => void clearExpiry(p)} disabled={busy === p.id} className="text-[12px] text-muted underline-offset-2 hover:text-danger hover:underline disabled:opacity-50">Remove expiry</button>
                       )}
                     </div>
                   )}

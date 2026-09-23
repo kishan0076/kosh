@@ -200,6 +200,20 @@ export function driveExportFormats(mimeType?: string): DriveExportFormat[] {
   return (mimeType && DRIVE_EXPORT_FORMATS[mimeType]) || [];
 }
 
+/* ── sharing: access expiry eligibility ── */
+
+/** The only roles Drive will attach an access-expiry to (never owner/organizer/fileOrganizer). */
+export const EXPIRY_ROLES: ReadonlySet<string> = new Set(["reader", "commenter", "writer"]);
+
+/**
+ * Whether Drive permits an access expiry on a grant. Google only honours `expirationTime` for a
+ * specific person/group (never `anyone`/`domain` link grants) holding a viewer/commenter/editor role.
+ * The single source of truth for the client's expiry affordance and the server's validation guards.
+ */
+export function canGrantExpiry(type: string, role: string): boolean {
+  return (type === "user" || type === "group") && EXPIRY_ROLES.has(role);
+}
+
 export interface ActivityLike {
   fileId: string;
   time?: string;

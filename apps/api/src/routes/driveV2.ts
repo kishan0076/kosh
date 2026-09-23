@@ -1,5 +1,6 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
+import { canGrantExpiry, EXPIRY_ROLES } from "@kosh/shared";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
 import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
@@ -473,9 +474,8 @@ driveV2Router.post(
       .parse(req.body);
     if ((body.type === "user" || body.type === "group") && !body.emailAddress) throw badRequest("BAD_TARGET", "An email address is required to share with a person or group.");
     // Drive rejects expiry on link/domain grants and on manager/owner roles — fail fast with a clear reason.
-    if (body.expirationTime) {
-      if (body.type !== "user" && body.type !== "group") throw badRequest("BAD_EXPIRY", "An expiry can only be set for a specific person or group.");
-      if (body.role !== "reader" && body.role !== "commenter" && body.role !== "writer") throw badRequest("BAD_EXPIRY", "An expiry can only be set for Viewer, Commenter, or Editor access.");
+    if (body.expirationTime && !canGrantExpiry(body.type, body.role)) {
+      throw badRequest("BAD_EXPIRY", "An expiry can only be set for a specific person or group with Viewer, Commenter, or Editor access.");
     }
     res.status(201).json({ permission: await driveCall(req, createPermission(token, fileId(String(req.params.fileId)), body)) });
   }),
@@ -494,8 +494,12 @@ driveV2Router.patch(
       })
       .refine((p) => p.role !== undefined || p.expirationTime !== undefined || p.removeExpiration === true, "Nothing to update.")
       .refine((p) => !(p.expirationTime && p.removeExpiration), "Set an expiry or clear it, not both.")
+      // Setting an expiry must carry the role so the eligibility rule is enforced here, not just by Drive.
+      // (We can't learn the grant's type without an extra round-trip; the client only offers expiry on
+      // user/group grants, and the role gate below is the security-relevant half.)
+      .refine((p) => !p.expirationTime || p.role !== undefined, "A role is required when setting an expiry.")
       .parse(req.body);
-    if (patch.expirationTime && patch.role && patch.role !== "reader" && patch.role !== "commenter" && patch.role !== "writer") {
+    if (patch.expirationTime && (!patch.role || !EXPIRY_ROLES.has(patch.role))) {
       throw badRequest("BAD_EXPIRY", "An expiry can only be set for Viewer, Commenter, or Editor access.");
     }
     res.json({ permission: await driveCall(req, updatePermission(token, fileId(String(req.params.fileId)), String(req.params.permId), patch)) });

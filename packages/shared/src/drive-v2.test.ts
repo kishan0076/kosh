@@ -10,6 +10,8 @@ import {
   tagColorIndex,
   isNativeGoogleDoc,
   driveExportFormats,
+  canGrantExpiry,
+  EXPIRY_ROLES,
   TAG_PROP_KEY,
   MAX_TAG_LEN,
   DRIVE_FOLDER_MIME,
@@ -230,5 +232,25 @@ describe("downloads / exports", () => {
     expect(driveExportFormats(undefined)).toEqual([]);
     // every format has a non-empty label + a real mime target
     for (const f of doc) { expect(f.label).toBeTruthy(); expect(f.mimeType).toContain("/"); }
+  });
+});
+
+describe("canGrantExpiry", () => {
+  it("allows expiry only for user/group grants with a viewer/commenter/editor role", () => {
+    expect(canGrantExpiry("user", "reader")).toBe(true);
+    expect(canGrantExpiry("user", "commenter")).toBe(true);
+    expect(canGrantExpiry("group", "writer")).toBe(true);
+  });
+  it("forbids expiry on link/domain grants regardless of role", () => {
+    expect(canGrantExpiry("anyone", "reader")).toBe(false);
+    expect(canGrantExpiry("domain", "writer")).toBe(false);
+  });
+  it("forbids expiry on manager/owner roles", () => {
+    expect(canGrantExpiry("user", "owner")).toBe(false);
+    expect(canGrantExpiry("user", "organizer")).toBe(false);
+    expect(canGrantExpiry("user", "fileOrganizer")).toBe(false);
+  });
+  it("EXPIRY_ROLES holds exactly the three assignable roles", () => {
+    expect([...EXPIRY_ROLES].sort()).toEqual(["commenter", "reader", "writer"]);
   });
 });
