@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { MotionConfig } from "motion/react";
 import "./index.css";
 import { initTheme } from "@/lib/theme";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AppShell } from "@/components/layout/AppShell";
 import { Home } from "@/pages/Home";
 import { Library } from "@/pages/Library";
@@ -36,6 +37,10 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <MotionConfig reducedMotion="user">
     <BrowserRouter>
+      {/* Last-resort boundary: a crash in the shell chrome/overlays (outside the routed page) shows a
+          recovery card instead of a white screen. Page-level crashes are caught by the inner boundary
+          around the Outlet, which keeps the shell intact. */}
+      <ErrorBoundary>
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<Home />} />
@@ -63,6 +68,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
+      </ErrorBoundary>
     </BrowserRouter>
     </MotionConfig>
   </StrictMode>,

@@ -97,7 +97,7 @@ export function AppShell() {
           <div className="w-full px-4 py-6 sm:px-5">
             {/* A page crash shows an in-place recovery card (keeping the shell) instead of white-screening;
                 the resetKey clears it automatically once the user navigates elsewhere. */}
-            <ErrorBoundary resetKey={location.pathname}>
+            <ErrorBoundary resetKey={location.pathname + location.search}>
               <Outlet />
             </ErrorBoundary>
           </div>

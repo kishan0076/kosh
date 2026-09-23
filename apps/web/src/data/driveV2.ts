@@ -134,7 +134,8 @@ interface DriveV2State {
 
   load: (force?: boolean) => Promise<void>;
   loadMore: () => Promise<void>;
-  loadAll: () => Promise<void>;
+  /** Drain every remaining page. Resolves true only if the view was fully loaded on the same context. */
+  loadAll: () => Promise<boolean>;
   loadQuota: () => Promise<void>;
   loadDetails: (id: string | null) => Promise<void>;
 
@@ -732,20 +733,26 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
 
     /** Drain every remaining page of the current view so client-side sort/filter/select-all see the
-     *  WHOLE view, not just the first page. Bounded so a giant folder can't spin forever. */
+     *  WHOLE view, not just the first page. Bounded so a giant folder can't spin forever. Resolves
+     *  true only if the view is now fully loaded on the same context (else a caller must not claim
+     *  "all"): false when it aborted on navigation, a failed page, or the page cap. */
     loadAll: async () => {
-      if (get().loadingAll || !get().nextPageToken) return;
+      if (!get().nextPageToken) return true; // already fully loaded
+      if (get().loadingAll) return false; // a drain is already running
       const seq = loadSeq;
       set({ loadingAll: true });
       try {
         let guard = 0;
         while (get().nextPageToken && seq === loadSeq && guard < 100) {
           guard++;
-          const before = get().nodes.length;
+          const tokenBefore = get().nextPageToken;
           await get().loadMore();
-          if (seq !== loadSeq) break; // navigated away — stop draining the old view
-          if (get().nodes.length === before && get().nextPageToken) break; // no progress — bail out
+          if (seq !== loadSeq) return false; // navigated away — the old view's drain is void
+          // Progress is measured by the page TOKEN, not the node count: Drive can return a page with
+          // zero new items (all trashed/filtered upstream) yet still hand back a nextPageToken.
+          if (get().nextPageToken === tokenBefore) return false; // no progress (a page fetch failed)
         }
+        return seq === loadSeq && !get().nextPageToken; // true only when fully drained on this view
       } finally {
         set({ loadingAll: false });
       }
@@ -1030,7 +1037,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         await driveV2Api.emptyTrash(accountId);
         // Guard against clobbering a newer view: only blank the list if the user is still on Trash and
         // hasn't navigated away during the (possibly slow) call.
-        if (seq === loadSeq && get().view === "trash") set({ nodes: [], selection: new Set() });
+        // Clear pagination too, else a stray "Load more" / "Select all pages" lingers on empty trash.
+        if (seq === loadSeq && get().view === "trash") set({ nodes: [], nextPageToken: undefined, selection: new Set() });
         void get().loadQuota();
         pushToast({ message: "Trash emptied", tone: "default" });
       } catch (err) {

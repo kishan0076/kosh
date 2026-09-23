@@ -4,25 +4,38 @@ import { Button } from "@/components/ui";
 
 /**
  * Catches render/lifecycle exceptions in its subtree so a single throw (e.g. a malformed node folded
- * in by live-sync) shows an in-place recovery card instead of white-screening the whole app. Pass a
- * `resetKey` (e.g. the route path) so navigating away clears a caught error automatically.
+ * in by live-sync, surfacing on the next render) shows an in-place recovery card instead of
+ * white-screening the app. Pass a `resetKey` (e.g. the full location) so navigating away clears a
+ * caught error automatically, during render, with no fallback flash.
+ *
+ * Note: an error boundary only catches errors thrown during descendants' render/lifecycle — not in
+ * event handlers or async callbacks. A store mutation that stores bad data won't throw here, but the
+ * bad render it later causes will. When the fault is persistent module state, "Reload page" is the
+ * reliable recovery (hence it is the primary action); "Try again" only helps a transient error.
  */
 interface Props {
   children: ReactNode;
-  /** When this value changes, a previously-caught error is cleared (e.g. on route change). */
+  /** When this changes, a caught error is cleared during render (e.g. on route/folder change). */
   resetKey?: unknown;
   /** Short label for the failing area, used in the recovery copy. */
   label?: string;
 }
 interface State {
   error: Error | null;
+  resetKey: unknown;
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, resetKey: this.props.resetKey };
 
-  static getDerivedStateFromError(error: Error): State {
+  static getDerivedStateFromError(error: Error): Partial<State> {
     return { error };
+  }
+
+  /** Clear a caught error during render (no fallback flash) whenever the reset key changes. */
+  static getDerivedStateFromProps(props: Props, state: State): Partial<State> | null {
+    if (props.resetKey !== state.resetKey) return { error: null, resetKey: props.resetKey };
+    return null;
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
@@ -30,16 +43,11 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error("[ErrorBoundary] uncaught render error", error, info.componentStack);
   }
 
-  componentDidUpdate(prev: Props) {
-    // Auto-recover when the caller's reset key changes (e.g. the user navigated to another route).
-    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null });
-  }
-
   render() {
     const { error } = this.state;
     if (!error) return this.props.children;
     return (
-      <div className="grid min-h-[55vh] w-full place-items-center">
+      <div role="alert" className="grid min-h-[55vh] w-full place-items-center">
         <div className="w-full max-w-md rounded-[var(--radius-card)] border border-border bg-surface px-6 py-10 text-center">
           <span className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-danger-soft text-danger">
             <AlertTriangle size={26} />
@@ -54,10 +62,10 @@ export class ErrorBoundary extends Component<Props, State> {
             </p>
           )}
           <div className="mt-5 flex justify-center gap-2">
-            <Button variant="primary" onClick={() => this.setState({ error: null })}>
-              <RefreshCw size={15} /> Try again
+            <Button variant="primary" autoFocus onClick={() => window.location.reload()}>
+              <RefreshCw size={15} /> Reload page
             </Button>
-            <Button variant="outline" onClick={() => window.location.reload()}>Reload page</Button>
+            <Button variant="outline" onClick={() => this.setState({ error: null })}>Try again</Button>
           </div>
         </div>
       </div>

@@ -220,7 +220,7 @@ function Shell() {
   // Keyboard shortcuts scoped to the content region.
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); store.getState().selectAll(orderedIds); }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); void selectAllAcrossPages(); }
     else if (e.key === "Escape") { store.getState().clearSelection(); store.getState().loadDetails(null); }
     else if ((e.key === "Delete" || e.key === "Backspace") && selection.size) { e.preventDefault(); store.getState().openDialog({ kind: "delete", ids: [...selection], permanent: view === "trash" }); }
     else if (e.key === "F2" && selection.size === 1) { setRenamingId([...selection][0]!); }
@@ -398,6 +398,16 @@ function SyncPill() {
 }
 
 /* ── toolbar (utility strip on the borderless canvas) ── */
+/** Honest "select all": drain every remaining page first, then select — but never select in a
+ *  different view if the user navigated away mid-drain (loadAll took seconds over many pages). */
+async function selectAllAcrossPages() {
+  const ctx = () => { const x = useDriveV2.getState(); return `${x.accountId}|${x.spaceId ?? ""}|${x.view}|${x.path.at(-1)?.id ?? "root"}`; };
+  const before = ctx();
+  if (useDriveV2.getState().nextPageToken) await useDriveV2.getState().loadAll();
+  if (ctx() !== before) return; // navigated during the drain — don't select in a different context
+  useDriveV2.getState().selectAllLoaded();
+}
+
 /** Tri-state "Select all / Deselect all" over the currently visible items. */
 function SelectAllToggle({ orderedIds }: { orderedIds: string[] }) {
   const selection = useDriveV2((s) => s.selection);
@@ -415,16 +425,15 @@ function SelectAllToggle({ orderedIds }: { orderedIds: string[] }) {
   // When more pages exist, drain them first so "select all" genuinely covers the whole view — never a
   // silent subset that a following bulk action would act on.
   const onClick = async () => {
-    const store = useDriveV2.getState();
-    if (all) { store.clearSelection(); return; }
-    if (hasMore) await store.loadAll();
-    useDriveV2.getState().selectAllLoaded();
+    if (all) { useDriveV2.getState().clearSelection(); return; }
+    await selectAllAcrossPages();
   };
   return (
     <button
       onClick={() => void onClick()}
       disabled={total === 0 || loadingAll}
-      aria-pressed={all}
+      role="checkbox"
+      aria-checked={all ? "true" : some ? "mixed" : "false"}
       className={cn(
         "inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] transition-colors hover:bg-surface-2 disabled:opacity-50",
         all || some ? "border-primary text-primary" : "border-border text-muted",
@@ -436,18 +445,25 @@ function SelectAllToggle({ orderedIds }: { orderedIds: string[] }) {
   );
 }
 
-/** When a kind filter is active but the folder still has unfetched pages, client-side filtering only
- *  sees loaded items — warn and offer to drain the rest so the filter covers the whole view. */
+/** A kind filter OR a value-sort (size/modified/type) over a paginated folder only sees the loaded
+ *  page, so the result is incomplete/misleading — warn and offer to drain the rest. */
 function MoreToLoadNotice() {
   const filterKind = useDriveV2((s) => s.prefs.filterKind);
+  const sortKey = useDriveV2((s) => s.prefs.sortKey);
   const nextPageToken = useDriveV2((s) => s.nextPageToken);
   const loadingAll = useDriveV2((s) => s.loadingAll);
   const listLoading = useDriveV2((s) => s.listLoading);
-  if (!filterKind || !nextPageToken || listLoading) return null;
+  // A name sort is the browse default; sorting by size/modified/type implies "across everything",
+  // where an incomplete ordering is actively wrong (e.g. "largest" showing only page 1's largest).
+  const sortMatters = sortKey === "size" || sortKey === "modified" || sortKey === "kind";
+  if (!nextPageToken || listLoading || (!filterKind && !sortMatters)) return null;
+  const msg = filterKind
+    ? "This filter only covers the items loaded so far — matches on later pages aren't shown yet."
+    : "This sort only covers the items loaded so far — later pages aren't ordered in yet.";
   return (
     <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 text-[12.5px] text-muted">
       <Filter size={14} className="shrink-0 text-primary" />
-      <span className="min-w-0 flex-1">This filter only covers the items loaded so far — matches on later pages aren't shown yet.</span>
+      <span className="min-w-0 flex-1">{msg}</span>
       <Button variant="outline" size="sm" onClick={() => void useDriveV2.getState().loadAll()} disabled={loadingAll}>
         {loadingAll ? <Spinner size={13} /> : null} Load all
       </Button>

@@ -143,10 +143,13 @@ export function DeleteConfirmModal({ ids, permanent, onClose }: { ids: string[];
   useEffect(() => { cancelRef.current?.focus(); }, []);
 
   // Type-to-confirm guards EVERY permanent delete — the guard must scale with blast radius, not
-  // shrink for it. A single item asks for its name; a bulk delete asks for the word DELETE.
-  const requireType = permanent && targets.length > 0;
-  const confirmWord = multi ? "DELETE" : single?.name ?? "";
-  const typeOk = !requireType || (multi ? typed.trim().toUpperCase() === "DELETE" : typed.trim() === confirmWord);
+  // shrink for it. Key it on `ids` (what actually gets deleted), NOT the loaded `targets`: if the
+  // live nodes list no longer holds the ids (a sync/optimistic removal), targets can go empty and
+  // must never disable the guard. A single item asks for its name; anything else asks for DELETE.
+  const requireType = permanent && ids.length > 0;
+  const singleName = !multi ? single?.name : undefined;
+  const confirmWord = singleName ?? "DELETE";
+  const typeOk = !requireType || (confirmWord === "DELETE" ? typed.trim().toUpperCase() === "DELETE" : typed.trim() === confirmWord);
 
   const title = permanent
     ? multi ? `Delete ${ids.length} items forever?` : "Delete forever?"
@@ -182,6 +185,8 @@ export function DeleteConfirmModal({ ids, permanent, onClose }: { ids: string[];
               <div className="text-[11.5px] text-faint">{single.isFolder ? "Folder" : single.size != null ? formatBytes(single.size) : "File"}</div>
             </div>
           </div>
+        ) : targets.length === 0 ? (
+          <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5 text-[12.5px] text-muted">{ids.length} item{ids.length === 1 ? "" : "s"} selected</div>
         ) : (
           <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
             <ul className="space-y-1">
