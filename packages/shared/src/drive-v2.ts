@@ -48,6 +48,8 @@ export function sortDriveNodes<T extends SortableNode>(nodes: T[], key: DriveSor
     if (key === "name") c = nameCollator.compare(a.name, b.name);
     else if (key === "modified") c = (a.modifiedTime ?? "").localeCompare(b.modifiedTime ?? "");
     else if (key === "size") c = (a.size ?? 0) - (b.size ?? 0);
+    // Kind sort tiebreaks by name using the SAME natural/numeric collator as the name sort, so within a
+    // kind "file2" precedes "file10" (consistent with every other name ordering in the app).
     else c = driveKindOf(a).localeCompare(driveKindOf(b)) || nameCollator.compare(a.name, b.name);
     return dir === "asc" ? c : -c;
   });

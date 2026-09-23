@@ -79,6 +79,17 @@ describe("sortDriveNodes", () => {
     expect(sortDriveNodes(nodes, "modified", "asc").map((n) => n.name)).toEqual(["c", "b", "a"]);
   });
 
+  it("sorts by kind, tiebreaking on name with natural/numeric order", () => {
+    const nodes = [
+      node({ name: "b.pdf", mimeType: "application/pdf" }),
+      node({ name: "file10.png", mimeType: "image/png" }),
+      node({ name: "a.pdf", mimeType: "application/pdf" }),
+      node({ name: "file2.png", mimeType: "image/png" }),
+    ];
+    // images (kind "image") sort before pdfs (kind "pdf"); within a kind, natural name order.
+    expect(sortDriveNodes(nodes, "kind", "asc").map((n) => n.name)).toEqual(["file2.png", "file10.png", "a.pdf", "b.pdf"]);
+  });
+
   it("does not mutate the input array", () => {
     const nodes = [node({ name: "b" }), node({ name: "a" })];
     const copy = [...nodes];

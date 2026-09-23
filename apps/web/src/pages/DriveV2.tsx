@@ -184,7 +184,9 @@ function Shell() {
     mq.addEventListener("change", on);
     return () => mq.removeEventListener("change", on);
   }, []);
-  const dockInspector = isLg && !!detailsId && !activityOpen && !insightsOpen;
+  // Dock on lg+ whenever details are open — including while Activity/Insights occupy the main column
+  // (the inspector is a separate third column, so it must not vanish when a panel opens).
+  const dockInspector = isLg && !!detailsId;
 
   // Global ⌘K / Ctrl+K opens the command palette.
   useEffect(() => {
@@ -198,7 +200,9 @@ function Shell() {
   const visible = useMemo(() => {
     const filtered = prefs.filterKind ? nodes.filter((n) => filterBucket(n) === prefs.filterKind) : nodes;
     return sortNodes(filtered, prefs.sortKey, prefs.sortDir);
-  }, [nodes, prefs]);
+    // Depend on the specific fields that affect order — not the whole prefs object, so a density/layout
+    // toggle doesn't force a full re-filter + re-sort of a large folder.
+  }, [nodes, prefs.filterKind, prefs.sortKey, prefs.sortDir]);
   const orderedIds = useMemo(() => visible.map((n) => n.id), [visible]);
   const headerStats = useMemo(
     () => ({
@@ -208,18 +212,17 @@ function Shell() {
     }),
     [visible],
   );
-  // id→size map so the inspector's selection total is O(selection), not O(selection × nodes) inline on
-  // every Shell render (which fires on each sync tick).
-  const sizeById = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const n of nodes) m.set(n.id, n.isFolder ? 0 : n.size ?? 0);
-    return m;
-  }, [nodes]);
+  // The inspector's selection total, via an id→size map so it's O(nodes + selection) rather than
+  // O(selection × nodes) inline on every render. Skips all work when nothing is selected, so an
+  // actively-syncing large folder with no selection doesn't rebuild a map each tick.
   const detailsTotalBytes = useMemo(() => {
+    if (!selection.size) return 0;
+    const sizeById = new Map<string, number>();
+    for (const n of nodes) sizeById.set(n.id, n.isFolder ? 0 : n.size ?? 0);
     let t = 0;
     for (const id of selection) t += sizeById.get(id) ?? 0;
     return t;
-  }, [selection, sizeById]);
+  }, [nodes, selection]);
 
 
   // Route the two frequently-changing values the handlers read (visible order + selection) through refs,
@@ -806,7 +809,13 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
       if (raf) return;
       raf = requestAnimationFrame(() => { raf = 0; if (pending) compute(pending); });
     }
-    function up() { anchor.current = null; setBox(null); if (raf) { cancelAnimationFrame(raf); raf = 0; } pending = null; }
+    function up() {
+      if (pending && anchor.current) compute(pending); // flush the last frame so a fast drag+release doesn't drop items covered only in the final move
+      anchor.current = null;
+      setBox(null);
+      if (raf) { cancelAnimationFrame(raf); raf = 0; }
+      pending = null;
+    }
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); if (raf) cancelAnimationFrame(raf); };

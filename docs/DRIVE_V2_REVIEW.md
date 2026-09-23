@@ -307,8 +307,8 @@ Benchmarked against modern tools; effort tags S/M/L. All feasible with the per-u
 
 ## 6. Suggested execution order
 
-**Implementation status:** Phases A, B, C — ✅ **shipped** (each: implement → verify typecheck/test/build →
-adversarial review workflow → fix confirmed findings → commit). Phases D–F not started.
+**Implementation status:** Phases A, B, C, D — ✅ **shipped** (each: implement → verify typecheck/test/build →
+adversarial review → fix confirmed findings → commit). Phases E–F not started.
 
 - **Phase A — Safety & correctness (P0):** ✅ **shipped.** Empty-Trash confirm, bulk-delete type-to-confirm,
   sort/filter/select-all page-scope, Shared-Drive upload fix, silent-sync-death cluster, error boundary.
