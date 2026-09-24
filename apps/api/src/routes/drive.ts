@@ -22,7 +22,7 @@ import {
   revokeToken,
 } from "../integrations/googleDrive.js";
 import { invalidateAccessToken } from "../integrations/driveTokenCache.js";
-import { aiConfigured } from "../integrations/claude.js";
+import { aiAvailable } from "../integrations/claude.js";
 
 export const driveRouter: Router = Router();
 
@@ -78,8 +78,8 @@ function requireConfigured(): void {
 driveRouter.get(
   "/drive/config",
   ah(async (req, res) => {
-    requireUser(req);
-    res.json({ configured: googleConfigured(), scope: driveScopes(), fullAccess: config.google.fullAccess, pushSync: !!config.google.webhookUrl, ai: aiConfigured() });
+    const uid = requireUser(req);
+    res.json({ configured: googleConfigured(), scope: driveScopes(), fullAccess: config.google.fullAccess, pushSync: !!config.google.webhookUrl, ai: await aiAvailable(uid) });
   }),
 );
 

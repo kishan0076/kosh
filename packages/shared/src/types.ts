@@ -300,6 +300,15 @@ export interface User {
   githubBudget: { remaining: number; total: number; resetAt: string };
   aiSpendToday: number;
   aiSpendCap: number;
+  /** Selected AI provider + optional model override (multi-provider AI; picked in Settings). */
+  aiProvider?: string;
+  aiModel?: string;
+  /** Whether the user can run AI right now (their provider has a usable key: BYOK, server, or local). */
+  aiAvailable?: boolean;
+  /** Per-provider: does the user have their own key stored? (booleans only — never the key.) */
+  aiKeys?: Record<string, boolean>;
+  /** Catalog of selectable AI providers for the Settings picker. */
+  aiProviders?: { id: string; label: string; free: boolean; defaultModel: string; needsKey: boolean; hasServerKey: boolean; hint: string }[];
   /** Opaque, unguessable token for the user's inbound email address (inbox+<token>@…). */
   emailToken?: string;
   /** GitHub connection status (a write-capable token is stored) — never the token itself. */

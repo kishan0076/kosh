@@ -224,6 +224,15 @@ export const api = {
     req<{ apiKey: ApiKeyPublic; key: string }>("/settings/api-keys", { method: "POST", body: JSON.stringify(input) }),
   revokeApiKey: (id: string) => req<{ ok: boolean }>(`/settings/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
+  // AI provider selection + bring-your-own-key. All three return the refreshed user so the caller can
+  // update local state without a separate /me round-trip. `model: ""` clears a model override.
+  updateAiSettings: (input: { provider?: string; model?: string; spendCap?: number }) =>
+    req<{ user: User }>("/settings/ai", { method: "PATCH", body: JSON.stringify(input) }),
+  setAiKey: (provider: string, key: string) =>
+    req<{ user: User }>(`/settings/ai/keys/${encodeURIComponent(provider)}`, { method: "PUT", body: JSON.stringify({ key }) }),
+  clearAiKey: (provider: string) =>
+    req<{ user: User }>(`/settings/ai/keys/${encodeURIComponent(provider)}`, { method: "DELETE" }),
+
   renameTag: (from: string, to: string) => req("/tags/rename", { method: "POST", body: JSON.stringify({ from, to }) }),
   mergeTags: (from: string[], to: string) => req("/tags/merge", { method: "POST", body: JSON.stringify({ from, to }) }),
   deleteTag: (name: string) => req(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" }),

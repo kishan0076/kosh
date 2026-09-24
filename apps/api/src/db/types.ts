@@ -1,7 +1,8 @@
 import type { ApiKey, Collection, Item, Skill, User } from "@kosh/shared";
 
-/** Server-side additions to the shared types. */
-export interface ServerUser extends User {
+/** Server-side additions to the shared types. `aiKeys` is re-typed here: the client sees booleans
+ *  (does a key exist?), the server stores the encrypted keys — so we omit it from User before extending. */
+export interface ServerUser extends Omit<User, "aiKeys"> {
   githubId?: string;
   githubToken?: string; // encrypted at rest in production
   // Connected-GitHub metadata (safe to show; the token above is never exposed).
@@ -12,6 +13,9 @@ export interface ServerUser extends User {
   githubTokenSource?: "oauth" | "pat"; // how the token was obtained (Connect button vs. pasted PAT)
   githubConnectedAt?: string;
   aiSpendDate?: string;
+  aiProvider?: string; // selected AI provider id (default from config.ai.defaultProvider)
+  aiModel?: string; // optional model override for the selected provider
+  aiKeys?: Record<string, string>; // provider id -> encryptSecret(key); bring-your-own-key, never exposed
   telegramChatId?: number;
 }
 export interface ServerItem extends Item {

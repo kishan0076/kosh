@@ -66,10 +66,24 @@ export const config = {
     webhookUrl: env.DRIVE_WEBHOOK_URL || null,
   },
 
-  anthropic: {
-    apiKey: env.ANTHROPIC_API_KEY || null,
-    model: env.ANTHROPIC_MODEL || "claude-haiku-4-5", // cheap bulk summaries/tags
+  // Multi-provider AI. The default provider + per-user selection live in Settings; users can bring their
+  // own key (encrypted) for any provider, and the server can supply fallback keys via these env vars.
+  // Most providers are OpenAI-compatible (one adapter); Anthropic uses its native SDK. See aiProviders.ts.
+  ai: {
     dailyCapUsd: Number(env.AI_DAILY_CAP_USD ?? 2),
+    defaultProvider: env.AI_DEFAULT_PROVIDER || "anthropic",
+    anthropicModel: env.ANTHROPIC_MODEL || null, // optional override of the anthropic default model
+    ollamaBaseUrl: env.OLLAMA_BASE_URL || "http://localhost:11434/v1", // local, keyless
+    keys: {
+      anthropic: env.ANTHROPIC_API_KEY || null,
+      gemini: env.GEMINI_API_KEY || null,
+      groq: env.GROQ_API_KEY || null,
+      cerebras: env.CEREBRAS_API_KEY || null,
+      openrouter: env.OPENROUTER_API_KEY || null,
+      mistral: env.MISTRAL_API_KEY || null,
+      deepseek: env.DEEPSEEK_API_KEY || null,
+      openai: env.OPENAI_API_KEY || null,
+    } as Record<string, string | null>,
   },
 
   telegram: {

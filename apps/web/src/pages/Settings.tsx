@@ -17,11 +17,12 @@ import {
   Share2,
   ShieldCheck,
   Smartphone,
+  Sparkles,
   Tag as TagIcon,
   Terminal,
   Trash2,
 } from "lucide-react";
-import { formatBytes } from "@kosh/shared";
+import { formatBytes, type User } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
@@ -30,9 +31,9 @@ import { api, type ApiKeyPublic } from "@/data/api";
 import { uid } from "@/lib/ids";
 import { ago } from "@/lib/time";
 import { PageHeader, SectionCard } from "@/components/common";
-import { Modal } from "@/components/overlays";
+import { Modal, SelectMenu } from "@/components/overlays";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Avatar, Badge, Button } from "@/components/ui";
+import { Avatar, Badge, Button, Input } from "@/components/ui";
 
 /** Generate a proper random API key locally (mock mode) — same shape the server issues:
  *  "ksh_" + base64url of 24 random bytes. The full key is shown once; only its prefix is kept. */
@@ -388,6 +389,9 @@ export function Settings() {
           )}
         </SectionCard>
 
+        {/* AI provider */}
+        <AiProviderCard user={user} backend={backend} />
+
         {/* tags */}
         <SectionCard
           title="Tag maintenance"
@@ -519,6 +523,180 @@ export function Settings() {
 
       <NewKeyModal newKey={newKey} onClose={() => setNewKey(null)} onCopy={copy} />
     </div>
+  );
+}
+
+/** Pick which model provider runs Kosh's AI features (summaries, auto-tags, NL search, cleanup), override
+ *  the model, bring your own key (encrypted at rest), and tune the daily spend cap. Free-tier and local
+ *  providers never count toward the cap. The server exposes only booleans for stored keys — never the key. */
+function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
+  const toast = useUi((s) => s.toast);
+  const providers = user.aiProviders ?? [];
+  const selected = user.aiProvider ?? providers[0]?.id ?? "anthropic";
+  const current = providers.find((p) => p.id === selected);
+  const hasKey = !!user.aiKeys?.[selected];
+  const ready = current ? !current.needsKey || hasKey || current.hasServerKey : false;
+
+  const [model, setModel] = useState(user.aiModel ?? "");
+  const [keyDraft, setKeyDraft] = useState("");
+  const [cap, setCap] = useState(String(user.aiSpendCap ?? 2));
+  const [busy, setBusy] = useState(false);
+
+  // Re-sync local drafts when the server state changes — e.g. switching provider clears the model override.
+  useEffect(() => setModel(user.aiModel ?? ""), [user.aiModel, user.aiProvider]);
+  useEffect(() => setCap(String(user.aiSpendCap ?? 2)), [user.aiSpendCap]);
+
+  const run = async (fn: () => Promise<{ user: User }>, ok: string): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const { user: next } = await fn();
+      useData.setState({ user: next });
+      toast({ message: ok, tone: "ok" });
+      return true;
+    } catch (err) {
+      toast({ message: "Couldn't update AI settings", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!backend || providers.length === 0) {
+    return (
+      <SectionCard title="AI provider" subtitle="Choose which model powers Kosh's AI features" className="lg:col-span-2">
+        <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5 text-[13px] text-muted">
+          <Sparkles size={16} className="shrink-0" />
+          Demo mode — connect the API to pick a provider (Anthropic, Gemini, Groq, OpenRouter and more) and add your own key.
+        </div>
+      </SectionCard>
+    );
+  }
+
+  const providerOptions = providers.map((p) => ({
+    value: p.id,
+    label: (
+      <span className="flex items-center gap-2">
+        {p.label}
+        {p.free && <span className="rounded-full bg-ok-soft px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-ok">free</span>}
+      </span>
+    ),
+  }));
+
+  const saveKey = async () => {
+    const k = keyDraft.trim();
+    if (k.length < 8) return;
+    if (await run(() => api.setAiKey(selected, k), "Key saved")) setKeyDraft("");
+  };
+  const saveCap = () => {
+    const n = Number(cap);
+    if (Number.isFinite(n) && n >= 0) void run(() => api.updateAiSettings({ spendCap: n }), "Spend cap updated");
+  };
+
+  return (
+    <SectionCard
+      title="AI provider"
+      subtitle="Powers summaries, auto-tags, natural-language search and the cleanup wizard"
+      className="lg:col-span-2"
+      action={<Badge tone={ready ? "ok" : "warn"}>{ready ? "Ready" : "Needs a key"}</Badge>}
+    >
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        {/* provider + status */}
+        <div className="space-y-2">
+          <span className="block text-[12.5px] font-medium text-muted">Provider</span>
+          <SelectMenu
+            value={selected}
+            options={providerOptions}
+            onChange={(id) => void run(() => api.updateAiSettings({ provider: id }), "AI provider updated")}
+            width={300}
+            disabled={busy}
+            ariaLabel="AI provider"
+            className="w-full"
+          />
+          {current && (
+            <p className="text-[12px] leading-snug text-faint">
+              {current.free ? "Has a free tier — usage doesn't count toward your daily spend cap. " : ""}
+              {current.needsKey ? <>Get a key at <span className="font-mono">{current.hint}</span>.</> : current.hint}
+              {current.hasServerKey && !hasKey && current.needsKey ? " A server key is configured as a fallback." : ""}
+            </p>
+          )}
+        </div>
+
+        {/* model override */}
+        <div className="space-y-2">
+          <span className="block text-[12.5px] font-medium text-muted">
+            Model <span className="font-normal text-faint">(optional override)</span>
+          </span>
+          <div className="flex gap-2">
+            <Input
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={current?.defaultModel ?? "provider default"}
+              disabled={busy}
+              className="font-mono text-[13px]"
+            />
+            <Button
+              variant="outline"
+              onClick={() => void run(() => api.updateAiSettings({ model: model.trim() }), "Model saved")}
+              disabled={busy || model.trim() === (user.aiModel ?? "")}
+            >
+              Save
+            </Button>
+          </div>
+          {current && (
+            <p className="text-[12px] text-faint">
+              Leave blank to use <span className="font-mono">{current.defaultModel}</span>.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* BYOK key */}
+      {current?.needsKey && (
+        <div className="mt-4 border-t border-border pt-4">
+          <span className="mb-1.5 block text-[12.5px] font-medium text-muted">Your API key</span>
+          {hasKey ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><Check size={16} /></span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13.5px] font-medium">Your key is saved</div>
+                <div className="text-[12px] text-faint">Stored encrypted; never shown again. Used instead of any server key.</div>
+              </div>
+              <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={() => void run(() => api.clearAiKey(selected), "Key removed")} disabled={busy}>
+                <Trash2 size={15} /> Remove
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                type="password"
+                value={keyDraft}
+                onChange={(e) => setKeyDraft(e.target.value)}
+                placeholder="Paste your API key"
+                className="min-w-0 flex-1 font-mono text-[13px]"
+                disabled={busy}
+              />
+              <Button variant="primary" onClick={saveKey} disabled={busy || keyDraft.trim().length < 8}>
+                <ShieldCheck size={15} /> Save key
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* daily spend cap */}
+      <div className="mt-4 flex flex-wrap items-end gap-x-3 gap-y-2 border-t border-border pt-4">
+        <div className="space-y-1.5">
+          <span className="block text-[12.5px] font-medium text-muted">Daily spend cap (USD)</span>
+          <div className="flex gap-2">
+            <Input type="number" min={0} max={100} step={0.5} value={cap} onChange={(e) => setCap(e.target.value)} className="w-28 tabular" disabled={busy} />
+            <Button variant="outline" onClick={saveCap} disabled={busy || cap === String(user.aiSpendCap)}>
+              Save
+            </Button>
+          </div>
+        </div>
+        <p className="pb-2 text-[12px] text-faint">Paid providers stop once you hit this each day. Free tiers and local models never count.</p>
+      </div>
+    </SectionCard>
   );
 }
 

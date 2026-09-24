@@ -2,11 +2,12 @@ import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { config } from "../config.js";
-import { getStore } from "../db/index.js";
-import { ah, forbidden, unauthorized } from "../errors.js";
+import { getStore, type ServerUser } from "../db/index.js";
+import { ah, badRequest, forbidden, unauthorized } from "../errors.js";
 import { getOrCreateUser, newEmailToken, publicUser } from "./users.js";
-import { requireUser } from "./middleware.js";
+import { requireUser, requireWrite } from "./middleware.js";
 import { encryptSecret } from "./crypto.js";
+import { isProviderId } from "../integrations/aiProviders.js";
 import { SESSION_COOKIE, signSession } from "./jwt.js";
 import { generateApiKey } from "./apikey.js";
 
@@ -148,5 +149,75 @@ authRouter.delete(
     if (!record || record.userId !== uid) throw unauthorized();
     await getStore().apiKeys.updateById(record.id, { revokedAt: new Date().toISOString() });
     res.json({ ok: true });
+  }),
+);
+
+/* ── AI provider settings ─────────────────────────────────────────
+ * Pick which model provider runs the AI features, optionally override the model, and tune the daily
+ * spend cap. BYOK keys (below) are encrypted at rest and never returned — publicUser exposes only a
+ * per-provider boolean. Server env keys act as a fallback when the user hasn't stored their own. */
+authRouter.patch(
+  "/settings/ai",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const { provider, model, spendCap } = z
+      .object({
+        provider: z.string().max(40).optional(),
+        model: z.string().max(120).optional(), // "" clears the override → provider default
+        spendCap: z.number().min(0).max(100).optional(),
+      })
+      .parse(req.body);
+    const store = getStore();
+    const user = await store.users.findById(uid);
+    if (!user) throw unauthorized();
+
+    const patch: Partial<ServerUser> = {};
+    if (provider !== undefined) {
+      if (!isProviderId(provider)) throw badRequest("BAD_PROVIDER", "Unknown AI provider.");
+      patch.aiProvider = provider;
+      // A model override belongs to the provider it was set for — drop it when the provider changes,
+      // unless the same request also sets a new model.
+      if (provider !== user.aiProvider && model === undefined) patch.aiModel = undefined;
+    }
+    if (model !== undefined) patch.aiModel = model.trim() || undefined;
+    if (spendCap !== undefined) patch.aiSpendCap = Math.round(spendCap * 100) / 100;
+
+    const updated = (await store.users.updateById(uid, patch)) ?? user;
+    res.json({ user: publicUser(updated) });
+  }),
+);
+
+/** Store a bring-your-own-key for a provider (encrypted at rest). Read-modify-write of the aiKeys map,
+ *  since the persistence layer patches whole fields (no sub-key $set). */
+authRouter.put(
+  "/settings/ai/keys/:provider",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const provider = String(req.params.provider);
+    if (!isProviderId(provider)) throw badRequest("BAD_PROVIDER", "Unknown AI provider.");
+    const { key } = z.object({ key: z.string().trim().min(1).max(400) }).parse(req.body);
+    const store = getStore();
+    const user = await store.users.findById(uid);
+    if (!user) throw unauthorized();
+    const aiKeys = { ...(user.aiKeys ?? {}), [provider]: encryptSecret(key) };
+    const updated = (await store.users.updateById(uid, { aiKeys })) ?? user;
+    res.json({ user: publicUser(updated) });
+  }),
+);
+
+/** Remove a stored BYOK key (the server env key, if any, becomes the fallback again). */
+authRouter.delete(
+  "/settings/ai/keys/:provider",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const provider = String(req.params.provider);
+    if (!isProviderId(provider)) throw badRequest("BAD_PROVIDER", "Unknown AI provider.");
+    const store = getStore();
+    const user = await store.users.findById(uid);
+    if (!user) throw unauthorized();
+    const aiKeys = { ...(user.aiKeys ?? {}) };
+    delete aiKeys[provider];
+    const updated = (await store.users.updateById(uid, { aiKeys })) ?? user;
+    res.json({ user: publicUser(updated) });
   }),
 );
