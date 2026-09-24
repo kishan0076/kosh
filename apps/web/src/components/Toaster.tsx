@@ -1,3 +1,4 @@
+import { useEffect, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { CheckCircle2, Info, X, AlertTriangle, XCircle } from "lucide-react";
 import { useUi } from "@/data/ui";
@@ -18,12 +19,27 @@ const TONE_COLOR = {
   danger: "text-danger",
 };
 
+/** Publish a bottom-anchored bar's height as `--bottom-stack` (px, on <html>) while it is mounted, so the
+ *  Toaster rises above it instead of covering it (Drive V2's upload tray, GitHub's selection bar). */
+export function useBottomStack(ref: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const publish = () => root.style.setProperty("--bottom-stack", `${el.scrollHeight}px`);
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => { ro.disconnect(); root.style.removeProperty("--bottom-stack"); };
+  }, [ref]);
+}
+
 export function Toaster() {
   const toasts = useUi((s) => s.toasts);
   const dismiss = useUi((s) => s.dismissToast);
 
   return (
-    <div className="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 flex-col gap-2 pb-safe sm:left-auto sm:right-4 sm:translate-x-0">
+    <div className="pointer-events-none fixed bottom-[calc(1rem+var(--bottom-stack,0px))] left-1/2 z-[70] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 flex-col gap-2 pb-safe sm:left-auto sm:right-4 sm:translate-x-0">
       <AnimatePresence>
         {toasts.map((t) => {
           const Icon = TONE_ICON[t.tone ?? "default"];

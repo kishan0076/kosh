@@ -85,6 +85,7 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
   const toggleItemCollection = useData((s) => s.toggleItemCollection);
   const openItem = useUi((s) => s.openItem);
   const toast = useUi((s) => s.toast);
+  const dismissToast = useUi((s) => s.dismissToast);
   const navigate = useNavigate();
   const reveal = useReveal(index);
 
@@ -95,12 +96,13 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
   const risky = version?.scan.risky;
 
   const onDelete = () => {
-    softDelete(item.id);
-    toast({
+    const id = toast({
       message: "Moved to Trash",
       description: item.title,
       action: { label: "Undo", onClick: () => restore(item.id) },
     });
+    // A failed DELETE rolls the item back; drop the Undo toast so it doesn't sit next to an item that's still there.
+    softDelete(item.id, { onError: () => dismissToast(id) });
   };
 
   const copyInstall = () => {

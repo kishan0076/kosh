@@ -4,8 +4,8 @@ export type Hint = { kind: Capture["kind"]; label: string };
 
 const LABELS: Record<Capture["kind"], string> = {
   empty: "Save",
-  search: "Save",
-  command: "Run",
+  search: "Search",
+  command: "Search",
   link: "Save link",
   repo: "Add repo",
 };

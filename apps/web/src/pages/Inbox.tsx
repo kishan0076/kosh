@@ -23,6 +23,7 @@ export function Inbox() {
   const openItem = useUi((s) => s.openItem);
   const openVerdict = useUi((s) => s.openVerdict);
   const toast = useUi((s) => s.toast);
+  const dismissToast = useUi((s) => s.dismissToast);
   const touch = useMediaQuery("(pointer: coarse)");
 
   const queue = inbox(items);
@@ -44,8 +45,9 @@ export function Inbox() {
   };
   const del = () => {
     if (!current) return;
-    softDelete(current.id);
-    toast({ message: "Deleted", description: current.title, action: { label: "Undo", onClick: () => restore(current.id) } });
+    const id = toast({ message: "Deleted", description: current.title, action: { label: "Undo", onClick: () => restore(current.id) } });
+    // A failed DELETE rolls the item back; drop the Undo toast so it doesn't outlive the delete.
+    softDelete(current.id, { onError: () => dismissToast(id) });
   };
 
   useEffect(() => {

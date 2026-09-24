@@ -51,7 +51,7 @@ export function BulkRenameModal({ ids, onClose }: { ids: string[]; onClose: () =
       const next = rename1(n.name, n.isFolder, i);
       if (next === n.name) continue;
       try {
-        await rename(n.id, next);
+        await rename(n.id, next, { silent: true }); // one summary toast below, not one per item
         ok++;
       } catch {
         /* rename() already toasts on failure */

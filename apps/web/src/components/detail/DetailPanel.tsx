@@ -340,6 +340,7 @@ function ItemBody({ item }: { item: Item }) {
   const extractLinks = useData((s) => s.extractLinks);
   const snapshotSkills = useData((s) => s.snapshotSkills);
   const toast = useUi((s) => s.toast);
+  const dismissToast = useUi((s) => s.dismissToast);
   const closePanel = useUi((s) => s.closePanel);
   const [fillOpen, setFillOpen] = useState(false);
   const [busy, setBusy] = useState<null | "extract" | string>(null);
@@ -587,9 +588,10 @@ function ItemBody({ item }: { item: Item }) {
           size="sm"
           className="text-danger hover:bg-danger-soft"
           onClick={() => {
-            softDelete(item.id);
+            const id = toast({ message: "Moved to Trash", description: item.title, action: { label: "Undo", onClick: () => restore(item.id) } });
+            // A failed DELETE rolls the item back; drop the Undo toast so it doesn't outlive the delete.
+            softDelete(item.id, { onError: () => dismissToast(id) });
             closePanel();
-            toast({ message: "Moved to Trash", description: item.title, action: { label: "Undo", onClick: () => restore(item.id) } });
           }}
         >
           <Trash2 size={15} /> Delete

@@ -1,13 +1,29 @@
 import { useEffect, useState } from "react";
-import { Download, History, Pin, PinOff, Trash2 } from "lucide-react";
+import { Download, History, Pin, PinOff, RefreshCw, Trash2 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { ago } from "@/lib/time";
 import { cn } from "@/lib/cn";
-import { Button, Spinner } from "@/components/ui";
+import { Button, Skeleton, Spinner } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { useUi } from "@/data/ui";
 import { driveV2Api, type DriveNode, type DriveRevision } from "@/data/driveV2Api";
 import { useDriveV2 } from "@/data/driveV2";
+
+// Row icon actions (download / pin / delete) share one hit box: 32px at rest, the 40px floor on touch.
+const ROW_ICON = "grid h-8 w-8 place-items-center rounded-md hover:bg-surface-2 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10";
+
+/** A revision-row silhouette (two text lines, the action cluster) — same height as a real row. */
+function RevisionSkeleton() {
+  return (
+    <div className="flex items-center gap-3 py-2.5">
+      <div className="min-w-0 flex-1 space-y-2">
+        <Skeleton className="h-3.5 w-2/5" />
+        <Skeleton className="h-3 w-3/5" />
+      </div>
+      <Skeleton className="h-8 w-[68px] [@media(pointer:coarse)]:h-10" />
+    </div>
+  );
+}
 
 export function RevisionsModal({ node, onClose }: { node: DriveNode; onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId)!;
@@ -69,9 +85,14 @@ export function RevisionsModal({ node, onClose }: { node: DriveNode; onClose: ()
       </div>
       <div className="max-h-[60vh] overflow-y-auto px-5 py-3">
         {loading ? (
-          <div className="grid place-items-center py-10"><Spinner size={20} className="text-muted" /></div>
+          <div role="status" aria-busy="true" aria-label="Loading versions" className="divide-y divide-border">
+            {[0, 1, 2].map((i) => <RevisionSkeleton key={i} />)}
+          </div>
         ) : error ? (
-          <p className="py-3 text-[13px] text-danger">{error}</p>
+          <div className="flex flex-wrap items-center gap-2 py-3 text-[13px] text-danger">
+            <span className="min-w-0 flex-1">{error}</span>
+            <Button variant="outline" size="sm" onClick={() => void load()}><RefreshCw size={14} /> Try again</Button>
+          </div>
         ) : revs.length === 0 ? (
           <p className="py-3 text-[13px] text-muted">No prior versions. Google-native docs (Docs/Sheets/Slides) keep history in Drive itself.</p>
         ) : (
@@ -81,8 +102,8 @@ export function RevisionsModal({ node, onClose }: { node: DriveNode; onClose: ()
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 text-[13px] font-medium">
                     {r.modifiedTime ? ago(r.modifiedTime) : "Unknown time"}
-                    {i === 0 && <span className="rounded-full bg-ok-soft px-1.5 text-[10px] text-ok">current</span>}
-                    {r.keepForever && <span className="inline-flex items-center gap-0.5 rounded-full bg-primary-soft px-1.5 text-[10px] text-primary"><Pin size={9} /> kept</span>}
+                    {i === 0 && <span className="rounded-full bg-ok-soft px-1.5 py-0.5 text-[11px] text-ok">current</span>}
+                    {r.keepForever && <span className="inline-flex items-center gap-0.5 rounded-full bg-primary-soft px-1.5 py-0.5 text-[11px] text-primary"><Pin size={9} /> kept</span>}
                   </div>
                   <div className="text-[11.5px] text-faint">{r.lastModifyingUser?.displayName ?? "Someone"}{r.size != null ? ` · ${formatBytes(r.size)}` : ""}</div>
                 </div>
@@ -90,11 +111,11 @@ export function RevisionsModal({ node, onClose }: { node: DriveNode; onClose: ()
                   <Spinner size={14} className="text-muted" />
                 ) : (
                   <div className="flex items-center gap-0.5">
-                    <button onClick={() => void download(node.id, r.id, node.name)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-primary" aria-label="Download this version" title="Download this version"><Download size={15} /></button>
-                    <button onClick={() => void toggleKeep(r)} className={cn("grid h-8 w-8 place-items-center rounded-md hover:bg-surface-2", r.keepForever ? "text-primary" : "text-muted hover:text-primary")} aria-label={r.keepForever ? "Unpin this version" : "Keep this version forever"} title={r.keepForever ? "Unpin (allow auto-cleanup)" : "Keep forever (pin)"}>
+                    <button onClick={() => void download(node.id, r.id, node.name)} className={cn(ROW_ICON, "text-muted hover:text-primary")} aria-label="Download this version" title="Download this version"><Download size={15} /></button>
+                    <button onClick={() => void toggleKeep(r)} className={cn(ROW_ICON, r.keepForever ? "text-primary" : "text-muted hover:text-primary")} aria-label={r.keepForever ? "Unpin this version" : "Keep this version forever"} title={r.keepForever ? "Unpin (allow auto-cleanup)" : "Keep forever (pin)"}>
                       {r.keepForever ? <Pin size={15} /> : <PinOff size={15} />}
                     </button>
-                    {i !== 0 && <button onClick={() => remove(r)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-danger" aria-label="Delete this version" title="Delete this version"><Trash2 size={15} /></button>}
+                    {i !== 0 && <button onClick={() => remove(r)} className={cn(ROW_ICON, "text-muted hover:text-danger")} aria-label="Delete this version" title="Delete this version"><Trash2 size={15} /></button>}
                   </div>
                 )}
               </div>

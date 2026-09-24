@@ -371,13 +371,15 @@
     --ease-exit: cubic-bezier(0.3, 0, 1, 1);
   }
 
-  /* Cheap, GPU-friendly reveal for VIRTUALIZED rows/cards (never wrap those in framer motion.*). */
+  /* Cheap, GPU-friendly reveal for VIRTUALIZED rows/cards (never wrap those in framer motion.*).
+     `backwards`, not `both`: a forwards-filled `transform: none` would keep overriding the
+     .card-hover hover/active transforms after the reveal. */
   @keyframes kosh-reveal-in {
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: none; }
   }
   .reveal-in {
-    animation: kosh-reveal-in var(--motion-base) var(--ease-standard) both;
+    animation: kosh-reveal-in var(--motion-base) var(--ease-standard) backwards;
   }
 
   /* Indeterminate progress sweep (HydrationBar): a 40%-wide bar slides edge to edge inside its track

@@ -47,6 +47,7 @@ import { useGithubV2, visibleRepos, ghToast, type RepoFilter } from "@/data/gith
 import { GitHubMark } from "@/lib/icons";
 import { Badge, Button, Input } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, Modal } from "@/components/overlays";
+import { useBottomStack } from "@/components/Toaster";
 import { EmptyState } from "@/components/common";
 import { Markdown } from "@/components/markdown";
 import { FadeSwap, Reveal } from "@/components/motion";
@@ -274,8 +275,11 @@ function SelectionBar({ repos, onAction, onClear }: { repos: RepoSummary[]; onAc
   // Phones: a full-width bar hugging the bottom safe area with icon-only actions (labelled for AT);
   // sm+: the floating pill with labels. z-40 sits under the bulk modal (z-50) and the toaster (z-70).
   const actionCls = "min-w-10 px-2.5 sm:min-w-0 sm:px-3";
+  // Publishes its height as --bottom-stack so a toast (bulk result) lands above the bar, not on it.
+  const ref = useRef<HTMLDivElement>(null);
+  useBottomStack(ref);
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 mb-safe flex justify-center px-3 pb-3 sm:bottom-4 sm:px-4 sm:pb-0">
+    <div ref={ref} className="pointer-events-none fixed inset-x-0 bottom-0 z-40 mb-safe flex justify-center px-3 pb-3 sm:bottom-4 sm:px-4 sm:pb-0">
       <Reveal className="pointer-events-auto flex w-full items-center gap-1 rounded-2xl border border-border bg-elevated px-2 py-1.5 shadow-[var(--shadow-pop)] sm:w-auto sm:gap-2 sm:rounded-full sm:px-3 sm:py-2">
         <span className="shrink-0 px-2 text-[13px] font-semibold tabular sm:px-1">{repos.length} selected</span>
         <span className="hidden h-4 w-px bg-border sm:block" />

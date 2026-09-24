@@ -47,9 +47,10 @@ export function StatTile({
   children?: ReactNode;
 }) {
   return (
-    <div className="group relative overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface p-4 card-hover">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[13px] font-medium text-muted">
+    <div className="group relative overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface p-3 card-hover sm:p-4">
+      {/* The delta pill drops under the label rather than breaking "To try" mid-word in a 2-up phone grid. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-1">
+        <div className="flex items-center gap-2 whitespace-nowrap text-[13px] font-medium text-muted">
           <span className="grid h-7 w-7 place-items-center rounded-lg" style={{ backgroundColor: `color-mix(in oklab, ${accent} 14%, transparent)`, color: accent }}>
             <Icon size={15} strokeWidth={2} />
           </span>
@@ -58,7 +59,7 @@ export function StatTile({
         {delta}
       </div>
       <div className="mt-3 flex items-end justify-between gap-2">
-        <div className="font-display text-[27px] font-semibold leading-none">{value}</div>
+        <div className="font-display text-[24px] font-semibold leading-none sm:text-[27px]">{value}</div>
         {children}
       </div>
       {hint && <div className="mt-2 text-[11.5px] text-muted">{hint}</div>}

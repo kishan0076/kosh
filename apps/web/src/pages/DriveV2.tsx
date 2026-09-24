@@ -41,6 +41,7 @@ import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { useBottomStack } from "@/components/Toaster";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, useBodyScrollLock } from "@/components/overlays";
 import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { startConnect } from "@/lib/connect";
@@ -501,7 +502,7 @@ function Shell() {
       )}
 
       {/* Bottom-anchored layers stack in one column (bulk-op progress above the upload tray) so neither
-          hides the other; the stack's height is published as --drive-bottom-stack for the Toaster. */}
+          hides the other; the stack's height is published as --bottom-stack for the Toaster. */}
       {createPortal(
         <BottomStack>
           <BulkProgress />
@@ -971,19 +972,10 @@ function BulkProgress() {
 }
 
 /** The column of bottom-anchored cards (bulk progress, upload tray). Sits above the home indicator and
- *  publishes its height as `--drive-bottom-stack` on <html> so the Toaster can rise above it. */
+ *  publishes its height as `--bottom-stack` on <html> so the Toaster can rise above it. */
 function BottomStack({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const root = document.documentElement;
-    const publish = () => root.style.setProperty("--drive-bottom-stack", `${el.scrollHeight}px`);
-    publish();
-    const ro = new ResizeObserver(publish);
-    ro.observe(el);
-    return () => { ro.disconnect(); root.style.removeProperty("--drive-bottom-stack"); };
-  }, []);
+  useBottomStack(ref);
   return (
     <div ref={ref} className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-stretch gap-2 px-4 pb-[calc(1rem+var(--safe-bottom))] sm:items-end">
       {children}

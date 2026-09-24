@@ -219,7 +219,11 @@ function AccountPicker() {
   const remove = (id: string, email: string) =>
     openConfirm({
       title: "Disconnect this Google account?",
-      message: `Kosh will forget its access to ${email}. Files already in Drive are untouched.`,
+      message: (
+        <>
+          Kosh will forget its access to <b className="break-all font-medium text-foreground">{email}</b>. Files already in Drive are untouched.
+        </>
+      ),
       confirmLabel: "Disconnect",
       onConfirm: async () => {
         try {

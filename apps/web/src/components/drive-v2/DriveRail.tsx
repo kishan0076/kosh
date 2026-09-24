@@ -149,9 +149,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
       >
         <MenuLabel>Google accounts</MenuLabel>
         {accounts.map((a) => (
-          <MenuItem key={a.id} icon={a.id === accountId ? Check : HardDrive} onClick={() => { void useDriveV2.getState().selectAccount(a.id); onNavigate?.(); }}>
-            <span className="truncate">{a.email}</span>
-          </MenuItem>
+          <MenuItem key={a.id} icon={a.id === accountId ? Check : HardDrive} onClick={() => { void useDriveV2.getState().selectAccount(a.id); onNavigate?.(); }}>{a.email}</MenuItem>
         ))}
         <MenuItem icon={Plus} onClick={() => { void startConnect("google", "drive-v2"); }}>Connect account</MenuItem>
         {spaces.length > 0 && (
@@ -160,9 +158,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
             <MenuLabel>Spaces</MenuLabel>
             <MenuItem icon={spaceId === null ? Check : HardDrive} onClick={() => { void useDriveV2.getState().selectSpace(null); onNavigate?.(); }}>My Drive</MenuItem>
             {spaces.map((d) => (
-              <MenuItem key={d.id} icon={spaceId === d.id ? Check : Users} onClick={() => { void useDriveV2.getState().selectSpace(d.id); onNavigate?.(); }}>
-                <span className="truncate">{d.name}</span>
-              </MenuItem>
+              <MenuItem key={d.id} icon={spaceId === d.id ? Check : Users} onClick={() => { void useDriveV2.getState().selectSpace(d.id); onNavigate?.(); }}>{d.name}</MenuItem>
             ))}
           </>
         )}
@@ -178,7 +174,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
             align="start"
             width={180}
             trigger={({ toggle, ref }) => (
-              <button ref={ref} onClick={toggle} className="grid w-9 place-items-center bg-primary text-primary-foreground transition-colors hover:bg-primary-hover" aria-label="More create options"><ChevronRight size={15} className="rotate-90" /></button>
+              <button ref={ref} onClick={toggle} className="grid w-9 place-items-center bg-primary text-primary-foreground transition-colors hover:bg-primary-hover [@media(pointer:coarse)]:w-10" aria-label="More create options"><ChevronRight size={15} className="rotate-90" /></button>
             )}
           >
             <MenuItem icon={FolderPlus} onClick={onNewFolder}>New folder</MenuItem>
@@ -231,10 +227,10 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
           <button onClick={() => useDriveV2.getState().setInsights(true)} className="block w-full rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 text-left transition-colors hover:border-border-strong">
             <div className="flex items-baseline justify-between">
               <span className="font-display text-[20px] tabular leading-none">{quota.limit ? pctLabel : formatBytes(quota.usage)}</span>
-              {quota.limit && pct > 80 && <span className="rounded-[var(--radius-chip)] bg-gold-soft px-1.5 py-0.5 text-[10px] font-semibold text-gold">Reclaim space</span>}
+              {quota.limit && pct > 80 && <span className="rounded-[var(--radius-chip)] bg-gold-soft px-1.5 py-0.5 text-[11px] font-semibold text-gold">Reclaim space</span>}
             </div>
             {quota.limit ? <Progress value={barVal} className="mt-2" tone={pct > 95 ? "danger" : pct > 80 ? "warn" : "primary"} /> : null}
-            <div className="mt-1.5 font-mono text-[10.5px] tabular text-muted">{quota.limit ? `${formatBytes(quota.usage)} / ${formatBytes(quota.limit)}` : "used"}</div>
+            <div className="mt-1.5 font-mono text-[11.5px] tabular text-muted">{quota.limit ? `${formatBytes(quota.usage)} / ${formatBytes(quota.limit)}` : "used"}</div>
           </button>
         )}
         {!isDrawer && (

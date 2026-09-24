@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
 import {
@@ -29,6 +29,7 @@ import { Button, Kbd } from "../ui";
 
 export function CommandPalette() {
   const open = useUi((s) => s.paletteOpen);
+  const paletteQuery = useUi((s) => s.paletteQuery);
   const setPalette = useUi((s) => s.setPalette);
   const openItem = useUi((s) => s.openItem);
   const toast = useUi((s) => s.toast);
@@ -37,6 +38,10 @@ export function CommandPalette() {
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const phone = useMediaQuery(PHONE_QUERY);
+  // Open pre-filled with whatever the opener handed over (Quick-Add free text, "/settings"); close() clears it.
+  useEffect(() => {
+    if (open) setSearch(paletteQuery);
+  }, [open, paletteQuery]);
 
   const intent = parseCapture(search);
   const isSave = intent.kind === "link" || intent.kind === "repo";

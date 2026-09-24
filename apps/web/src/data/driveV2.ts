@@ -191,7 +191,8 @@ interface DriveV2State {
   setPreview: (node: DriveNode | null) => void;
 
   createFolder: (input: { name: string; parentId: string; folderColorRgb?: string; description?: string }) => Promise<void>;
-  rename: (id: string, name: string) => Promise<void>;
+  /** `silent` skips the per-item "Renamed to …" toast (bulk rename shows one summary instead). */
+  rename: (id: string, name: string, opts?: { silent?: boolean }) => Promise<void>;
   toggleStar: (id: string) => Promise<void>;
   toggleStarMany: (ids: string[]) => Promise<void>;
   trash: (ids: string[]) => Promise<void>;
@@ -1167,7 +1168,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       }
     },
 
-    rename: async (id, name) => {
+    rename: async (id, name, opts) => {
       const accountId = get().accountId;
       if (!accountId) return;
       const prevName = get().nodes.find((n) => n.id === id)?.name;
@@ -1176,7 +1177,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         set((s) => ({ nodes: s.nodes.map((n) => (n.id === id ? file : n)), detailsNode: s.detailsId === id ? file : s.detailsNode }));
         invalidateFolderViews(); // else re-navigating within the 30s cache TTL shows the old name
       });
-      if (ok && prevName && prevName !== name) {
+      if (ok && prevName && prevName !== name && !opts?.silent) {
         pushToast({ message: `Renamed to "${name}"`, tone: "default", action: { label: "Undo", onClick: () => void get().rename(id, prevName) } });
       }
     },

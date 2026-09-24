@@ -33,8 +33,6 @@ export function QuickAdd() {
 
   const hint = detectHint(value);
   const isSave = isSaveKind(hint.kind);
-  // Commands and free text are the palette's job (search + commands live there), so the button says so.
-  const label = isSave || hint.kind === "empty" ? hint.label : "Search";
 
   useEffect(() => {
     const onDragEnter = (e: DragEvent) => {
@@ -73,8 +71,9 @@ export function QuickAdd() {
   const submit = (raw = value) => {
     const text = raw.trim();
     if (!text) return;
+    // Free text and commands land in the palette pre-filled (search + commands live there).
     if (!isSaveKind(detectHint(text).kind)) {
-      setPalette(true);
+      setPalette(true, text);
       return;
     }
     const { item, duplicate } = ingestUrl(text, { source: "web" });
@@ -113,10 +112,35 @@ export function QuickAdd() {
   };
 
   const saveDrafts = () => {
+    const before = new Set(useData.getState().items.map((i) => i.id));
     const created = finalizeDrafts(drafts, "web");
-    toast({ message: `Saved ${created.length} item${created.length > 1 ? "s" : ""}`, tone: "ok" });
     setDrafts([]);
     navigate("/library");
+    const saved = (n: number) => n > 0 && toast({ message: `Saved ${n} item${n > 1 ? "s" : ""}`, tone: "ok" });
+    if (!useData.getState().backend) {
+      saved(created.length);
+      return;
+    }
+    // With a backend the rows land optimistically and settle later: each optimistic row is removed on
+    // success (replaced by the server row under a new id) AND on failure (the store toasts the failures
+    // itself, aggregated with a Retry). So count only once every optimistic row is gone — the new ids
+    // that remain are the successes. Judged a beat after each change, once the store has settled.
+    const optimistic = new Set(created.map((i) => i.id));
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      const items = useData.getState().items;
+      if (items.some((i) => optimistic.has(i.id))) return;
+      done = true;
+      stop();
+      window.clearTimeout(giveUp);
+      saved(items.filter((i) => !before.has(i.id) && !i.deletedAt).length);
+    };
+    const stop = useData.subscribe(() => window.setTimeout(finish, 50));
+    const giveUp = window.setTimeout(() => {
+      done = true;
+      stop();
+    }, 10 * 60_000);
   };
 
   /** Read the clipboard into the bar; with `save`, a pasted link is submitted straight away (one tap). */
@@ -170,7 +194,7 @@ export function QuickAdd() {
           <FolderUp size={17} />
         </Button>
         <Button variant={isSave ? "primary" : "secondary"} onClick={() => submit()} disabled={!value.trim()} className="shrink-0">
-          {label}
+          {hint.label}
         </Button>
         <input
           ref={fileInput}
