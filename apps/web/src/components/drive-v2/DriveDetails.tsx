@@ -202,6 +202,7 @@ function CommentsSection({ node }: { node: DriveNode }) {
     try {
       const { comment } = await driveV2Api.addComment(accountId, node.id, content);
       setComments((cs) => [comment, ...cs]);
+      setError(null); // a transient initial-load error must not keep hiding the list now that we have a comment
       setDraft("");
     } catch (err) {
       toast({ message: err instanceof Error ? err.message : "Couldn't add the comment", tone: "danger" });

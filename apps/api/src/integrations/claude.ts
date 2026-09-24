@@ -74,21 +74,24 @@ export async function reserveBudget(userId: string, estCost: number): Promise<bo
 }
 
 /** Return a reservation to the user's daily budget when the call produced nothing (e.g. model error).
- *  Only refunds spend recorded TODAY, floored at 0, and serialized with reserveBudget. */
-export async function refundBudget(userId: string, estCost: number): Promise<void> {
+ *  `reservedDate` is the day the reservation was made (from ensureAiBudget/reserveBudget); the refund is
+ *  skipped once the day has rolled over so it can never subtract from a NEW day's fresh spend. */
+export async function refundBudget(userId: string, estCost: number, reservedDate: string): Promise<void> {
   await withUserLock(userId, async () => {
     const store = getStore();
     const user = await store.users.findById(userId);
-    if (!user || user.aiSpendDate !== today()) return;
+    if (!user || user.aiSpendDate !== reservedDate) return;
     const refunded = Math.max(0, Math.round((user.aiSpendToday - estCost) * 10000) / 10000);
     await store.users.updateById(userId, { aiSpendToday: refunded });
   });
 }
 
-/** Gate an interactive AI call: throw if unconfigured or over the daily cap, else reserve the estimate. */
-export async function ensureAiBudget(userId: string, estCost: number): Promise<void> {
+/** Gate an interactive AI call: throw if unconfigured or over the daily cap, else reserve the estimate.
+ *  Returns the day the reservation was charged against — pass it to refundBudget on failure. */
+export async function ensureAiBudget(userId: string, estCost: number): Promise<string> {
   if (!aiConfigured()) throw new AiNotConfiguredError();
   if (!(await reserveBudget(userId, estCost))) throw new AiBudgetError();
+  return today();
 }
 
 /** Low-level, uncapped model call. Returns the first text block, or null (no key / all retries failed). */
@@ -112,32 +115,33 @@ export async function completeText(input: { system: string; prompt: string; maxT
   return null;
 }
 
-/** Extract the FIRST balanced `{…}` JSON object from model text (string-aware, so trailing prose or
- *  a stray `}` inside the reply doesn't break it). Returns null if none parses. */
+/** Extract the first PARSEABLE balanced `{…}` JSON object from model text (string-aware). Trailing prose,
+ *  a stray `}`, or even a stray `{` in prose before the real object won't break it — each `{` is tried as a
+ *  start and, if its balanced span doesn't parse, the scan advances to the next `{`. Returns null if none parse. */
 export function extractJson<T>(text: string | null): T | null {
   if (!text) return null;
-  const start = text.indexOf("{");
-  if (start < 0) return null;
-  let depth = 0;
-  let inStr = false;
-  let esc = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (ch === "\\") esc = true;
-      else if (ch === '"') inStr = false;
-    } else if (ch === '"') {
-      inStr = true;
-    } else if (ch === "{") {
-      depth++;
-    } else if (ch === "}") {
-      depth--;
-      if (depth === 0) {
-        try {
-          return JSON.parse(text.slice(start, i + 1)) as T;
-        } catch {
-          return null;
+  for (let start = text.indexOf("{"); start !== -1; start = text.indexOf("{", start + 1)) {
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === '"') inStr = false;
+      } else if (ch === '"') {
+        inStr = true;
+      } else if (ch === "{") {
+        depth++;
+      } else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.slice(start, i + 1)) as T;
+          } catch {
+            break; // this candidate span didn't parse — try the next '{'
+          }
         }
       }
     }
@@ -145,15 +149,20 @@ export function extractJson<T>(text: string | null): T | null {
   return null;
 }
 
-/** Budget-aware summary for a user. Skips (returns null) when unconfigured or the daily cap is reached. */
+/** Budget-aware summary for a user. Skips (returns null) when unconfigured or the daily cap is reached,
+ *  and refunds the reservation when the model produced nothing (so a failure can't drain the daily cap). */
 export async function summarizeForUser(userId: string, input: { title?: string; url?: string; text: string; existingTags?: string[] }): Promise<AiEnrichment | null> {
   if (!config.anthropic.apiKey) return null;
-  const estCost = estimateCostUsd(SYSTEM.length + input.text.length + (input.title?.length ?? 0), 400);
+  // Estimate on what summarize() actually sends (it slices content to 6000 chars) — not the full text.
+  const estCost = estimateCostUsd(SYSTEM.length + input.text.slice(0, 6000).length + (input.title?.length ?? 0) + (input.url?.length ?? 0), 400);
+  const reservedDate = today();
   if (!(await reserveBudget(userId, estCost))) {
     logger.info({ userId }, "ai daily spend cap reached — skipping summary");
     return null;
   }
-  return summarize(input);
+  const result = await summarize(input);
+  if (!result) await refundBudget(userId, estCost, reservedDate);
+  return result;
 }
 
 const SYSTEM = `You describe saved web content for a personal library.

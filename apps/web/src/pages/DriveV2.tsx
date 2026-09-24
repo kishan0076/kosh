@@ -191,7 +191,7 @@ function Shell() {
             const delta = unread - prev;
             const latest = s.activity[0];
             const body = latest
-              ? `${latest.name} ${ACTION_META[latest.action].verb}${delta > 1 ? ` · +${delta - 1} more` : ""}`
+              ? `${latest.name} ${ACTION_META[latest.action]?.verb ?? "changed"}${delta > 1 ? ` · +${delta - 1} more` : ""}`
               : `${delta} change${delta === 1 ? "" : "s"} in your Drive`;
             try {
               // One coalescing tag so repeated pings replace rather than stack; click returns to this tab.

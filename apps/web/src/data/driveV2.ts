@@ -836,7 +836,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     selectAccount: async (id) => {
       tokenCache = null;
       syncToken = null; syncGen++; // new corpus → re-anchor sync; invalidate any in-flight poll
-      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [], unread: 0, rootFolderId: null });
+      set({ accountId: id, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, quota: null, insightsOpen: false, spaces: [], spaceId: null, spaceName: null, activity: [], unread: 0, searchQuery: "", aiSearchQuery: null, aiSearchNote: null, rootFolderId: null });
       set({ scopeOk: computeScopeOk() });
       // Re-point push at the new account AND immediately re-arm the poller: openEventSource() drops
       // sseConnected, but the only pending timer may be the 60s SSE-idle reconcile, which would leave
@@ -848,7 +848,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     selectSpace: async (id) => {
       syncToken = null; syncGen++; // switching spaces re-anchors the change feed; invalidate in-flight poll
       const space = id ? get().spaces.find((d) => d.id === id) ?? null : null;
-      set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false, activity: [], unread: 0 });
+      set({ spaceId: id, spaceName: space?.name ?? null, path: [], view: "myDrive", nodes: [], selection: new Set(), detailsId: null, detailsNode: null, insightsOpen: false, activityOpen: false, activity: [], unread: 0, searchQuery: "", aiSearchQuery: null, aiSearchNote: null });
       if (syncActive) scheduleSync(0); // re-arm the poller now (don't wait out a 60s idle reconcile)
       await load(true);
     },
@@ -1056,6 +1056,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     },
     aiSearch: async (nl) => {
       const accountId = get().accountId;
+      const spaceId = get().spaceId;
       const q = nl.trim();
       if (!accountId || !q || get().aiSearchBusy) return;
       set({ aiSearchBusy: true });
@@ -1064,6 +1065,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         const today = new Date();
         const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
         const { query, explanation } = await driveV2Api.aiSearch(accountId, q, localDate);
+        // The account/space may have switched while the AI call was in flight — don't apply a stale result.
+        if (get().accountId !== accountId || get().spaceId !== spaceId) return;
         if (!query.trim()) {
           pushToast({ message: "AI couldn't turn that into a search — try rephrasing.", tone: "warn" });
           return;

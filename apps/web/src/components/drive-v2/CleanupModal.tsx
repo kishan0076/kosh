@@ -22,7 +22,6 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
   const [buckets, setBuckets] = useState<CleanupBucket[]>([]);
   const [recs, setRecs] = useState<DriveCleanupRecommendation[]>([]);
   const [sampled, setSampled] = useState(false);
-  const [applied, setApplied] = useState<Set<string>>(new Set());
   const [applyingKey, setApplyingKey] = useState<string | null>(null);
 
   useEffect(() => {
@@ -102,7 +101,8 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
       setApplyingKey(null);
     }
     if (ok > 0) {
-      setApplied((s) => new Set(s).add(bucket.key)); // only lock the row once something actually moved (else allow retry)
+      // Drop the cleared group so the header totals + empty-state reflect reality (not a stale mount snapshot).
+      setBuckets((bs) => bs.filter((b) => b.key !== bucket.key));
       toast({ message: `Moved ${ok} file${ok === 1 ? "" : "s"} to trash`, tone: ok === total ? "ok" : "warn" });
       void useDriveV2.getState().loadQuota();
       void useDriveV2.getState().load(true); // refresh the list behind the modal so the freed files disappear
@@ -151,7 +151,6 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
             )}
             {ordered.map(({ bucket, rec }) => {
               const Icon = BUCKET_ICON[bucket.key];
-              const isApplied = applied.has(bucket.key);
               const isApplying = applyingKey === bucket.key;
               const safety = rec?.safety ?? "review";
               return (
@@ -170,18 +169,14 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
                       <p className="mt-1 truncate text-[11.5px] text-faint">{bucket.sampleNames.join(" · ")}</p>
                     </div>
                     <div className="shrink-0">
-                      {isApplied ? (
-                        <span className="text-[12px] text-ok">Cleared</span>
-                      ) : (
-                        <Button
-                          variant={safety === "caution" ? "danger" : "outline"}
-                          size="sm"
-                          disabled={!!applyingKey}
-                          onClick={() => void apply(bucket)}
-                        >
-                          {isApplying ? <Spinner size={13} /> : <Trash2 size={13} />} Trash {bucket.fileIds.length}
-                        </Button>
-                      )}
+                      <Button
+                        variant={safety === "caution" ? "danger" : "outline"}
+                        size="sm"
+                        disabled={!!applyingKey}
+                        onClick={() => void apply(bucket)}
+                      >
+                        {isApplying ? <Spinner size={13} /> : <Trash2 size={13} />} Trash {bucket.fileIds.length}
+                      </Button>
                     </div>
                   </div>
                 </div>

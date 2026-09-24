@@ -22,13 +22,13 @@ export async function summarizeDriveFile(userId: string, input: { name: string; 
   const body = input.text.slice(0, 8000); // the model gets a bounded slice; the fetcher already capped upstream
   const prompt = [`File name: ${input.name}`, `Type: ${input.mimeType}`, "", "Content:", body].join("\n");
   const estCost = estimateCostUsd(SUMMARY_SYSTEM.length + prompt.length, 500);
-  await ensureAiBudget(userId, estCost);
+  const reservedDate = await ensureAiBudget(userId, estCost);
   const parsed = extractJson<{ summary?: unknown; suggestedTags?: unknown }>(await completeText({ system: SUMMARY_SYSTEM, prompt, maxTokens: 500 }));
   const result: DriveFileAi = {
     summary: typeof parsed?.summary === "string" ? parsed.summary.trim() : "",
     suggestedTags: Array.isArray(parsed?.suggestedTags) ? parsed.suggestedTags.map((t) => String(t)).filter(Boolean).slice(0, 6) : [],
   };
-  if (!result.summary && result.suggestedTags.length === 0) await refundBudget(userId, estCost);
+  if (!result.summary && result.suggestedTags.length === 0) await refundBudget(userId, estCost, reservedDate);
   return result;
 }
 
@@ -49,11 +49,11 @@ export async function nlToDriveQuery(userId: string, nl: string, today?: string)
   const todayStr = today && /^\d{4}-\d{2}-\d{2}$/.test(today) ? today : new Date().toISOString().slice(0, 10);
   const prompt = `Today is ${todayStr}.\nRequest: ${nl.slice(0, 500)}`;
   const estCost = estimateCostUsd(SEARCH_SYSTEM.length + prompt.length, 200);
-  await ensureAiBudget(userId, estCost);
+  const reservedDate = await ensureAiBudget(userId, estCost);
   const parsed = extractJson<{ query?: unknown; explanation?: unknown }>(await completeText({ system: SEARCH_SYSTEM, prompt, maxTokens: 200 }));
   const query = typeof parsed?.query === "string" ? parsed.query.trim().slice(0, 300) : "";
   const explanation = typeof parsed?.explanation === "string" ? parsed.explanation.trim().slice(0, 200) : "";
-  if (!query && !explanation) await refundBudget(userId, estCost);
+  if (!query && !explanation) await refundBudget(userId, estCost, reservedDate);
   return { query, explanation };
 }
 
@@ -88,7 +88,7 @@ export async function prioritizeCleanup(userId: string, buckets: CleanupBucketDi
     .map((b) => `- ${b.key} ("${b.label}"): ${b.count} files, ~${Math.round(b.bytes / (1024 * 1024))} MB. Examples: ${b.sampleNames.slice(0, 8).join("; ")}`)
     .join("\n");
   const estCost = estimateCostUsd(CLEANUP_SYSTEM.length + digest.length, 400);
-  await ensureAiBudget(userId, estCost);
+  const reservedDate = await ensureAiBudget(userId, estCost);
   const parsed = extractJson<{ recommendations?: unknown }>(await completeText({ system: CLEANUP_SYSTEM, prompt: `Buckets:\n${digest}`, maxTokens: 400 }));
   const validKeys = new Set(buckets.map((b) => b.key));
   const raw = Array.isArray(parsed?.recommendations) ? parsed.recommendations : [];
@@ -104,6 +104,6 @@ export async function prioritizeCleanup(userId: string, buckets: CleanupBucketDi
       };
     })
     .filter((r, i, all) => validKeys.has(r.key) && all.findIndex((x) => x.key === r.key) === i); // valid + de-duped by key
-  if (!recommendations.length) await refundBudget(userId, estCost);
+  if (!recommendations.length) await refundBudget(userId, estCost, reservedDate);
   return { recommendations };
 }
