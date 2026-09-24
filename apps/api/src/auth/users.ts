@@ -41,7 +41,7 @@ export async function getOrCreateUser(p: GithubProfile): Promise<ServerUser> {
     storageQuota: 2 * 1024 * 1024 * 1024,
     githubBudget: { remaining: 5000, total: 5000, resetAt: now },
     aiSpendToday: 0,
-    aiSpendCap: 2,
+    aiSpendCap: config.ai.dailyCapUsd, // the operator-configured default (AI_DAILY_CAP_USD), not a hardcoded value
     aiProvider: config.ai.defaultProvider,
     emailToken: newEmailToken(),
     createdAt: now,

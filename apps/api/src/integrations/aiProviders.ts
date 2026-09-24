@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import type { AiProviderInfo } from "@kosh/shared";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { getStore } from "../db/index.js";
@@ -39,7 +40,19 @@ export const AI_PROVIDERS: ProviderDef[] = [
 const BY_ID = new Map(AI_PROVIDERS.map((p) => [p.id, p]));
 export const isProviderId = (id: string): boolean => BY_ID.has(id);
 
-/** A fully-resolved provider ready to call: which transport, which key/URL/model, and its cost rates. */
+// A misconfigured AI_DEFAULT_PROVIDER would otherwise silently fall back to anthropic on every call;
+// warn once at startup so an operator sees the typo instead of wondering why their default is ignored.
+if (config.ai.defaultProvider && !BY_ID.has(config.ai.defaultProvider)) {
+  logger.warn({ defaultProvider: config.ai.defaultProvider }, "AI_DEFAULT_PROVIDER is not a known provider id — falling back to 'anthropic'");
+}
+
+/** The provider a user is currently on, resolving an unknown/unset id the same way everywhere. */
+function providerFor(user: ServerUser | null): ProviderDef {
+  return BY_ID.get(user?.aiProvider ?? config.ai.defaultProvider) ?? BY_ID.get("anthropic")!;
+}
+
+/** A fully-resolved provider ready to call: which transport, which key/URL/model, and its cost rates.
+ *  `byok` is true when the key is the user's own (their money) vs. a shared server env key. */
 export interface AiProviderCtx {
   id: string;
   transport: "anthropic" | "openai";
@@ -48,6 +61,7 @@ export interface AiProviderCtx {
   model: string;
   inPerM: number;
   outPerM: number;
+  byok: boolean;
 }
 
 function serverKey(id: string): string | null {
@@ -67,8 +81,7 @@ function modelFor(def: ProviderDef, user: ServerUser | null): string {
 /** Whether the user (by their current provider choice) can run AI right now — a BYOK key, a server env
  *  key, or a keyless local provider. Sync so publicUser() can call it without an extra store read. */
 export function aiAvailableForUser(user: ServerUser): boolean {
-  const def = BY_ID.get(user.aiProvider ?? config.ai.defaultProvider);
-  if (!def) return false;
+  const def = providerFor(user); // same fallback resolveProvider uses, so the two never disagree
   if (!def.needsKey) return true;
   return !!(decryptSecret(user.aiKeys?.[def.id]) || serverKey(def.id));
 }
@@ -76,10 +89,20 @@ export function aiAvailableForUser(user: ServerUser): boolean {
 /** Resolve the provider context for a user (BYOK key → server env key), or null when none is usable. */
 export async function resolveProvider(userId?: string): Promise<AiProviderCtx | null> {
   const user = userId ? await getStore().users.findById(userId) : null;
-  const def = BY_ID.get(user?.aiProvider ?? config.ai.defaultProvider) ?? BY_ID.get("anthropic")!;
-  const key = (user ? decryptSecret(user.aiKeys?.[def.id]) : undefined) || serverKey(def.id);
+  const def = providerFor(user);
+  const userKey = user ? decryptSecret(user.aiKeys?.[def.id]) : undefined;
+  const key = userKey || serverKey(def.id);
   if (def.needsKey && !key) return null;
-  return { id: def.id, transport: def.transport, apiKey: key || "ollama", baseURL: baseUrlFor(def), model: modelFor(def, user ?? null), inPerM: def.inPerM, outPerM: def.outPerM };
+  return {
+    id: def.id,
+    transport: def.transport,
+    apiKey: key || "ollama",
+    baseURL: baseUrlFor(def),
+    model: modelFor(def, user ?? null),
+    inPerM: def.inPerM,
+    outPerM: def.outPerM,
+    byok: !!userKey, // the user's own key → their spend, not the shared server budget
+  };
 }
 
 /** One model call against a resolved provider. Returns the text, or null (all retries failed). */
@@ -93,14 +116,19 @@ export async function completeWith(ctx: AiProviderCtx, input: { system: string; 
         const text = res.content.find((b) => b.type === "text");
         if (text && "text" in text) return text.text;
       } else {
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${ctx.apiKey}`,
+        };
+        // OpenRouter's leaderboard etiquette headers — only meaningful there, so don't send the
+        // deployment URL to every other provider.
+        if (ctx.id === "openrouter") {
+          headers["HTTP-Referer"] = config.appUrl;
+          headers["X-Title"] = "Kosh";
+        }
         const res = await fetch(`${ctx.baseURL}/chat/completions`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${ctx.apiKey}`,
-            "HTTP-Referer": config.appUrl, // OpenRouter etiquette headers; harmless elsewhere
-            "X-Title": "Kosh",
-          },
+          headers,
           body: JSON.stringify({ model: ctx.model, max_tokens: maxTokens, messages: [{ role: "system", content: input.system }, { role: "user", content: input.prompt }] }),
         });
         if (!res.ok) {
@@ -118,7 +146,8 @@ export async function completeWith(ctx: AiProviderCtx, input: { system: string; 
   return null;
 }
 
-/** The catalog the Settings UI renders (no secrets — only whether a server key exists). */
-export function providerCatalog(): { id: string; label: string; free: boolean; defaultModel: string; needsKey: boolean; hasServerKey: boolean; hint: string }[] {
+/** The catalog the Settings UI renders (no secrets — only whether a server key exists). Returns the
+ *  shared AiProviderInfo shape so the client type and this projection can't drift. */
+export function providerCatalog(): AiProviderInfo[] {
   return AI_PROVIDERS.map((p) => ({ id: p.id, label: p.label, free: p.free, defaultModel: p.defaultModel, needsKey: p.needsKey, hasServerKey: !!serverKey(p.id), hint: p.hint }));
 }

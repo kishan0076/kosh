@@ -535,7 +535,9 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
   const selected = user.aiProvider ?? providers[0]?.id ?? "anthropic";
   const current = providers.find((p) => p.id === selected);
   const hasKey = !!user.aiKeys?.[selected];
-  const ready = current ? !current.needsKey || hasKey || current.hasServerKey : false;
+  // Prefer the server's authoritative availability (same signal it uses to gate calls); fall back to a
+  // local derivation only if the field is absent.
+  const ready = user.aiAvailable ?? (current ? !current.needsKey || hasKey || current.hasServerKey : false);
 
   const [model, setModel] = useState(user.aiModel ?? "");
   const [keyDraft, setKeyDraft] = useState("");
@@ -545,6 +547,8 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
   // Re-sync local drafts when the server state changes — e.g. switching provider clears the model override.
   useEffect(() => setModel(user.aiModel ?? ""), [user.aiModel, user.aiProvider]);
   useEffect(() => setCap(String(user.aiSpendCap ?? 2)), [user.aiSpendCap]);
+  // Never carry a half-typed key across a provider switch — it must not be saved under the wrong provider.
+  useEffect(() => setKeyDraft(""), [user.aiProvider]);
 
   const run = async (fn: () => Promise<{ user: User }>, ok: string): Promise<boolean> => {
     setBusy(true);
@@ -589,7 +593,14 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
   };
   const saveCap = () => {
     const n = Number(cap);
-    if (Number.isFinite(n) && n >= 0) void run(() => api.updateAiSettings({ spendCap: n }), "Spend cap updated");
+    // Blank / non-numeric / negative must not silently become $0 (which would disable all paid AI) —
+    // revert the field and tell the user instead.
+    if (cap.trim() === "" || !Number.isFinite(n) || n < 0) {
+      setCap(String(user.aiSpendCap ?? 2));
+      toast({ message: "Enter a daily cap of $0 or more", tone: "danger" });
+      return;
+    }
+    void run(() => api.updateAiSettings({ spendCap: n }), "Spend cap updated");
   };
 
   return (
@@ -689,7 +700,7 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
           <span className="block text-[12.5px] font-medium text-muted">Daily spend cap (USD)</span>
           <div className="flex gap-2">
             <Input type="number" min={0} max={100} step={0.5} value={cap} onChange={(e) => setCap(e.target.value)} className="w-28 tabular" disabled={busy} />
-            <Button variant="outline" onClick={saveCap} disabled={busy || cap === String(user.aiSpendCap)}>
+            <Button variant="outline" onClick={saveCap} disabled={busy || cap === String(user.aiSpendCap ?? 2)}>
               Save
             </Button>
           </div>

@@ -27,8 +27,8 @@ export interface AiEnrichment {
 const today = () => new Date().toISOString().slice(0, 10);
 
 /** Rough USD estimate for a call (~4 chars/token in + a fixed output-token budget), at the provider's rates.
- *  A free provider prices at 0, so the daily cap never blocks it. */
-export function estimateCostUsd(inputChars: number, outTokens: number, inPerM = 1, outPerM = 5): number {
+ *  A free provider prices at 0, so the daily cap never blocks it. Module-local — only beginAiCall uses it. */
+function estimateCostUsd(inputChars: number, outTokens: number, inPerM = 1, outPerM = 5): number {
   const inTokens = Math.ceil(inputChars / 4);
   return (inTokens / 1e6) * inPerM + (outTokens / 1e6) * outPerM;
 }
@@ -46,14 +46,22 @@ function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
 
 /** Reserve estimated spend against the user's daily cap BEFORE the API call. Returns false (and charges
  *  nothing) when already at/over cap. Pre-charging — rather than recording after — plus per-user
- *  serialization closes the check-then-act race between concurrent AI jobs. */
-export async function reserveBudget(userId: string, estCost: number): Promise<boolean> {
+ *  serialization closes the check-then-act race between concurrent AI jobs.
+ *  - A zero-cost call (free-tier / local provider) is always allowed and records nothing, so free
+ *    providers never get blocked by prior paid spend.
+ *  - `byok` (the user's own key = their money) lets their personal cap stand; spend on the shared SERVER
+ *    key is additionally hard-capped by the server default (AI_DAILY_CAP_USD) so a user can't raise
+ *    their own cap to drain the shared budget. */
+export async function reserveBudget(userId: string, estCost: number, byok = false): Promise<boolean> {
+  if (estCost <= 0) return true; // free/local provider — nothing to charge, never blocked
   return withUserLock(userId, async () => {
     const store = getStore();
     const user = await store.users.findById(userId);
     if (!user) return false;
+    const userCap = user.aiSpendCap ?? config.ai.dailyCapUsd;
+    const cap = byok ? userCap : Math.min(userCap, config.ai.dailyCapUsd);
     const base = user.aiSpendDate === today() ? user.aiSpendToday : 0;
-    if (base >= (user.aiSpendCap ?? config.ai.dailyCapUsd)) return false;
+    if (base >= cap) return false;
     await store.users.updateById(userId, { aiSpendToday: Math.round((base + estCost) * 10000) / 10000, aiSpendDate: today() });
     return true;
   });
@@ -78,7 +86,7 @@ export async function beginAiCall(userId: string, inputChars: number, outTokens:
   const ctx = await resolveProvider(userId);
   if (!ctx) throw new AiNotConfiguredError();
   const estCost = estimateCostUsd(inputChars, outTokens, ctx.inPerM, ctx.outPerM);
-  if (!(await reserveBudget(userId, estCost))) throw new AiBudgetError();
+  if (!(await reserveBudget(userId, estCost, ctx.byok))) throw new AiBudgetError();
   return { ctx, reservedDate: today(), estCost };
 }
 
