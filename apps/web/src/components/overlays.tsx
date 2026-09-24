@@ -48,7 +48,12 @@ export function Menu({
       close();
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
-    const onScroll = () => close();
+    // Close on an OUTSIDE scroll/resize (the anchor moved), but NOT when scrolling inside the menu
+    // itself — otherwise a long, scrollable list would dismiss the moment you scroll it.
+    const onScroll = (e: Event) => {
+      if (e.type === "scroll" && menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) return;
+      close();
+    };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);
@@ -61,8 +66,17 @@ export function Menu({
     };
   }, [open, close]);
 
-  const left = rect ? (align === "end" ? Math.max(8, rect.right - width) : Math.min(rect.left, window.innerWidth - width - 8)) : 0;
-  const top = rect ? rect.bottom + 6 : 0;
+  const GAP = 6;
+  const MARGIN = 8; // keep the panel off the viewport edges
+  const left = rect ? (align === "end" ? Math.max(MARGIN, rect.right - width) : Math.min(rect.left, window.innerWidth - width - MARGIN)) : 0;
+  // Prefer opening downward; flip up when there's little room below and more above. Cap the height to the
+  // available space either way and let the list scroll inside — so a long menu never runs off-screen.
+  const spaceBelow = rect ? window.innerHeight - rect.bottom - GAP - MARGIN : 0;
+  const spaceAbove = rect ? rect.top - GAP - MARGIN : 0;
+  const openUp = rect ? spaceBelow < 240 && spaceAbove > spaceBelow : false;
+  const maxHeight = Math.max(160, openUp ? spaceAbove : spaceBelow);
+  const top = rect && !openUp ? rect.bottom + GAP : undefined;
+  const bottom = rect && openUp ? window.innerHeight - rect.top + GAP : undefined;
 
   return (
     <MenuContext.Provider value={{ close }}>
@@ -72,12 +86,12 @@ export function Menu({
           {open && rect && (
             <motion.div
               ref={menuRef}
-              initial={{ opacity: 0, y: -4, scale: 0.98 }}
+              initial={{ opacity: 0, y: openUp ? 4 : -4, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -4, scale: 0.98 }}
+              exit={{ opacity: 0, y: openUp ? 4 : -4, scale: 0.98 }}
               transition={{ duration: 0.14, ease: [0.2, 0.8, 0.2, 1] }}
-              style={{ position: "fixed", top, left, width }}
-              className="z-50 rounded-[var(--radius-control)] border border-border bg-elevated p-1.5 shadow-[var(--shadow-pop)]"
+              style={{ position: "fixed", top, bottom, left, width, maxHeight }}
+              className="z-50 overflow-y-auto overscroll-contain rounded-[var(--radius-control)] border border-border bg-elevated p-1.5 shadow-[var(--shadow-pop)]"
               role="menu"
             >
               {children}
