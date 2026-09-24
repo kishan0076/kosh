@@ -1,8 +1,10 @@
-import { useState, type ReactNode } from "react";
-import { ChevronRight, FolderPlus, HardDrive, Trash2, Upload } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronRight, Folder, FolderPlus, HardDrive, MoreHorizontal, Trash2, Upload } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui";
+import { Menu, MenuItem, MenuLabel } from "@/components/overlays";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { useDriveV2, type DriveView } from "@/data/driveV2";
 import { getDragIds, hasDriveDrag } from "./dnd";
 
@@ -49,7 +51,7 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
       <span className="pointer-events-none absolute inset-x-0 top-0 -z-10 block h-16 mesh opacity-30" />
 
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 max-w-full">
           <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-faint">{meta.eyebrow}</div>
           {view === "myDrive" ? (
             <PathRail rootLabel={spaceName ?? "My Drive"} />
@@ -62,6 +64,8 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
           <p className="mt-1 max-w-xl text-[12.5px] text-muted">
             {view === "search" && searchQuery ? <>Results for <span className="font-mono text-foreground">“{searchQuery}”</span></> : meta.desc}
           </p>
+          {/* Phones have no room for the pill beside the actions — the count/size line goes under the copy. */}
+          {statPill && <span className="mt-1 block font-mono text-[11px] tabular text-faint sm:hidden">{statPill}</span>}
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -80,29 +84,74 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
   );
 }
 
-/** The My-Drive breadcrumb, rebuilt as scrollable chips that still accept internal drops (move). */
+/** The My-Drive breadcrumb, rebuilt as scrollable chips that still accept internal drops (move).
+ *  Every crumb is `shrink-0 whitespace-nowrap` so the rail genuinely scrolls instead of squeezing
+ *  labels to one character; on phones the ancestors fold into a "…" menu (… › parent › current). */
 function PathRail({ rootLabel }: { rootLabel: string }) {
   const path = useDriveV2((s) => s.path);
   const goRoot = useDriveV2((s) => s.goRoot);
   const breadcrumbTo = useDriveV2((s) => s.breadcrumbTo);
   const spaceId = useDriveV2((s) => s.spaceId);
+  const phone = useMediaQuery(PHONE_QUERY);
+  const railRef = useRef<HTMLDivElement>(null);
+  // Keep the current folder in view: a deep path scrolls the rail to its end on every navigation.
+  useEffect(() => {
+    const el = railRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [path]);
+
+  // On phones with two or more levels, everything before the parent folds into the "…" menu.
+  const folded = phone && path.length >= 2 ? path.slice(0, -1) : [];
+  const shown = phone && path.length >= 2 ? path.slice(-1) : path;
+  const showRoot = !(phone && path.length >= 2);
+  const parent = phone && path.length >= 2 ? path[path.length - 2]! : null;
+  const crumbText = "font-display text-[17px] leading-tight sm:text-[19px]";
+
   return (
-    <div className="-mb-1 flex max-w-full items-center gap-0.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      <Crumb folderId={spaceId ?? "root"} onClick={() => goRoot()} icon={<HardDrive size={16} className="shrink-0 text-primary" />}>
-        <span className="font-display text-[19px] leading-tight">{rootLabel}</span>
-      </Crumb>
-      {path.map((f, i) => (
-        <span key={f.id} className="flex min-w-0 items-center gap-0.5">
-          <ChevronRight size={16} className="shrink-0 text-faint" />
-          {i === path.length - 1 ? (
-            <span className="max-w-[220px] truncate px-1.5 font-display text-[19px] font-semibold leading-tight">{f.name}</span>
-          ) : (
-            <Crumb folderId={f.id} onClick={() => breadcrumbTo(i)}>
-              <span className="max-w-[140px] truncate font-display text-[19px] leading-tight text-muted">{f.name}</span>
+    <div ref={railRef} className="-mb-1 flex max-w-full items-center gap-0.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {showRoot && (
+        <Crumb folderId={spaceId ?? "root"} onClick={() => goRoot()} icon={<HardDrive size={16} className="shrink-0 text-primary" />}>
+          <span className={crumbText}>{rootLabel}</span>
+        </Crumb>
+      )}
+      {folded.length > 0 && parent && (
+        <>
+          <Menu width={260} trigger={({ toggle, ref }) => (
+            <button ref={ref} onClick={toggle} aria-label="Show parent folders" className="pressable grid h-9 w-9 shrink-0 place-items-center rounded-[var(--radius-control)] text-muted transition-colors hover:bg-surface-2 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10">
+              <MoreHorizontal size={18} />
+            </button>
+          )}>
+            <MenuLabel>Path</MenuLabel>
+            <MenuItem icon={HardDrive} onClick={() => goRoot()}>{rootLabel}</MenuItem>
+            {folded.slice(0, -1).map((f, i) => (
+              <MenuItem key={f.id} icon={Folder} onClick={() => breadcrumbTo(i)}>{f.name}</MenuItem>
+            ))}
+          </Menu>
+          <span className="flex shrink-0 items-center gap-0.5 whitespace-nowrap">
+            <ChevronRight size={16} className="shrink-0 text-faint" />
+            <Crumb folderId={parent.id} onClick={() => breadcrumbTo(path.length - 2)}>
+              <span className={cn("max-w-[88px] truncate text-muted sm:max-w-[120px]", crumbText)}>{parent.name}</span>
             </Crumb>
-          )}
-        </span>
-      ))}
+          </span>
+        </>
+      )}
+      {shown.map((f) => {
+        const i = path.indexOf(f);
+        // The current folder is the one crumb that may shrink on phones (it truncates), so the folded
+        // rail always fits: "… › parent › current" without a sideways scroll.
+        return (
+          <span key={f.id} className={cn("flex items-center gap-0.5 whitespace-nowrap", i === path.length - 1 ? "min-w-0 shrink sm:shrink-0" : "shrink-0")}>
+            <ChevronRight size={16} className="shrink-0 text-faint" />
+            {i === path.length - 1 ? (
+              <span className={cn("min-w-0 truncate px-1.5 font-semibold sm:max-w-[220px]", crumbText)}>{f.name}</span>
+            ) : (
+              <Crumb folderId={f.id} onClick={() => breadcrumbTo(i)}>
+                <span className={cn("max-w-[140px] truncate text-muted", crumbText)}>{f.name}</span>
+              </Crumb>
+            )}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -117,7 +166,7 @@ function Crumb({ folderId, onClick, children, icon }: { folderId: string; onClic
       onDragOver={(e) => { if (hasDriveDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOver(true); } }}
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setOver(false); }}
       onDrop={(e) => { if (!hasDriveDrag(e)) return; e.preventDefault(); setOver(false); const ids = getDragIds(e); if (ids?.length) void move(ids, folderId); }}
-      className={cn("flex min-w-0 items-center gap-1.5 rounded-[var(--radius-control)] px-1.5 py-0.5 transition-colors hover:bg-surface-2", over && "bg-primary-soft ring-1 ring-primary")}
+      className={cn("pressable flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-1.5 py-0.5 transition-colors hover:bg-surface-2 [@media(pointer:coarse)]:min-h-10", over && "bg-primary-soft ring-1 ring-primary")}
     >
       {icon}
       {children}

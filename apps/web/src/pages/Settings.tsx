@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   Blocks,
@@ -31,10 +31,21 @@ import { api, API_BASE, type ApiKeyPublic } from "@/data/api";
 import { startConnect } from "@/lib/connect";
 import { uid } from "@/lib/ids";
 import { ago } from "@/lib/time";
-import { PageHeader, SectionCard } from "@/components/common";
+import { EmptyState, PageHeader, SectionCard } from "@/components/common";
+import { Collapse } from "@/components/motion";
 import { Modal, SelectMenu } from "@/components/overlays";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Avatar, Badge, Button, Input } from "@/components/ui";
+import { Avatar, Badge, Button, Input, Skeleton } from "@/components/ui";
+
+// Demo keys for mock mode; real keys are loaded from the API when a backend is wired.
+const DEMO_KEYS: ApiKeyPublic[] = [
+  { id: "k1", name: "Laptop CLI", prefix: "ksh_a1b2", scopes: ["read", "write"], createdAt: new Date(Date.now() - 21 * 864e5).toISOString() },
+  { id: "k2", name: "Bookmarklet", prefix: "ksh_9f8e", scopes: ["write"], createdAt: new Date(Date.now() - 7 * 864e5).toISOString() },
+];
+
+// Tag chip rename/delete: hover-revealed on pointers, always visible (and 40px) on touch screens.
+const TAG_ACTION =
+  "rounded-full text-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100";
 
 /** Generate a proper random API key locally (mock mode) — same shape the server issues:
  *  "ksh_" + base64url of 24 random bytes. The full key is shown once; only its prefix is kept. */
@@ -80,12 +91,9 @@ export function Settings() {
     toast({ message: `Merged ${from.length} tag${from.length === 1 ? "" : "s"} into #${to}`, tone: "ok" });
     exitMerge();
   };
-  // Demo keys for mock mode; real keys are loaded from the API when a backend is wired.
-  const demoNow = Date.now();
-  const [apiKeys, setApiKeys] = useState<ApiKeyPublic[]>([
-    { id: "k1", name: "Laptop CLI", prefix: "ksh_a1b2", scopes: ["read", "write"], createdAt: new Date(demoNow - 21 * 864e5).toISOString() },
-    { id: "k2", name: "Bookmarklet", prefix: "ksh_9f8e", scopes: ["write"], createdAt: new Date(demoNow - 7 * 864e5).toISOString() },
-  ]);
+  // `null` = the real list is still in flight (backend mode) — skeleton rows, never the demo keys.
+  const [apiKeys, setApiKeys] = useState<ApiKeyPublic[] | null>(backend ? null : DEMO_KEYS);
+  const [creatingKey, setCreatingKey] = useState(false);
   // The freshly-created key's plaintext, shown once in a reveal dialog.
   const [newKey, setNewKey] = useState<{ name: string; key: string } | null>(null);
 
@@ -93,7 +101,8 @@ export function Settings() {
   const ghConnected = user.github?.connected ?? false;
   const [ghToken, setGhToken] = useState("");
   const [ghConnecting, setGhConnecting] = useState(false);
-  const [ghOauth, setGhOauth] = useState(false);
+  // `null` while the config request is in flight so the card's slot is reserved instead of popping in.
+  const [ghOauth, setGhOauth] = useState<boolean | null>(backend ? null : false);
   const [showTokenEntry, setShowTokenEntry] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -101,7 +110,10 @@ export function Settings() {
   useEffect(() => {
     if (!backend) return;
     let live = true;
-    api.githubConnectConfig().then((c) => { if (live) setGhOauth(c.oauth); }).catch(() => {});
+    api
+      .githubConnectConfig()
+      .then((c) => { if (live) setGhOauth(c.oauth); })
+      .catch(() => { if (live) setGhOauth(false); });
     return () => { live = false; };
   }, [backend]);
 
@@ -146,18 +158,20 @@ export function Settings() {
   const createKey = (rawName: string) => {
     const name = rawName.trim() || "New key";
     if (backend) {
+      setCreatingKey(true);
       api
         .createApiKey({ name })
         .then(({ apiKey, key }) => {
-          setApiKeys((k) => [apiKey, ...k]);
+          setApiKeys((k) => [apiKey, ...(k ?? [])]);
           setNewKey({ name, key });
         })
-        .catch((err: unknown) => toast({ message: "Couldn't create key", description: err instanceof Error ? err.message : undefined, tone: "danger" }));
+        .catch((err: unknown) => toast({ message: "Couldn't create key", description: err instanceof Error ? err.message : undefined, tone: "danger" }))
+        .finally(() => setCreatingKey(false));
       return;
     }
     const { key, prefix } = generateLocalKey();
     const row: ApiKeyPublic = { id: uid("k"), name, prefix, scopes: ["read", "write"], createdAt: new Date().toISOString() };
-    setApiKeys((k) => [row, ...k]);
+    setApiKeys((k) => [row, ...(k ?? [])]);
     setNewKey({ name, key });
   };
 
@@ -177,7 +191,7 @@ export function Settings() {
       message: `"${k.name}" (${k.prefix}…) will stop working immediately. Any client using it must be updated.`,
       confirmLabel: "Revoke key",
       onConfirm: () => {
-        setApiKeys((keys) => keys.filter((x) => x.id !== k.id));
+        setApiKeys((keys) => (keys ?? []).filter((x) => x.id !== k.id));
         if (backend) api.revokeApiKey(k.id).catch(() => {});
         toast({ message: "API key revoked", tone: "warn" });
       },
@@ -241,8 +255,8 @@ export function Settings() {
 
         {/* appearance */}
         <SectionCard title="Appearance">
-          <div className="flex items-center justify-between">
-            <div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
               <div className="text-[14px] font-medium">Theme</div>
               <div className="text-[12.5px] text-muted">Light, dark, or follow your system</div>
             </div>
@@ -277,40 +291,45 @@ export function Settings() {
           title="API keys"
           subtitle="Bearer keys for the CLI, MCP, bookmarklet and Shortcuts"
           action={
-            <Button variant="outline" size="sm" onClick={promptNewKey}>
+            <Button variant="outline" size="sm" onClick={promptNewKey} loading={creatingKey}>
               <Plus size={15} /> New key
             </Button>
           }
         >
           <div className="space-y-2">
-            {apiKeys.length === 0 && (
-              <p className="rounded-[var(--radius-control)] border border-dashed border-border px-3 py-4 text-center text-[13px] text-muted">
-                No API keys yet. Create one to use the CLI, MCP or bookmarklet.
-              </p>
-            )}
-            {apiKeys.map((k) => (
-              <div key={k.id} className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
-                <KeyRound size={16} className="shrink-0 text-muted" />
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13.5px] font-medium">{k.name}</div>
-                  <div className="font-mono text-[12px] text-faint">
-                    {k.prefix}••••••••
-                    <span className="ml-2 font-sans">· created {ago(k.createdAt)}</span>
-                    {k.lastUsedAt && <span className="ml-1.5 font-sans">· used {ago(k.lastUsedAt)}</span>}
-                  </div>
-                </div>
-                <div className="hidden gap-1 sm:flex">
-                  {k.scopes.map((s) => (
-                    <Badge key={s} tone="neutral">
-                      {s}
-                    </Badge>
-                  ))}
-                </div>
-                <Button variant="ghost" size="icon-sm" className="text-danger hover:bg-danger-soft" onClick={() => revokeKey(k)} aria-label="Revoke">
-                  <Trash2 size={15} />
-                </Button>
+            {apiKeys === null ? (
+              // Same 58px as a real row, so the swap doesn't shift the sections below.
+              <div role="status" aria-busy="true" aria-label="Loading API keys" className="space-y-2">
+                <Skeleton className="h-[58px] rounded-[var(--radius-control)]" />
+                <Skeleton className="h-[58px] rounded-[var(--radius-control)]" />
               </div>
-            ))}
+            ) : apiKeys.length === 0 ? (
+              <EmptyState size="sm" icon={KeyRound} title="No API keys yet" description="Create one to use the CLI, MCP or bookmarklet." />
+            ) : (
+              apiKeys.map((k) => (
+                <div key={k.id} className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+                  <KeyRound size={16} className="shrink-0 text-muted" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[13.5px] font-medium">{k.name}</div>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-faint">
+                      <span className="whitespace-nowrap font-mono">{k.prefix}••••••••</span>
+                      <span className="whitespace-nowrap">· created {ago(k.createdAt)}</span>
+                      {k.lastUsedAt && <span className="whitespace-nowrap">· used {ago(k.lastUsedAt)}</span>}
+                    </div>
+                  </div>
+                  <div className="hidden gap-1 sm:flex">
+                    {k.scopes.map((s) => (
+                      <Badge key={s} tone="neutral">
+                        {s}
+                      </Badge>
+                    ))}
+                  </div>
+                  <Button variant="ghost" size="icon" className="text-danger hover:bg-danger-soft" onClick={() => revokeKey(k)} aria-label="Revoke">
+                    <Trash2 size={15} />
+                  </Button>
+                </div>
+              ))
+            )}
           </div>
         </SectionCard>
 
@@ -331,60 +350,66 @@ export function Settings() {
               Demo mode — publishing is simulated. Connect the API to push to real GitHub.
             </div>
           ) : ghConnected ? (
-            <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
-              {user.github?.avatarUrl ? (
-                <img src={user.github.avatarUrl} alt="" referrerPolicy="no-referrer" className="h-8 w-8 shrink-0 rounded-full" />
-              ) : (
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><Check size={16} /></span>
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="text-[13.5px] font-medium">Connected{user.github?.login ? ` as @${user.github.login}` : ""}</div>
-                <div className="text-[12px] text-faint">
+            <StatusRow
+              icon={
+                user.github?.avatarUrl ? (
+                  <img src={user.github.avatarUrl} alt="" referrerPolicy="no-referrer" className="h-8 w-8 shrink-0 rounded-full" />
+                ) : (
+                  <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><Check size={16} /></span>
+                )
+              }
+              title={`Connected${user.github?.login ? ` as @${user.github.login}` : ""}`}
+              description={
+                <>
                   {user.github?.source === "oauth" ? "Connected with GitHub" : "A token with repo access is stored"} (encrypted).
                   {user.github?.scopes?.length ? ` Scopes: ${user.github.scopes.join(", ")}.` : ""}
-                </div>
-              </div>
-              <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={disconnectGithub}>
-                Disconnect
-              </Button>
-            </div>
+                </>
+              }
+              action={
+                <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={disconnectGithub}>
+                  Disconnect
+                </Button>
+              }
+            />
           ) : (
             <div className="space-y-3">
+              {ghOauth === null && <Skeleton className="h-[62px] rounded-[var(--radius-control)]" />}
               {ghOauth && (
-                <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-primary/30 bg-primary-soft/40 px-3.5 py-3">
-                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface text-foreground shadow-[var(--shadow-sm)]"><Github size={18} /></span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13.5px] font-medium">Connect with one click</div>
-                    <div className="text-[12px] text-muted">Approve on GitHub and land right back here — nothing to paste.</div>
-                  </div>
-                  <Button variant="primary" onClick={() => { void startConnect("github", "settings"); }}>
-                    <Github size={15} /> Connect GitHub
-                  </Button>
-                </div>
+                <StatusRow
+                  tone="primary"
+                  className="reveal-in"
+                  icon={<span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface text-foreground shadow-[var(--shadow-sm)]"><Github size={18} /></span>}
+                  title="Connect with one click"
+                  description="Approve on GitHub and land right back here — nothing to paste."
+                  action={
+                    <Button variant="primary" onClick={() => { void startConnect("github", "settings"); }}>
+                      <Github size={15} /> Connect GitHub
+                    </Button>
+                  }
+                />
               )}
-              {ghOauth && !showTokenEntry ? (
-                <button onClick={() => setShowTokenEntry(true)} className="text-[12.5px] font-medium text-muted underline-offset-2 hover:text-foreground hover:underline">
+              {ghOauth && !showTokenEntry && (
+                <button onClick={() => setShowTokenEntry(true)} className="pressable -my-2 py-2 text-[12.5px] font-medium text-muted underline-offset-2 hover:text-foreground hover:underline">
                   Prefer a Personal Access Token? Paste one instead
                 </button>
-              ) : (
-                <div>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <input
-                      type="password"
-                      value={ghToken}
-                      onChange={(e) => setGhToken(e.target.value)}
-                      placeholder="ghp_… or github_pat_…"
-                      className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-primary focus:ring-focus"
-                    />
-                    <Button variant={ghOauth ? "outline" : "primary"} onClick={connectGithub} disabled={ghConnecting || ghToken.trim().length < 10}>
-                      {ghConnecting ? <RefreshCw size={15} className="animate-spin" /> : <ShieldCheck size={15} />} Connect token
-                    </Button>
-                  </div>
-                  <p className="mt-2 text-[12px] text-faint">
-                    Create a token at github.com/settings/tokens with the <span className="font-mono">repo</span> scope. Stored encrypted; never shown again.
-                  </p>
-                </div>
               )}
+              <Collapse open={ghOauth === false || showTokenEntry}>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    type="password"
+                    value={ghToken}
+                    onChange={(e) => setGhToken(e.target.value)}
+                    placeholder="ghp_… or github_pat_…"
+                    className="min-w-0 font-mono sm:flex-1 sm:text-[13px]"
+                  />
+                  <Button variant={ghOauth ? "outline" : "primary"} onClick={connectGithub} loading={ghConnecting} disabled={ghToken.trim().length < 10}>
+                    <ShieldCheck size={15} /> Connect token
+                  </Button>
+                </div>
+                <p className="mt-2 text-[12px] text-faint">
+                  Create a token at github.com/settings/tokens with the <span className="font-mono">repo</span> scope. Stored encrypted; never shown again.
+                </p>
+              </Collapse>
             </div>
           )}
         </SectionCard>
@@ -404,13 +429,26 @@ export function Settings() {
             ) : undefined
           }
         >
-          <div className="flex max-h-64 flex-wrap gap-2 overflow-y-auto">
+          {/* The inner scroller is desktop-only: on phones a nested 256px scroll area traps finger scrolls. */}
+          <div className="flex flex-wrap gap-2 sm:max-h-64 sm:overflow-y-auto">
             {tags.length === 0 && (
-              <p className="w-full rounded-[var(--radius-control)] border border-dashed border-border px-3 py-4 text-center text-[13px] text-muted">
-                No tags yet. Tags live on your items — open something in your{" "}
-                <button onClick={() => navigate("/library")} className="font-medium text-primary underline-offset-2 hover:underline">Library</button>{" "}
-                and type in its <span className="font-medium text-foreground">Tags</span> field. Tags you add there show up here to rename, merge or remove.
-              </p>
+              <EmptyState
+                size="sm"
+                icon={TagIcon}
+                title="No tags yet"
+                description={
+                  <>
+                    Tags live on your items — open something in your Library and type in its{" "}
+                    <span className="font-medium text-foreground">Tags</span> field. Tags you add there show up here to rename, merge or remove.
+                  </>
+                }
+                action={
+                  <Button variant="outline" size="sm" onClick={() => navigate("/library")}>
+                    Open Library
+                  </Button>
+                }
+                className="w-full"
+              />
             )}
             {tags.map((t) => {
               const isPicked = picked.includes(t.tag);
@@ -420,7 +458,7 @@ export function Settings() {
                     key={t.tag}
                     onClick={() => togglePicked(t.tag)}
                     className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full border py-1 pl-3 pr-2.5 text-[13px] transition-colors",
+                      "pressable inline-flex h-8 items-center gap-1.5 rounded-full border pl-3 pr-2.5 text-[13px] transition-colors [@media(pointer:coarse)]:h-10",
                       isPicked ? "border-primary bg-primary-soft text-primary" : "border-border bg-surface-2 text-foreground hover:bg-surface-3",
                     )}
                     aria-pressed={isPicked}
@@ -432,11 +470,13 @@ export function Settings() {
                 );
               }
               return (
-                <div key={t.tag} className="group inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 py-1 pl-3 pr-1.5 text-[13px]">
+                <div key={t.tag} className="group inline-flex h-8 items-center gap-1 rounded-full border border-border bg-surface-2 pl-3 pr-1 text-[13px] [@media(pointer:coarse)]:h-10">
                   <TagIcon size={12} className="text-faint" />
                   <span>{t.tag}</span>
                   <span className="tabular text-[11px] text-faint">{t.value}</span>
-                  <button
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
                     onClick={() =>
                       openConfirm({
                         title: `Rename #${t.tag}`,
@@ -452,12 +492,14 @@ export function Settings() {
                         },
                       })
                     }
-                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground group-hover:opacity-100 [@media(pointer:coarse)]:p-1.5 [@media(pointer:coarse)]:opacity-100"
+                    className={TAG_ACTION}
                     aria-label="Rename tag"
                   >
-                    <RefreshCw size={12} />
-                  </button>
-                  <button
+                    <RefreshCw size={13} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
                     onClick={() =>
                       openConfirm({
                         title: `Remove #${t.tag}?`,
@@ -466,36 +508,36 @@ export function Settings() {
                         onConfirm: () => { deleteTag(t.tag); toast({ message: `Removed #${t.tag}`, tone: "warn" }); },
                       })
                     }
-                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-danger-soft hover:text-danger group-hover:opacity-100 [@media(pointer:coarse)]:p-1.5 [@media(pointer:coarse)]:opacity-100"
+                    className={cn(TAG_ACTION, "hover:bg-danger-soft hover:text-danger")}
                     aria-label="Delete tag"
                   >
-                    <Trash2 size={12} />
-                  </button>
+                    <Trash2 size={13} />
+                  </Button>
                 </div>
               );
             })}
           </div>
 
-          {mergeMode && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+          <Collapse open={mergeMode}>
+            <div className="mt-3 flex flex-col gap-2 border-t border-border pt-3 sm:flex-row sm:items-center">
               <span className="text-[12px] text-muted">Merge {picked.length} into</span>
-              <input
+              <Input
                 list="kosh-merge-target"
                 value={mergeInto}
                 onChange={(e) => setMergeInto(e.target.value)}
                 placeholder="target tag"
-                className="w-36 rounded-[var(--radius-control)] border border-border bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-primary focus:ring-focus"
+                className="sm:w-36"
               />
               <datalist id="kosh-merge-target">
                 {picked.map((t) => (
                   <option key={t} value={t} />
                 ))}
               </datalist>
-              <Button variant="primary" size="sm" onClick={doMerge} disabled={!mergeInto.trim() || picked.filter((t) => t !== mergeInto.trim().replace(/^#/, "")).length === 0}>
+              <Button variant="primary" size="sm" className="w-full sm:w-auto" onClick={doMerge} disabled={!mergeInto.trim() || picked.filter((t) => t !== mergeInto.trim().replace(/^#/, "")).length === 0}>
                 <GitMerge size={15} /> Merge
               </Button>
             </div>
-          )}
+          </Collapse>
         </SectionCard>
 
         {/* data */}
@@ -549,7 +591,8 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
   const [model, setModel] = useState(user.aiModel ?? "");
   const [keyDraft, setKeyDraft] = useState("");
   const [cap, setCap] = useState(String(user.aiSpendCap ?? 2));
-  const [busy, setBusy] = useState(false);
+  // Which control is mid-request — so only that button shows the spinner while all of them lock.
+  const [busy, setBusy] = useState<"provider" | "model" | "key" | "clearKey" | "cap" | null>(null);
 
   // Re-sync local drafts when the server state changes — e.g. switching provider clears the model override.
   useEffect(() => setModel(user.aiModel ?? ""), [user.aiModel, user.aiProvider]);
@@ -557,8 +600,8 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
   // Never carry a half-typed key across a provider switch — it must not be saved under the wrong provider.
   useEffect(() => setKeyDraft(""), [user.aiProvider]);
 
-  const run = async (fn: () => Promise<{ user: User }>, ok: string): Promise<boolean> => {
-    setBusy(true);
+  const run = async (what: NonNullable<typeof busy>, fn: () => Promise<{ user: User }>, ok: string): Promise<boolean> => {
+    setBusy(what);
     try {
       const { user: next } = await fn();
       useData.setState({ user: next });
@@ -568,7 +611,7 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
       toast({ message: "Couldn't update AI settings", description: err instanceof Error ? err.message : undefined, tone: "danger" });
       return false;
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -588,7 +631,7 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
     label: (
       <span className="flex items-center gap-2">
         {p.label}
-        {p.free && <span className="rounded-full bg-ok-soft px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-ok">free</span>}
+        {p.free && <span className="rounded-full bg-ok-soft px-1.5 py-px text-[11px] font-semibold uppercase tracking-wide text-ok">free</span>}
       </span>
     ),
   }));
@@ -596,7 +639,7 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
   const saveKey = async () => {
     const k = keyDraft.trim();
     if (k.length < 8) return;
-    if (await run(() => api.setAiKey(selected, k), "Key saved")) setKeyDraft("");
+    if (await run("key", () => api.setAiKey(selected, k), "Key saved")) setKeyDraft("");
   };
   const saveCap = () => {
     const n = Number(cap);
@@ -607,7 +650,7 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
       toast({ message: "Enter a daily cap of $0 or more", tone: "danger" });
       return;
     }
-    void run(() => api.updateAiSettings({ spendCap: n }), "Spend cap updated");
+    void run("cap", () => api.updateAiSettings({ spendCap: n }), "Spend cap updated");
   };
 
   return (
@@ -624,9 +667,9 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
           <SelectMenu
             value={selected}
             options={providerOptions}
-            onChange={(id) => void run(() => api.updateAiSettings({ provider: id }), "AI provider updated")}
+            onChange={(id) => void run("provider", () => api.updateAiSettings({ provider: id }), "AI provider updated")}
             width={300}
-            disabled={busy}
+            disabled={!!busy}
             ariaLabel="AI provider"
             className="w-full"
           />
@@ -649,13 +692,14 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
               value={model}
               onChange={(e) => setModel(e.target.value)}
               placeholder={current?.defaultModel ?? "provider default"}
-              disabled={busy}
-              className="font-mono text-[13px]"
+              disabled={!!busy}
+              className="min-w-0 flex-1 font-mono sm:text-[13px]"
             />
             <Button
               variant="outline"
-              onClick={() => void run(() => api.updateAiSettings({ model: model.trim() }), "Model saved")}
-              disabled={busy || model.trim() === (user.aiModel ?? "")}
+              onClick={() => void run("model", () => api.updateAiSettings({ model: model.trim() }), "Model saved")}
+              loading={busy === "model"}
+              disabled={!!busy || model.trim() === (user.aiModel ?? "")}
             >
               Save
             </Button>
@@ -673,27 +717,36 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
         <div className="mt-4 border-t border-border pt-4">
           <span className="mb-1.5 block text-[12.5px] font-medium text-muted">Your API key</span>
           {hasKey ? (
-            <div className="flex flex-wrap items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><Check size={16} /></span>
-              <div className="min-w-0 flex-1">
-                <div className="text-[13.5px] font-medium">Your key is saved</div>
-                <div className="text-[12px] text-faint">Stored encrypted; never shown again. Used instead of any server key.</div>
-              </div>
-              <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={() => void run(() => api.clearAiKey(selected), "Key removed")} disabled={busy}>
-                <Trash2 size={15} /> Remove
-              </Button>
-            </div>
+            <StatusRow
+              icon={<span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><Check size={16} /></span>}
+              title="Your key is saved"
+              description="Stored encrypted; never shown again. Used instead of any server key."
+              action={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-danger hover:bg-danger-soft"
+                  onClick={() => void run("clearKey", () => api.clearAiKey(selected), "Key removed")}
+                  loading={busy === "clearKey"}
+                  disabled={!!busy}
+                >
+                  <Trash2 size={15} /> Remove
+                </Button>
+              }
+            />
           ) : (
+            // `flex-1` only in the row layout: inside the phone column it would zero the flex-basis and
+            // collapse the field to its line box.
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 type="password"
                 value={keyDraft}
                 onChange={(e) => setKeyDraft(e.target.value)}
                 placeholder="Paste your API key"
-                className="min-w-0 flex-1 font-mono text-[13px]"
-                disabled={busy}
+                className="min-w-0 font-mono sm:flex-1 sm:text-[13px]"
+                disabled={!!busy}
               />
-              <Button variant="primary" onClick={saveKey} disabled={busy || keyDraft.trim().length < 8}>
+              <Button variant="primary" onClick={saveKey} loading={busy === "key"} disabled={!!busy || keyDraft.trim().length < 8}>
                 <ShieldCheck size={15} /> Save key
               </Button>
             </div>
@@ -706,8 +759,8 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
         <div className="space-y-1.5">
           <span className="block text-[12.5px] font-medium text-muted">Daily spend cap (USD)</span>
           <div className="flex gap-2">
-            <Input type="number" min={0} max={100} step={0.5} value={cap} onChange={(e) => setCap(e.target.value)} className="w-28 tabular" disabled={busy} />
-            <Button variant="outline" onClick={saveCap} disabled={busy || cap === String(user.aiSpendCap ?? 2)}>
+            <Input type="number" min={0} max={100} step={0.5} value={cap} onChange={(e) => setCap(e.target.value)} className="w-28 tabular" disabled={!!busy} />
+            <Button variant="outline" onClick={saveCap} loading={busy === "cap"} disabled={!!busy || cap === String(user.aiSpendCap ?? 2)}>
               Save
             </Button>
           </div>
@@ -735,16 +788,12 @@ function NewKeyModal({ newKey, onClose, onCopy }: { newKey: { name: string; key:
               </p>
             </div>
           </div>
-          <div className="px-5 py-4">
-            <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+          <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+            <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 py-1.5 pl-3 pr-1.5">
               <code className="min-w-0 flex-1 break-all font-mono text-[12.5px] text-foreground">{newKey.key}</code>
-              <button
-                onClick={() => onCopy(newKey.key, "API key copied")}
-                className="shrink-0 rounded-md p-1.5 text-faint hover:bg-surface-3 hover:text-foreground"
-                aria-label="Copy key"
-              >
+              <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => onCopy(newKey.key, "API key copied")} aria-label="Copy key">
                 <Copy size={15} />
-              </button>
+              </Button>
             </div>
           </div>
           <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
@@ -776,6 +825,30 @@ function Meter({ label, used, total, pct, tone }: { label: string; used: string;
   );
 }
 
+/** Icon + title/description + one action. Stacks on phones so the copy never squeezes into a narrow
+ *  column beside the button; one row from `sm` up. */
+function StatusRow({ icon, title, description, action, tone, className }: { icon: ReactNode; title: string; description: ReactNode; action: ReactNode; tone?: "primary"; className?: string }) {
+  const primary = tone === "primary";
+  return (
+    <div
+      className={cn(
+        "flex flex-col gap-3 rounded-[var(--radius-control)] border sm:flex-row sm:items-center",
+        primary ? "border-primary/30 bg-primary-soft/40 px-3.5 py-3" : "border-border bg-surface-2 px-3 py-2.5",
+        className,
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        {icon}
+        <div className="min-w-0 flex-1">
+          <div className="text-[13.5px] font-medium">{title}</div>
+          <div className={cn("text-[12px]", primary ? "text-muted" : "text-faint")}>{description}</div>
+        </div>
+      </div>
+      <div className="flex shrink-0 [&>*]:w-full sm:[&>*]:w-auto">{action}</div>
+    </div>
+  );
+}
+
 function Snippet({ icon: Icon, title, cmd, onCopy, plain, truncate }: { icon: typeof Terminal; title: string; cmd: string; onCopy: (t: string) => void; plain?: boolean; truncate?: boolean }) {
   return (
     <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
@@ -784,11 +857,20 @@ function Snippet({ icon: Icon, title, cmd, onCopy, plain, truncate }: { icon: ty
         {title}
       </div>
       <div className="flex items-center gap-2">
-        <code className={`min-w-0 flex-1 font-mono text-[12px] text-muted ${truncate ? "truncate" : plain ? "" : "break-all"}`}>{cmd}</code>
+        {/* Commands wrap at any character only when a token (a URL) is longer than the line, so ordinary words
+            stay whole; the one-line bookmarklet scrolls sideways inside its card instead of being clipped. */}
+        <code
+          className={cn(
+            "min-w-0 flex-1 font-mono text-[12px] text-muted",
+            truncate ? "overflow-x-auto whitespace-nowrap py-1 [scrollbar-width:thin]" : plain ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]",
+          )}
+        >
+          {cmd}
+        </code>
         {!plain && (
-          <button onClick={() => onCopy(cmd)} className="shrink-0 rounded-md p-1.5 text-faint hover:bg-surface-3 hover:text-foreground" aria-label="Copy">
+          <Button variant="ghost" size="icon-sm" className="-my-1 shrink-0" onClick={() => onCopy(cmd)} aria-label="Copy">
             <Copy size={14} />
-          </button>
+          </Button>
         )}
       </div>
     </div>

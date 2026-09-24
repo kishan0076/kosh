@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Clock, Copy, Eye, ExternalLink, HardDrive, Layers, Sparkles, Trash2, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Clock, Copy, Eye, ExternalLink, HardDrive, Layers, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
+import { revealClass, revealStyle } from "@/lib/motion";
 import { Button, Progress, Spinner } from "@/components/ui";
+import { EmptyState } from "@/components/common";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { useUi } from "@/data/ui";
 import { driveV2Api, type DriveNode, type DriveScanFile } from "@/data/driveV2Api";
 import { useDriveV2 } from "@/data/driveV2";
@@ -40,6 +43,9 @@ function bucketOf(mime: string): Bucket {
 }
 const sizeOf = (f: DriveScanFile) => f.size ?? f.quotaBytesUsed ?? 0;
 
+// Row icon actions (preview / open / trash) share one hit box: 32px at rest, the 40px floor on touch.
+const ROW_ICON = "pressable grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted hover:bg-surface-2 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10";
+
 type Tab = "overview" | "duplicates" | "largest" | "stale";
 
 export function InsightsPanel({ onClose }: { onClose: () => void }) {
@@ -57,6 +63,7 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [attempt, setAttempt] = useState(0); // bumped by "Try again" to re-run the scan effect
 
   useEffect(() => {
     let live = true;
@@ -73,7 +80,7 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
       .catch((err) => { if (live) setError(err instanceof Error ? err.message : "Couldn't analyze your Drive."); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [accountId, spaceId]);
+  }, [accountId, spaceId, attempt]);
 
   const breakdown = useMemo(() => {
     const map = new Map<Bucket, { count: number; bytes: number }>();
@@ -145,34 +152,71 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
         <Sparkles size={17} className="text-primary" />
         <span className="text-[14px] font-semibold">Insights</span>
         {truncated && <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[11px] text-warn">sampled first {scan.length.toLocaleString()} files</span>}
-        <button onClick={onClose} className="ml-auto grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Close insights"><X size={16} /></button>
+        <Button variant="ghost" size="icon-sm" onClick={onClose} className="ml-auto" aria-label="Close insights"><X size={16} /></Button>
       </div>
 
-      <div className="flex gap-1 overflow-x-auto border-b border-border px-3 py-2">
-        {TABS.map((t) => (
-          <button key={t.k} onClick={() => setTab(t.k)} className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium", tab === t.k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2")}>
-            <t.icon size={14} /> {t.label}
-          </button>
-        ))}
-      </div>
+      <TabStrip tabs={TABS} active={tab} onChange={setTab} />
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {loading ? (
-          <div className="grid h-full min-h-[50vh] place-items-center"><Spinner size={26} className="text-primary" /></div>
+          <PageSkeleton variant="dashboard" header={false} />
         ) : error ? (
-          <div className="grid h-full min-h-[50vh] place-items-center text-center">
-            <div><div className="text-[14px] font-semibold">Couldn't analyze</div><p className="mt-1 text-[13px] text-muted">{error}</p></div>
-          </div>
+          <EmptyState
+            size="sm"
+            icon={AlertTriangle}
+            title="Couldn't analyze"
+            description={error}
+            action={<Button variant="outline" size="sm" onClick={() => setAttempt((a) => a + 1)}><RefreshCw size={14} /> Try again</Button>}
+          />
         ) : tab === "overview" ? (
           <Overview breakdown={breakdown} reclaimable={dupGroups.reclaimable} dupCount={dupGroups.groups.length} fileCount={scan.length} quota={quota} onSeeDuplicates={() => setTab("duplicates")} />
         ) : tab === "duplicates" ? (
           <Duplicates groups={dupGroups.groups} reclaimable={dupGroups.reclaimable} busy={busy} onTrash={trashIds} onPreview={preview} />
         ) : tab === "largest" ? (
-          <FileList files={largest} busy={busy} onTrash={(id) => void trashIds([id])} onPreview={preview} meta={(f) => formatBytes(sizeOf(f))} />
+          <FileList key="largest" files={largest} busy={busy} onTrash={(id) => void trashIds([id])} onPreview={preview} meta={(f) => formatBytes(sizeOf(f))} emptyIcon={Layers} emptyTitle="No large files" />
         ) : (
-          <FileList files={stale} busy={busy} onTrash={(id) => void trashIds([id])} onPreview={preview} meta={(f) => (f.viewedByMeTime ? `last opened ${ago(f.viewedByMeTime)}` : "never opened")} />
+          <FileList key="stale" files={stale} busy={busy} onTrash={(id) => void trashIds([id])} onPreview={preview} meta={(f) => (f.viewedByMeTime ? `last opened ${ago(f.viewedByMeTime)}` : "never opened")} emptyIcon={Clock} emptyTitle="Nothing stale" />
         )}
       </div>
+    </div>
+  );
+}
+
+/** Horizontal tab strip. On phones it scrolls (no scrollbar) and fades its right edge until the last
+ *  tab is reached, so an off-screen tab reads as "more here" rather than not existing. */
+function TabStrip({ tabs, active, onChange }: { tabs: { k: Tab; label: string; icon: typeof Layers }[]; active: Tab; onChange: (t: Tab) => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [clipped, setClipped] = useState(false);
+  const measure = () => {
+    const el = ref.current;
+    if (el) setClipped(el.scrollWidth - el.clientWidth - el.scrollLeft > 4);
+  };
+  useEffect(() => {
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [tabs.length]);
+  return (
+    <div
+      ref={ref}
+      onScroll={measure}
+      role="tablist"
+      className={cn(
+        "flex gap-1 overflow-x-auto border-b border-border px-3 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        clipped && "[mask-image:linear-gradient(to_right,black_85%,transparent)]",
+      )}
+    >
+      {tabs.map((t) => (
+        <button
+          key={t.k}
+          role="tab"
+          aria-selected={active === t.k}
+          onClick={() => onChange(t.k)}
+          className={cn("pressable inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-3 text-[13px] font-medium [@media(pointer:coarse)]:h-10", active === t.k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2")}
+        >
+          <t.icon size={14} /> {t.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -222,7 +266,7 @@ function Overview({ breakdown, reclaimable, dupCount, fileCount, quota, onSeeDup
       </div>
 
       {dupCount > 0 && (
-        <button onClick={onSeeDuplicates} className="flex w-full items-center gap-2.5 rounded-[var(--radius-control)] border border-warn/40 bg-warn-soft px-4 py-3 text-left">
+        <button onClick={onSeeDuplicates} className="pressable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] border border-warn/40 bg-warn-soft px-4 py-3 text-left">
           <AlertTriangle size={17} className="shrink-0 text-warn" />
           <span className="flex-1 text-[13px]"><span className="font-semibold">{dupCount} duplicate group{dupCount === 1 ? "" : "s"}</span> found — up to {formatBytes(reclaimable)} reclaimable.</span>
           <span className="shrink-0 text-[12.5px] font-medium text-warn">Review →</span>
@@ -237,34 +281,40 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
     <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
       <div className={cn("font-display text-[18px] font-semibold tabular", tone === "warn" && "text-warn")}>{value}</div>
       <div className="text-[11.5px] text-muted">{label}</div>
-      {sub && <div className="mt-0.5 font-mono text-[10.5px] tabular text-faint">{sub}</div>}
+      {sub && <div className="mt-0.5 font-mono text-[11.5px] tabular text-muted">{sub}</div>}
     </div>
   );
 }
 
 function Duplicates({ groups, reclaimable, busy, onTrash, onPreview }: { groups: DriveScanFile[][]; reclaimable: number; busy: Set<string>; onTrash: (ids: string[]) => Promise<void>; onPreview: (f: DriveScanFile) => void }) {
-  if (!groups.length) return <div className="grid place-items-center py-16 text-center"><div><div className="text-[14px] font-semibold">No duplicates 🎉</div><p className="mt-1 text-[13px] text-muted">No files share identical content.</p></div></div>;
+  if (!groups.length) return <EmptyState size="sm" icon={Copy} title="No duplicates" description="No files share identical content." />;
   const extrasOf = (g: DriveScanFile[]) => g.slice(1).map((f) => f.id); // keep the first, trash the rest
   const allExtras = groups.flatMap(extrasOf);
+  const inFlight = (ids: string[]) => ids.some((id) => busy.has(id));
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[13px] text-muted">{groups.length} group{groups.length === 1 ? "" : "s"} · up to <span className="font-semibold text-foreground">{formatBytes(reclaimable)}</span> reclaimable</span>
-        <Button variant="outline" size="sm" className="ml-auto" onClick={() => void onTrash(allExtras)}><Trash2 size={14} /> Trash all extras ({allExtras.length})</Button>
+        <Button variant="outline" size="sm" className="ml-auto" loading={inFlight(allExtras)} onClick={() => void onTrash(allExtras)}><Trash2 size={14} /> Trash all extras ({allExtras.length})</Button>
       </div>
-      {groups.map((g) => (
-        <div key={g[0]!.md5Checksum} className="overflow-hidden rounded-[var(--radius-control)] border border-border">
+      {groups.map((g, gi) => (
+        <div key={g[0]!.md5Checksum} className={cn("overflow-hidden rounded-[var(--radius-control)] border border-border", revealClass(gi))} style={revealStyle(gi)}>
           <div className="flex items-center gap-2 border-b border-border bg-surface-2 px-3 py-1.5 text-[12px]">
             <span className="font-medium">{g.length} copies · {formatBytes(sizeOf(g[0]!))} each</span>
-            <Button variant="ghost" size="sm" className="ml-auto text-danger" onClick={() => void onTrash(extrasOf(g))}>Trash {g.length - 1} extra{g.length - 1 === 1 ? "" : "s"}</Button>
+            <Button variant="ghost" size="sm" className="ml-auto text-danger hover:text-danger" loading={inFlight(extrasOf(g))} onClick={() => void onTrash(extrasOf(g))}>Trash {g.length - 1} extra{g.length - 1 === 1 ? "" : "s"}</Button>
           </div>
           {g.map((f, i) => (
             <div key={f.id} className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-[12.5px] last:border-0">
-              <span className="min-w-0 flex-1 truncate">{f.name}</span>
-              {i === 0 && <span className="shrink-0 rounded-full bg-ok-soft px-1.5 text-[10px] text-ok">keep</span>}
+              {/* Copies share a long prefix, so show the whole name (two lines) plus the modified date
+                  that tells them apart — a truncated row would read identically for every copy. */}
+              <div className="min-w-0 flex-1">
+                <div className="line-clamp-2 break-all">{f.name}</div>
+                {f.modifiedTime && <div className="text-[11px] text-faint">modified {ago(f.modifiedTime)}</div>}
+              </div>
+              {i === 0 && <span className="shrink-0 rounded-full bg-ok-soft px-1.5 py-0.5 text-[11px] text-ok">keep</span>}
               {busy.has(f.id) && <Spinner size={13} className="text-muted" />}
-              <button onClick={() => onPreview(f)} className="shrink-0 rounded p-1 text-faint hover:text-primary" aria-label="Preview"><Eye size={14} /></button>
-              {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noreferrer noopener" className="shrink-0 rounded p-1 text-faint hover:text-foreground" aria-label="Open in Drive"><ExternalLink size={13} /></a>}
+              <button onClick={() => onPreview(f)} className={cn(ROW_ICON, "hover:text-primary")} aria-label="Preview"><Eye size={15} /></button>
+              {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noreferrer noopener" className={cn(ROW_ICON, "hover:text-foreground")} aria-label="Open in Drive"><ExternalLink size={15} /></a>}
             </div>
           ))}
         </div>
@@ -273,21 +323,21 @@ function Duplicates({ groups, reclaimable, busy, onTrash, onPreview }: { groups:
   );
 }
 
-function FileList({ files, busy, onTrash, onPreview, meta }: { files: DriveScanFile[]; busy: Set<string>; onTrash: (id: string) => void; onPreview: (f: DriveScanFile) => void; meta: (f: DriveScanFile) => string }) {
-  if (!files.length) return <div className="grid place-items-center py-16 text-[13px] text-muted">Nothing to show.</div>;
+function FileList({ files, busy, onTrash, onPreview, meta, emptyIcon, emptyTitle }: { files: DriveScanFile[]; busy: Set<string>; onTrash: (id: string) => void; onPreview: (f: DriveScanFile) => void; meta: (f: DriveScanFile) => string; emptyIcon: typeof Layers; emptyTitle: string }) {
+  if (!files.length) return <EmptyState size="sm" icon={emptyIcon} title={emptyTitle} description="Nothing to show here right now." />;
   return (
     <div className="divide-y divide-border">
-      {files.map((f) => (
-        <div key={f.id} className="flex items-center gap-3 py-2">
+      {files.map((f, i) => (
+        <div key={f.id} className={cn("flex items-center gap-2 py-2", revealClass(i))} style={revealStyle(i)}>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[13px] font-medium">{f.name}</div>
             <div className="font-mono text-[11px] tabular text-faint">{meta(f)}</div>
           </div>
           {busy.has(f.id) ? <Spinner size={14} className="text-muted" /> : (
             <>
-              <button onClick={() => onPreview(f)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-primary" aria-label="Preview"><Eye size={15} /></button>
-              {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noreferrer noopener" className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Open in Drive"><ExternalLink size={15} /></a>}
-              <button onClick={() => onTrash(f.id)} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-danger" aria-label="Move to trash"><Trash2 size={15} /></button>
+              <button onClick={() => onPreview(f)} className={cn(ROW_ICON, "hover:text-primary")} aria-label="Preview"><Eye size={15} /></button>
+              {f.webViewLink && <a href={f.webViewLink} target="_blank" rel="noreferrer noopener" className={cn(ROW_ICON, "hover:text-foreground")} aria-label="Open in Drive"><ExternalLink size={15} /></a>}
+              <button onClick={() => onTrash(f.id)} className={cn(ROW_ICON, "hover:text-danger")} aria-label="Move to trash"><Trash2 size={15} /></button>
             </>
           )}
         </div>

@@ -3,6 +3,7 @@ import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { useUi } from "@/data/ui";
 import { Button } from "@/components/ui";
+import { EmptyState } from "@/components/common";
 import { useDriveV2, type ActivityEntry } from "@/data/driveV2";
 
 /** Single source of truth for how each activity action is presented — panel label/icon/tone + notification verb. */
@@ -52,34 +53,44 @@ export function ActivityPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface lg:h-full">
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <span className="grid h-9 w-9 place-items-center rounded-xl bg-primary-soft text-primary"><Activity size={18} /></span>
-        <div className="min-w-0 flex-1">
-          <h2 className="text-[14px] font-semibold">Activity</h2>
-          <p className="text-[12px] text-muted">
-            Live changes to your Drive, tracked while this tab is open{sync.lastAt ? ` · synced ${ago(new Date(sync.lastAt).toISOString())}` : ""}.
-          </p>
+      {/* Two rows on phones (title block, then the action cluster); one row from sm up. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-4 py-3">
+        <div className="flex min-w-0 flex-1 basis-full items-center gap-3 sm:basis-0">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><Activity size={18} /></span>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-[14px] font-semibold">Activity</h2>
+            <p className="line-clamp-2 text-[12px] text-muted">
+              Live changes to your Drive, tracked while this tab is open{sync.lastAt ? ` · synced ${ago(new Date(sync.lastAt).toISOString())}` : ""}.
+            </p>
+          </div>
         </div>
-        <button
-          onClick={() => void toggleNotify()}
-          className={cn("grid h-8 w-8 place-items-center rounded-md hover:bg-surface-2", notifyDesktop ? "text-primary" : "text-muted hover:text-foreground")}
-          aria-label={notifyDesktop ? "Turn off desktop notifications" : "Notify me of background changes"}
-          aria-pressed={notifyDesktop}
-          title={notifyDesktop ? "Desktop notifications on" : "Notify me when files change while this tab is in the background"}
-        >{notifyDesktop ? <Bell size={16} /> : <BellOff size={16} />}</button>
-        <Button variant="outline" size="sm" onClick={exportCsv} disabled={!activity.length}><Download size={14} /> Export CSV</Button>
-        {activity.length > 0 && <Button variant="ghost" size="sm" onClick={clearActivity}>Clear</Button>}
-        <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Close activity"><X size={16} /></button>
+        <div className="ml-auto flex items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => void toggleNotify()}
+            className={cn(notifyDesktop && "text-primary hover:text-primary")}
+            aria-label={notifyDesktop ? "Turn off desktop notifications" : "Notify me of background changes"}
+            aria-pressed={notifyDesktop}
+            title={notifyDesktop ? "Desktop notifications on" : "Notify me when files change while this tab is in the background"}
+          >{notifyDesktop ? <Bell size={16} /> : <BellOff size={16} />}</Button>
+          <Button variant="outline" size="sm" onClick={exportCsv} disabled={!activity.length} aria-label="Export CSV" title="Export CSV">
+            <Download size={14} /><span className="hidden sm:inline">Export CSV</span>
+          </Button>
+          {activity.length > 0 && <Button variant="ghost" size="sm" onClick={clearActivity}>Clear</Button>}
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close activity"><X size={16} /></Button>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {activity.length === 0 ? (
-          <div className="grid min-h-[280px] place-items-center px-6 text-center">
-            <div>
-              <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-surface-2 text-muted"><Activity size={22} /></span>
-              <div className="text-[13.5px] font-medium">No activity yet</div>
-              <p className="mx-auto mt-1 max-w-xs text-[12.5px] text-muted">Edits, new files, and deletions — in Kosh or anywhere else in Drive — appear here in real time.</p>
-            </div>
+          <div className="p-4">
+            <EmptyState
+              size="sm"
+              icon={Activity}
+              title="No activity yet"
+              description="Edits, new files, and deletions — in Kosh or anywhere else in Drive — appear here in real time."
+            />
           </div>
         ) : (
           <ul className="divide-y divide-border">

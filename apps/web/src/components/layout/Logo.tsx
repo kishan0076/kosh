@@ -20,7 +20,7 @@ export function Logo({ collapsed }: { collapsed?: boolean }) {
       {!collapsed && (
         <div className="leading-none">
           <div className="font-display text-[17px] font-bold tracking-tight">Kosh</div>
-          <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-faint">Treasury</div>
+          <div className="mt-0.5 text-[11px] font-medium uppercase tracking-[0.14em] text-faint">Treasury</div>
         </div>
       )}
     </div>

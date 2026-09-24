@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Clock, Copy, HardDrive, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Clock, Copy, HardDrive, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
 import { computeCleanupBuckets, formatBytes, type CleanupBucket, type CleanupBucketKey } from "@kosh/shared";
-import { Badge, Button, Spinner } from "@/components/ui";
+import { Badge, Button, Skeleton } from "@/components/ui";
 import { Modal } from "@/components/overlays";
+import { EmptyState } from "@/components/common";
 import { useUi } from "@/data/ui";
 import { driveV2Api, type DriveCleanupRecommendation } from "@/data/driveV2Api";
 import { useDriveV2 } from "@/data/driveV2";
@@ -10,6 +11,25 @@ import { useDriveV2 } from "@/data/driveV2";
 const BUCKET_ICON: Record<CleanupBucketKey, typeof Copy> = { duplicates: Copy, stale: Clock, large: HardDrive };
 const SAFETY_TONE: Record<DriveCleanupRecommendation["safety"], "ok" | "warn" | "danger"> = { safe: "ok", review: "warn", caution: "danger" };
 const SAFETY_LABEL: Record<DriveCleanupRecommendation["safety"], string> = { safe: "Safe to clear", review: "Review first", caution: "Be careful" };
+
+/** Bucket-card silhouette (icon, headline + badge, two rationale lines, sample line, action) so the
+ *  analyze → results swap doesn't jump. */
+function BucketSkeleton() {
+  return (
+    <div className="rounded-[var(--radius-control)] border border-border p-3.5">
+      <div className="flex flex-wrap items-start gap-3">
+        <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+        <div className="min-w-0 flex-1 space-y-2">
+          <div className="flex items-center gap-2"><Skeleton className="h-3.5 w-2/5" /><Skeleton className="h-4 w-16 rounded-full" /></div>
+          <Skeleton className="h-3 w-full" />
+          <Skeleton className="h-3 w-4/5" />
+          <Skeleton className="h-3 w-3/5" />
+        </div>
+        <div className="flex basis-full justify-end sm:basis-auto"><Skeleton className="h-8 w-20" /></div>
+      </div>
+    </div>
+  );
+}
 
 export function CleanupModal({ onClose }: { onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId)!;
@@ -23,6 +43,7 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
   const [recs, setRecs] = useState<DriveCleanupRecommendation[]>([]);
   const [sampled, setSampled] = useState(false);
   const [applyingKey, setApplyingKey] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0); // bumped by "Try again" to re-run the scan effect
 
   useEffect(() => {
     let live = true;
@@ -60,7 +81,7 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
       }
     })();
     return () => { live = false; };
-  }, [accountId, aiEnabled, spaceId]);
+  }, [accountId, aiEnabled, spaceId, attempt]);
 
   // Order buckets by the AI's recommendation order; append any the model didn't rank.
   const ordered = useMemo(() => {
@@ -113,35 +134,33 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Modal open onClose={onClose} className="max-w-2xl" labelledBy="cleanup-title">
-      <div className="flex items-center gap-3 border-b border-border px-5 py-4">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary"><Sparkles size={19} /></span>
+      <div className="flex shrink-0 items-center gap-3 border-b border-border px-5 py-4">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><Sparkles size={19} /></span>
         <div className="min-w-0 flex-1">
           <h2 id="cleanup-title" className="text-[15px] font-semibold">AI Cleanup</h2>
           <p className="text-[12px] text-muted">
             {loading ? "Analyzing your Drive…" : buckets.length ? `Up to ${formatBytes(totalReclaimable)} reclaimable across ${buckets.length} ${buckets.length === 1 ? "group" : "groups"}.` : "Reclaim space from duplicates, stale, and large files."}
           </p>
         </div>
-        <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Close cleanup"><X size={16} /></button>
+        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close cleanup"><X size={16} /></Button>
       </div>
 
-      <div className="max-h-[65vh] overflow-y-auto px-5 py-4">
+      {/* Scrolls on its own so the header stays put (and, as a phone sheet, the panel never outgrows the viewport). */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {loading ? (
-          <div className="grid min-h-[220px] place-items-center"><Spinner size={26} className="text-primary" /></div>
+          <div className="space-y-3" role="status" aria-busy="true" aria-label="Analyzing your Drive">
+            {[0, 1, 2].map((i) => <BucketSkeleton key={i} />)}
+          </div>
         ) : error ? (
-          <div className="grid min-h-[180px] place-items-center text-center">
-            <div>
-              <div className="text-[14px] font-semibold">Couldn't analyze</div>
-              <p className="mt-1 text-[13px] text-muted">{error}</p>
-            </div>
-          </div>
+          <EmptyState
+            size="sm"
+            icon={AlertTriangle}
+            title="Couldn't analyze"
+            description={error}
+            action={<Button variant="outline" size="sm" onClick={() => setAttempt((a) => a + 1)}><RefreshCw size={14} /> Try again</Button>}
+          />
         ) : ordered.length === 0 ? (
-          <div className="grid min-h-[180px] place-items-center px-6 text-center">
-            <div>
-              <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-ok-soft text-ok"><Sparkles size={22} /></span>
-              <div className="text-[13.5px] font-medium">Your Drive looks tidy</div>
-              <p className="mx-auto mt-1 max-w-xs text-[12.5px] text-muted">No duplicate, stale, or oversized files worth clearing right now.</p>
-            </div>
-          </div>
+          <EmptyState size="sm" icon={Sparkles} title="Your Drive looks tidy" description="No duplicate, stale, or oversized files worth clearing right now." />
         ) : (
           <div className="space-y-3">
             {sampled && (
@@ -155,7 +174,8 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
               const safety = rec?.safety ?? "review";
               return (
                 <div key={bucket.key} className="rounded-[var(--radius-control)] border border-border p-3.5">
-                  <div className="flex items-start gap-3">
+                  {/* The action drops under the text on phones so the copy keeps a readable column. */}
+                  <div className="flex flex-wrap items-start gap-3">
                     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted"><Icon size={17} /></span>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
@@ -166,16 +186,17 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
                         {rec?.rationale ? `${rec.rationale} ` : ""}
                         {bucket.count} file{bucket.count === 1 ? "" : "s"} · {formatBytes(bucket.bytes)}{bucket.capped ? ` — clearing ${bucket.fileIds.length} at a time` : ""}
                       </p>
-                      <p className="mt-1 truncate text-[11.5px] text-faint">{bucket.sampleNames.join(" · ")}</p>
+                      <p className="mt-1 line-clamp-2 break-words text-[11.5px] text-faint">{bucket.sampleNames.join(" · ")}</p>
                     </div>
-                    <div className="shrink-0">
+                    <div className="flex basis-full justify-end sm:basis-auto sm:shrink-0">
                       <Button
                         variant={safety === "caution" ? "danger" : "outline"}
                         size="sm"
-                        disabled={!!applyingKey}
+                        disabled={!!applyingKey && !isApplying}
+                        loading={isApplying}
                         onClick={() => void apply(bucket)}
                       >
-                        {isApplying ? <Spinner size={13} /> : <Trash2 size={13} />} Trash {bucket.fileIds.length}
+                        <Trash2 size={13} /> Trash {bucket.fileIds.length}
                       </Button>
                     </div>
                   </div>

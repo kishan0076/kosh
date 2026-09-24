@@ -3,10 +3,12 @@ import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { cn } from "@/lib/cn";
 
-/** Sanitized markdown renderer (README / SKILL.md / notes). Never uses dangerouslySetInnerHTML. */
+/** Sanitized markdown renderer (README / SKILL.md / notes). Never uses dangerouslySetInnerHTML.
+ *  Phone-safe by construction: prose breaks long tokens (URLs, paths) anywhere, code blocks and
+ *  tables scroll inside their own wrapper, images never exceed the column. */
 export function Markdown({ children, className }: { children: string; className?: string }) {
   return (
-    <div className={cn("kosh-md text-[14px] leading-relaxed text-foreground", className)}>
+    <div className={cn("kosh-md min-w-0 break-words text-[14px] leading-relaxed text-foreground [overflow-wrap:anywhere]", className)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}
@@ -15,7 +17,7 @@ export function Markdown({ children, className }: { children: string; className?
           h2: ({ node, ...p }) => <h2 className="mt-6 mb-2.5 font-display text-lg font-semibold first:mt-0" {...p} />,
           h3: ({ node, ...p }) => <h3 className="mt-5 mb-2 font-display text-base font-semibold first:mt-0" {...p} />,
           p: ({ node, ...p }) => <p className="my-3 first:mt-0" {...p} />,
-          a: ({ node, ...p }) => <a className="font-medium text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary" target="_blank" rel="noreferrer noopener" {...p} />,
+          a: ({ node, ...p }) => <a className="font-medium text-primary underline decoration-primary/30 underline-offset-2 [overflow-wrap:anywhere] hover:decoration-primary" target="_blank" rel="noreferrer noopener" {...p} />,
           ul: ({ node, ...p }) => <ul className="my-3 ml-5 list-disc space-y-1.5 marker:text-faint" {...p} />,
           ol: ({ node, ...p }) => <ol className="my-3 ml-5 list-decimal space-y-1.5 marker:text-faint" {...p} />,
           li: ({ node, ...p }) => <li className="pl-1" {...p} />,
@@ -26,28 +28,31 @@ export function Markdown({ children, className }: { children: string; className?
             const isBlock = /language-/.test(c ?? "") || String(children).includes("\n");
             if (isBlock) {
               return (
-                <code className={cn("block font-mono text-[12.5px] leading-relaxed", c)} {...p}>
+                <code className={cn("block whitespace-pre font-mono text-[12.5px] leading-relaxed", c)} {...p}>
                   {children}
                 </code>
               );
             }
             return (
-              <code className="rounded-[5px] border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[12.5px] text-foreground" {...p}>
+              <code className="rounded-[5px] border border-border bg-surface-2 px-1.5 py-0.5 font-mono text-[12.5px] text-foreground [overflow-wrap:anywhere]" {...p}>
                 {children}
               </code>
             );
           },
+          // Blocks keep their line structure and scroll sideways inside the card instead of pushing it.
           pre: ({ node, ...p }) => (
-            <pre className="my-3 overflow-x-auto rounded-[var(--radius-control)] border border-border bg-surface-2 p-3.5" {...p} />
+            <pre className="my-3 max-w-full overflow-x-auto rounded-[var(--radius-control)] border border-border bg-surface-2 p-3.5 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]" {...p} />
           ),
+          // Cells wrap at spaces only (never mid-word), so a wide table scrolls in its wrapper rather than
+          // collapsing into one-character columns.
           table: ({ node, ...p }) => (
-            <div className="my-3 overflow-x-auto rounded-lg border border-border">
-              <table className="w-full border-collapse text-[13px]" {...p} />
+            <div className="my-3 max-w-full overflow-x-auto rounded-lg border border-border [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+              <table className="w-full border-collapse text-[13px] [overflow-wrap:normal]" {...p} />
             </div>
           ),
           th: ({ node, ...p }) => <th className="border-b border-border bg-surface-2 px-3 py-2 text-left font-semibold" {...p} />,
           td: ({ node, ...p }) => <td className="border-b border-border px-3 py-2" {...p} />,
-          img: ({ node, ...p }) => <img className="my-3 max-w-full rounded-lg border border-border" loading="lazy" {...p} />,
+          img: ({ node, ...p }) => <img className="my-3 h-auto max-w-full rounded-lg border border-border" loading="lazy" {...p} />,
         }}
       >
         {children}

@@ -34,17 +34,20 @@ import {
   type SkillFile,
 } from "@kosh/shared";
 import { cn } from "@/lib/cn";
+import { DUR, EASE, SPRING } from "@/lib/motion";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { ago, shortDate } from "@/lib/time";
 import { GitHubMark, itemIcon, TOOL_COLOR_VAR } from "@/lib/icons";
 import { useSetStage } from "@/lib/useSetStage";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
-import { Badge, Button, Divider, Toggle } from "../ui";
+import { Badge, Button, Divider, Input, Textarea, Toggle } from "../ui";
 import { Menu, MenuItem } from "../overlays";
-import { StageChip, StarRating, TrustBadge } from "../common";
+import { EmptyState, StageChip, StarRating, TrustBadge } from "../common";
 import { Markdown } from "../markdown";
 import { CodeViewer } from "../CodeViewer";
+import { SkeletonText } from "../PageSkeleton";
 import { InstallMenu } from "./InstallMenu";
 import { PromptFill } from "./PromptFill";
 
@@ -54,6 +57,7 @@ export function DetailPanel() {
   const openItem = useUi((s) => s.openItem);
   const items = useData((s) => s.items);
   const navigate = useNavigate();
+  const phone = useMediaQuery(PHONE_QUERY);
 
   const ordered = useMemo(() => live(items).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [items]);
   const item = panel ? items.find((i) => i.id === panel.id) : undefined;
@@ -83,14 +87,26 @@ export function DetailPanel() {
             className="fixed inset-0 z-40 bg-black/30 lg:hidden"
             onClick={closePanel}
           />
+          {/* A right-hand drawer on wide screens; on phones it rises from the bottom like a sheet, leaving
+              a sliver of scrim above so it reads as one (and sits below the notch by construction). */}
           <motion.aside
             key="panel"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", stiffness: 380, damping: 38 }}
-            className="fixed inset-y-0 right-0 z-40 flex w-full max-w-[480px] flex-col border-l border-border bg-surface shadow-[var(--shadow-pop)]"
+            initial={phone ? { y: "100%" } : { x: "100%" }}
+            animate={phone ? { y: 0 } : { x: 0 }}
+            exit={phone ? { y: "100%" } : { x: "100%" }}
+            transition={phone ? { duration: DUR.slow, ease: EASE.emphasized } : SPRING.soft}
+            className={cn(
+              "fixed z-40 flex w-full flex-col bg-surface pb-safe shadow-[var(--shadow-pop)]",
+              phone
+                ? "inset-x-0 bottom-0 top-[max(0.75rem,var(--safe-top))] rounded-t-[var(--radius-panel)] border-t border-border"
+                : "inset-y-0 right-0 max-w-[480px] border-l border-border pt-safe",
+            )}
           >
+            {phone && (
+              <div className="flex shrink-0 justify-center pt-2" aria-hidden>
+                <div className="h-1 w-9 rounded-full bg-border-strong" />
+              </div>
+            )}
             <PanelBody item={item} onClose={closePanel} onExpand={() => { closePanel(); navigate(`/items/${item.id}`); }} />
           </motion.aside>
         </>
@@ -122,12 +138,12 @@ function PanelBody({ item, onClose, onExpand }: { item: Item; onClose: () => voi
   return (
     <>
       {/* header */}
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+      <div className="flex shrink-0 items-start gap-2 border-b border-border px-4 py-3">
         <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg" style={{ backgroundColor: `color-mix(in oklab, ${edge} 15%, transparent)`, color: edge }}>
           {item.linkType === "repo" ? <GitHubMark size={15} /> : <Icon size={15} />}
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold">{item.title}</div>
+        <div className="min-w-0 flex-1 self-center">
+          <div className="line-clamp-2 break-words text-sm font-semibold leading-tight [overflow-wrap:anywhere]">{item.title}</div>
           <div className="text-[11px] text-muted">Updated {ago(item.updatedAt)}</div>
         </div>
         {item.url && (
@@ -145,7 +161,7 @@ function PanelBody({ item, onClose, onExpand }: { item: Item; onClose: () => voi
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <ItemDetailContent item={item} />
       </div>
     </>
@@ -191,7 +207,7 @@ function MetaRail({ item }: { item: Item }) {
                 <button
                   key={t}
                   onClick={() => patchItem(item.id, { tags: [...item.tags, t] })}
-                  className="inline-flex items-center gap-1 rounded-md border border-dashed border-border-strong px-1.5 py-0.5 text-[11px] text-muted hover:border-primary hover:text-primary"
+                  className="pressable inline-flex min-h-7 items-center gap-1 rounded-md border border-dashed border-border-strong px-2 text-[12px] text-muted hover:border-primary hover:text-primary [@media(pointer:coarse)]:min-h-9"
                 >
                   + #{t}
                 </button>
@@ -205,19 +221,24 @@ function MetaRail({ item }: { item: Item }) {
         <span className="mb-1.5 block text-[12px] font-medium text-muted">Tags</span>
         <div className="flex flex-wrap items-center gap-1.5">
           {item.tags.map((t) => (
-            <span key={t} className="inline-flex items-center gap-1 rounded-md bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
-              #{t}
-              <button onClick={() => patchItem(item.id, { tags: item.tags.filter((x) => x !== t) })} className="hover:text-danger" aria-label={`Remove ${t}`}>
-                <X size={11} />
+            <span key={t} className="inline-flex h-7 max-w-full items-center gap-0.5 rounded-md bg-surface-2 pl-2 pr-0.5 text-[12px] text-muted">
+              <span className="truncate">#{t}</span>
+              {/* The × keeps its 12px glyph but gets a real hit box (40px on touch, overhanging the chip). */}
+              <button
+                onClick={() => patchItem(item.id, { tags: item.tags.filter((x) => x !== t) })}
+                className="-my-1 grid h-7 w-7 shrink-0 place-items-center rounded hover:bg-danger-soft hover:text-danger [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+                aria-label={`Remove ${t}`}
+              >
+                <X size={12} />
               </button>
             </span>
           ))}
-          <input
+          <Input
             value={tagInput}
             onChange={(e) => setTagInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && addTag()}
             placeholder="add tag"
-            className="w-20 rounded-md bg-surface-2 px-1.5 py-0.5 text-[11px] outline-none placeholder:text-faint focus:ring-focus"
+            className="h-9 min-w-[7rem] flex-1 border-transparent bg-surface-2 px-2 sm:h-7 sm:max-w-[8rem] sm:text-[12px]"
           />
         </div>
       </div>
@@ -233,7 +254,7 @@ function MetaRail({ item }: { item: Item }) {
                 key={c.id}
                 onClick={() => toggleItemCollection(item.id, c.id)}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-[11px] font-medium transition-colors",
+                  "pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors [@media(pointer:coarse)]:h-9",
                   inC ? "border-transparent bg-primary-soft text-primary" : "border-border text-muted hover:bg-surface-2",
                 )}
               >
@@ -248,9 +269,9 @@ function MetaRail({ item }: { item: Item }) {
 
       {/* found via — provenance, editable */}
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[12px] font-medium text-muted">Found via</span>
+        <span className="shrink-0 text-[12px] font-medium text-muted">Found via</span>
         {foundEdit ? (
-          <input
+          <Input
             autoFocus
             defaultValue={item.foundVia?.label ?? ""}
             onBlur={(e) => {
@@ -270,31 +291,37 @@ function MetaRail({ item }: { item: Item }) {
               }
             }}
             placeholder="e.g. a friend, newsletter…"
-            className="w-40 rounded-md bg-surface-2 px-2 py-0.5 text-right text-[11px] outline-none placeholder:text-faint focus:ring-focus"
+            className="h-9 min-w-0 flex-1 border-transparent bg-surface-2 px-2 text-right sm:h-7 sm:max-w-[10rem] sm:text-[12px]"
           />
         ) : (
-          <button onClick={() => setFoundEdit(true)} className="rounded-md hover:opacity-80" aria-label="Edit found via">
-            {item.foundVia ? <Badge tone="neutral">{item.foundVia.label}</Badge> : <span className="text-[12px] text-faint">+ add source</span>}
-          </button>
+          <Button variant="ghost" size="sm" onClick={() => setFoundEdit(true)} className="-mr-2 min-w-0 px-2" aria-label="Edit found via">
+            {item.foundVia ? (
+              <Badge tone="neutral" className="max-w-full">
+                <span className="truncate">{item.foundVia.label}</span>
+              </Badge>
+            ) : (
+              <span className="text-[12px] font-normal text-faint">+ add source</span>
+            )}
+          </Button>
         )}
       </div>
 
       {/* note */}
       <div>
         <span className="mb-1.5 block text-[12px] font-medium text-muted">Note — why you saved this</span>
-        <textarea
+        <Textarea
           defaultValue={item.note ?? ""}
           onBlur={(e) => patchItem(item.id, { note: e.target.value })}
           placeholder="A line to future-you…"
           rows={2}
-          className="w-full resize-y rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none placeholder:text-faint focus:border-primary focus:ring-focus"
+          className="resize-y"
         />
       </div>
 
       {item.verdict && (
         <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2">
           <div className="text-[11px] font-medium text-muted">Verdict · {shortDate(item.verdictAt)}</div>
-          <div className="mt-0.5 text-[13px]">{item.verdict}</div>
+          <div className="mt-0.5 break-words text-[13px]">{item.verdict}</div>
         </div>
       )}
     </div>
@@ -353,10 +380,21 @@ function ItemBody({ item }: { item: Item }) {
             <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-primary">
               <Sparkles size={12} /> AI summary
             </div>
-            <p className="text-[13px] leading-snug text-foreground">{item.ai.summary}</p>
+            <p className="break-words text-[13px] leading-snug text-foreground [overflow-wrap:anywhere]">{item.ai.summary}</p>
           </div>
         )}
-        {!item.ai?.summary && item.description && <p className="text-[13.5px] text-muted">{item.description}</p>}
+        {/* Enrichment runs after the save; hold the summary's place instead of leaving the hero blank. */}
+        {!item.ai?.summary && item.status === "enriching" && (
+          <div className="rounded-[var(--radius-control)] border border-primary/20 bg-primary-soft/40 p-3" role="status" aria-busy="true" aria-label="Enriching">
+            <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-primary">
+              <Sparkles size={12} /> Enriching…
+            </div>
+            <SkeletonText lines={3} />
+          </div>
+        )}
+        {!item.ai?.summary && item.description && (
+          <p className={cn("break-words text-[13.5px] text-muted [overflow-wrap:anywhere]", item.status === "enriching" && "mt-3")}>{item.description}</p>
+        )}
       </div>
 
       {/* actions */}
@@ -393,25 +431,29 @@ function ItemBody({ item }: { item: Item }) {
         <Button variant="ghost" size="sm" onClick={() => togglePin(item.id)}>
           <Pin size={15} className={cn(item.pinned && "rotate-45 fill-gold text-gold")} /> {item.pinned ? "Pinned" : "Pin"}
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => toggleFavorite(item.id)}>
-          <Bookmark size={15} className={cn(item.favorite && "fill-primary text-primary")} />
+        <Button variant="ghost" size="sm" onClick={() => toggleFavorite(item.id)} aria-label={item.favorite ? "Remove favorite" : "Favorite"}>
+          <Bookmark size={15} className={cn(item.favorite && "fill-primary text-primary")} /> {item.favorite ? "Favorited" : "Favorite"}
         </Button>
       </div>
 
       {/* install command block */}
       {g?.install?.command && (
-        <div className="mx-4 mt-3 flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2">
+        <div className="mx-4 mt-3 flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 py-1.5 pl-3 pr-1.5">
           <Terminal size={14} className="shrink-0 text-muted" />
-          <code className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{g.install.command}</code>
-          <button
+          {/* Wraps rather than truncates: the user should read what they're about to paste. */}
+          <code className="min-w-0 flex-1 whitespace-pre-wrap break-words py-1 font-mono text-[12.5px] leading-snug [overflow-wrap:anywhere]">{g.install.command}</code>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-faint"
+            aria-label="Copy install command"
             onClick={() => {
               navigator.clipboard?.writeText(g.install!.command!).catch(() => {});
               toast({ message: "Copied", tone: "ok" });
             }}
-            className="shrink-0 rounded-md p-1 text-faint hover:bg-surface-3 hover:text-foreground"
           >
             <Copy size={14} />
-          </button>
+          </Button>
         </div>
       )}
 
@@ -450,6 +492,15 @@ function ItemBody({ item }: { item: Item }) {
             </div>
           </div>
 
+          {/* awesome-list: every entry becomes an Inbox capture (network-bound → loading) */}
+          {g.repoKind === "awesome-list" && (
+            <div className="px-4 pb-4">
+              <Button variant="outline" size="sm" className="w-full" onClick={onExtract} loading={busy === "extract"}>
+                Extract all links to Inbox
+              </Button>
+            </div>
+          )}
+
           {/* skills inside */}
           {g.skillIndex && g.skillIndex.length > 0 && (
             <>
@@ -470,22 +521,19 @@ function ItemBody({ item }: { item: Item }) {
                       {s.snapshotted ? (
                         <Badge tone="ok">copied</Badge>
                       ) : (
-                        <button
+                        <Button
+                          variant="ghost"
+                          size="sm"
                           onClick={() => onSnapshot(s.path, s.name)}
-                          disabled={busy === s.path}
-                          className="shrink-0 rounded-md px-2 py-1 text-[11px] font-semibold text-primary hover:bg-primary-soft disabled:opacity-50"
+                          loading={busy === s.path}
+                          className="-mr-1 shrink-0 text-primary hover:bg-primary-soft hover:text-primary"
                         >
-                          {busy === s.path ? "Copying…" : "Keep a copy"}
-                        </button>
+                          Keep a copy
+                        </Button>
                       )}
                     </div>
                   ))}
                 </div>
-                {g.repoKind === "awesome-list" && (
-                  <Button variant="outline" size="sm" className="mt-3 w-full" onClick={onExtract} disabled={busy === "extract"}>
-                    {busy === "extract" ? "Extracting…" : "Extract all links to Inbox"}
-                  </Button>
-                )}
               </div>
             </>
           )}
@@ -498,7 +546,7 @@ function ItemBody({ item }: { item: Item }) {
           <Divider className="my-1" />
           <div className="px-4 py-4">
             <h4 className="mb-2 text-[13px] font-semibold">Prompt</h4>
-            <div className="whitespace-pre-wrap rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 font-mono text-[12.5px] leading-relaxed">
+            <div className="whitespace-pre-wrap break-words rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 font-mono text-[12.5px] leading-relaxed [overflow-wrap:anywhere]">
               {highlightVars(item.prompt.body)}
             </div>
             <div className="mt-2 text-[11px] text-muted">
@@ -572,24 +620,26 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
     <div className="pb-8">
       {/* trust banner */}
       {skill.trust === "unreviewed" && !skill.indexOnly && (
-        <div className="flex items-start gap-2.5 border-b border-warn/30 bg-warn-soft px-4 py-3">
-          <Eye size={16} className="mt-0.5 shrink-0 text-warn" />
-          <div className="flex-1">
-            <div className="text-[13px] font-semibold text-warn">Not reviewed yet</div>
-            <div className="text-[12px] text-warn/90">
-              Copied from {skill.source?.owner ? `${skill.source.owner}/${skill.source.repo}` : "a repo"}. Read it, then mark reviewed.
+        <div className="flex flex-col gap-2.5 border-b border-warn/30 bg-warn-soft px-4 py-3 sm:flex-row sm:items-start">
+          <div className="flex min-w-0 flex-1 items-start gap-2.5">
+            <Eye size={16} className="mt-0.5 shrink-0 text-warn" />
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] font-semibold text-warn">Not reviewed yet</div>
+              <div className="break-words text-[12px] text-warn/90 [overflow-wrap:anywhere]">
+                Copied from {skill.source?.owner ? `${skill.source.owner}/${skill.source.repo}` : "a repo"}. Read it, then mark reviewed.
+              </div>
             </div>
           </div>
-          <Button variant="outline" size="sm" onClick={() => { reviewSkill(skill.id); toast({ message: "Marked reviewed", tone: "ok" }); }}>
+          <Button variant="outline" size="sm" className="w-full sm:w-auto sm:shrink-0" onClick={() => { reviewSkill(skill.id); toast({ message: "Marked reviewed", tone: "ok" }); }}>
             <Check size={14} /> Mark reviewed
           </Button>
         </div>
       )}
 
       {skill.indexOnly && (
-        <div className="flex items-center justify-between gap-2 border-b border-border bg-surface-2 px-4 py-3">
-          <span className="text-[13px] text-muted">Indexed only — no copy in your vault yet.</span>
-          <Button variant="primary" size="sm" onClick={() => { keepCopy(skill.id); toast({ message: "Copy kept", description: skill.name, tone: "ok" }); }}>
+        <div className="flex flex-col gap-2 border-b border-border bg-surface-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <span className="min-w-0 flex-1 text-[13px] text-muted">Indexed only — no copy in your vault yet.</span>
+          <Button variant="primary" size="sm" className="w-full whitespace-nowrap sm:w-auto sm:shrink-0" onClick={() => { keepCopy(skill.id); toast({ message: "Copy kept", description: skill.name, tone: "ok" }); }}>
             Keep a copy
           </Button>
         </div>
@@ -608,9 +658,9 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
           {version.scan.risky && <Badge tone="warn">⚠ {version.scan.findings.length} findings</Badge>}
           {version.lint.ok ? <Badge tone="ok">lint ✓</Badge> : <Badge tone="danger">lint ✗</Badge>}
         </div>
-        {skill.description && <p className="mt-2.5 text-[13.5px] text-muted">{skill.description}</p>}
+        {skill.description && <p className="mt-2.5 break-words text-[13.5px] text-muted [overflow-wrap:anywhere]">{skill.description}</p>}
         {skill.source?.owner && (
-          <p className="mt-1.5 text-[12px] text-faint">
+          <p className="mt-1.5 break-words text-[12px] text-faint [overflow-wrap:anywhere]">
             from {skill.source.owner}/{skill.source.repo} · {skill.source.path}
           </p>
         )}
@@ -622,7 +672,7 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
           {/* version switcher */}
           {skill.versions.length > 1 && (
             <Menu
-              width={160}
+              width={190}
               trigger={({ toggle, ref }) => (
                 <Button ref={ref} variant="outline" size="sm" onClick={toggle}>
                   v{versionN} <ChevronDown size={14} />
@@ -631,8 +681,11 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
             >
               {[...skill.versions].reverse().map((v) => (
                 <MenuItem key={v.n} onClick={() => setVersionN(v.n)}>
-                  v{v.n} · {ago(v.createdAt)}
-                  {v.n === versionN && <Check size={13} className="ml-auto text-primary" />}
+                  {/* MenuItem truncates its label span; keep the check on the same line (same pattern as SelectMenu). */}
+                  <span className="flex w-full items-center gap-2">
+                    <span className="truncate">v{v.n} · {ago(v.createdAt)}</span>
+                    {v.n === versionN && <Check size={13} className="ml-auto shrink-0 text-primary" />}
+                  </span>
                 </MenuItem>
               ))}
             </Menu>
@@ -652,7 +705,7 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
           <div className="mb-1.5 text-[12px] font-semibold text-warn">Scan findings</div>
           <div className="space-y-1">
             {version.scan.findings.map((f, i) => (
-              <div key={i} className="text-[12px]">
+              <div key={i} className="break-words text-[12px] [overflow-wrap:anywhere]">
                 <span className="font-mono text-muted">{f.path}:{f.line}</span> <span className="text-foreground">{f.text}</span>
               </div>
             ))}
@@ -675,13 +728,13 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
                     key={f.path}
                     onClick={() => setSelected(f)}
                     className={cn(
-                      "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[11.5px] transition-colors",
+                      "pressable inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-md border px-2.5 text-left font-mono text-[12px] transition-colors [@media(pointer:coarse)]:min-h-10",
                       active ? "border-primary bg-primary-soft text-primary" : "border-border text-muted hover:bg-surface-2",
                     )}
                   >
-                    {/\.mdx?$/i.test(f.path) ? <FileText size={12} /> : <FileCode2 size={12} />}
-                    {f.path}
-                    {hasFinding && <span className="h-1.5 w-1.5 rounded-full bg-warn" />}
+                    {/\.mdx?$/i.test(f.path) ? <FileText size={12} className="shrink-0" /> : <FileCode2 size={12} className="shrink-0" />}
+                    <span className="min-w-0 truncate">{f.path}</span>
+                    {hasFinding && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />}
                   </button>
                 );
               })}
@@ -699,7 +752,7 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
                 <CodeViewer code={selected.content} findings={version.scan.findings.filter((f) => f.path === selected.path)} />
               )
             ) : (
-              <div className="rounded-[var(--radius-control)] border border-dashed border-border p-6 text-center text-[13px] text-muted">No preview available.</div>
+              <EmptyState size="sm" icon={FileText} title="No preview available" description="This file wasn't captured with its contents." />
             )}
           </div>
         </>

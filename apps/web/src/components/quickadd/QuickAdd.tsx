@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
-import { AlertTriangle, Blocks, CheckCircle2, FileText, FolderUp, Sparkles, UploadCloud, X } from "lucide-react";
+import { AlertTriangle, Blocks, CheckCircle2, ClipboardPaste, FileText, FolderUp, Sparkles, UploadCloud, X } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { GitHubMark } from "@/lib/icons";
+import { DUR, EASE } from "@/lib/motion";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { useData, type DropDraft } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { Button } from "../ui";
 import { collectDrop, collectFiles, groupIntoDrafts } from "./dropUtils";
 import { detectHint } from "./detectHint";
+
+const isSaveKind = (kind: string) => kind === "link" || kind === "repo";
 
 export function QuickAdd() {
   const [value, setValue] = useState("");
@@ -17,14 +21,20 @@ export function QuickAdd() {
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
+  const phone = useMediaQuery(PHONE_QUERY);
 
   const ingestUrl = useData((s) => s.ingestUrl);
   const finalizeDrafts = useData((s) => s.finalizeDrafts);
   const toast = useUi((s) => s.toast);
+  const dismissToast = useUi((s) => s.dismissToast);
   const openItem = useUi((s) => s.openItem);
+  const setPalette = useUi((s) => s.setPalette);
   const navigate = useNavigate();
 
   const hint = detectHint(value);
+  const isSave = isSaveKind(hint.kind);
+  // Commands and free text are the palette's job (search + commands live there), so the button says so.
+  const label = isSave || hint.kind === "empty" ? hint.label : "Search";
 
   useEffect(() => {
     const onDragEnter = (e: DragEvent) => {
@@ -59,19 +69,41 @@ export function QuickAdd() {
     };
   }, []);
 
-  const submit = () => {
-    if (!value.trim()) return;
-    if (hint.kind === "link" || hint.kind === "repo") {
-      const { item, duplicate } = ingestUrl(value.trim(), { source: "web" });
-      if (duplicate) {
-        toast({ message: "Already saved", description: item.title, action: { label: "Open", onClick: () => openItem(item.id) } });
-      } else {
-        toast({ message: "Saving…", description: item.url, tone: "ok" });
-      }
-      setValue("");
-    } else {
-      toast({ message: "That doesn't look like a link", description: "Paste a URL, drop files, or press ⌘K to search.", tone: "warn" });
+  /** Save a link/repo (the row lands in the store first) or hand anything else to the palette. */
+  const submit = (raw = value) => {
+    const text = raw.trim();
+    if (!text) return;
+    if (!isSaveKind(detectHint(text).kind)) {
+      setPalette(true);
+      return;
     }
+    const { item, duplicate } = ingestUrl(text, { source: "web" });
+    setValue("");
+    if (duplicate) {
+      toast({ message: "Already saved", description: item.title, action: { label: "Open", onClick: () => openItem(item.id) } });
+      return;
+    }
+    // Follow the optimistic row: "Saving…" until enrichment lands (→ "Saved") or the store rolls the
+    // row back after a failed POST (it toasts that failure itself, so this one just goes away). The
+    // server row replaces the optimistic one in two writes (remove, then upsert), so each change is
+    // judged a beat later, once the store has settled.
+    const pending = toast({ message: "Saving…", description: item.url, duration: 15000 });
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      const row = useData.getState().items.find((i) => i.url === item.url && !i.deletedAt);
+      if (row?.status === "enriching") return;
+      done = true;
+      stop();
+      window.clearTimeout(giveUp);
+      dismissToast(pending);
+      if (row) toast({ message: "Saved", description: row.title, tone: "ok", action: { label: "Open", onClick: () => openItem(row.id) } });
+    };
+    const stop = useData.subscribe(() => window.setTimeout(finish, 50));
+    const giveUp = window.setTimeout(() => {
+      done = true;
+      stop();
+    }, 30_000);
   };
 
   const pickFiles = async (files: FileList | null) => {
@@ -87,10 +119,13 @@ export function QuickAdd() {
     navigate("/library");
   };
 
-  const pasteFromClipboard = async () => {
+  /** Read the clipboard into the bar; with `save`, a pasted link is submitted straight away (one tap). */
+  const pasteFromClipboard = async (save = false) => {
     try {
-      const text = await navigator.clipboard.readText();
-      if (text) setValue(text);
+      const text = (await navigator.clipboard.readText()).trim();
+      if (!text) return;
+      setValue(text);
+      if (save && isSaveKind(detectHint(text).kind)) submit(text);
     } catch {
       toast({ message: "Clipboard unavailable", tone: "warn" });
     }
@@ -101,7 +136,7 @@ export function QuickAdd() {
       {/* input row */}
       <div
         className={cn(
-          "flex items-center gap-2 rounded-[var(--radius-panel)] border-2 bg-surface p-2 pl-4 transition-colors",
+          "flex items-center gap-2 rounded-[var(--radius-panel)] border-2 bg-surface p-2 pl-3 transition-colors sm:pl-4",
           dragging ? "border-gold" : "border-border focus-within:border-primary",
         )}
       >
@@ -119,15 +154,23 @@ export function QuickAdd() {
               setValue(text.trim());
             }
           }}
-          placeholder="Paste a link, drop a folder, or type to capture…"
-          className="h-11 flex-1 bg-transparent text-[15px] outline-none placeholder:text-faint"
+          placeholder={phone ? "Paste a link…" : "Paste a link, drop a folder, or type to capture…"}
+          className="h-11 w-full min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-faint sm:text-[15px]"
         />
-        <Button variant="outline" onClick={pasteFromClipboard} className="hidden sm:inline-flex">Paste</Button>
-        <Button variant="outline" size="icon" onClick={() => fileInput.current?.click()} aria-label="Upload files">
+        {/* Phones: one-tap paste-and-save while the bar is empty (long-press → Paste is the fiddly path). */}
+        {!value.trim() && (
+          <Button variant="outline" size="icon" onClick={() => pasteFromClipboard(true)} aria-label="Paste" className="shrink-0 sm:hidden">
+            <ClipboardPaste size={17} />
+          </Button>
+        )}
+        <Button variant="outline" onClick={() => pasteFromClipboard()} className="hidden shrink-0 sm:inline-flex">
+          Paste
+        </Button>
+        <Button variant="outline" size="icon" onClick={() => fileInput.current?.click()} aria-label="Upload files" className="shrink-0">
           <FolderUp size={17} />
         </Button>
-        <Button variant={hint.kind === "link" || hint.kind === "repo" ? "primary" : "secondary"} onClick={submit} disabled={!value.trim()}>
-          {hint.label}
+        <Button variant={isSave ? "primary" : "secondary"} onClick={() => submit()} disabled={!value.trim()} className="shrink-0">
+          {label}
         </Button>
         <input
           ref={fileInput}
@@ -148,16 +191,16 @@ export function QuickAdd() {
             initial={{ opacity: 0, height: 0, marginTop: 0 }}
             animate={{ opacity: 1, height: "auto", marginTop: 12 }}
             exit={{ opacity: 0, height: 0, marginTop: 0 }}
-            transition={{ duration: 0.25, ease: [0.2, 0.8, 0.2, 1] }}
+            transition={{ duration: DUR.base, ease: EASE.standard }}
             className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface"
           >
-            <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+            <div className="flex items-center justify-between border-b border-border py-1.5 pl-4 pr-2">
               <span className="text-[13px] font-semibold">
                 Ready to save · {drafts.length} item{drafts.length > 1 ? "s" : ""}
               </span>
-              <button onClick={() => setDrafts([])} className="rounded-md p-1 text-faint hover:bg-surface-2 hover:text-foreground">
+              <Button variant="ghost" size="icon-sm" onClick={() => setDrafts([])} aria-label="Clear">
                 <X size={16} />
-              </button>
+              </Button>
             </div>
             <div className="max-h-64 space-y-1.5 overflow-y-auto p-3">
               {drafts.map((d, i) => (
@@ -183,6 +226,7 @@ export function QuickAdd() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
+            transition={{ duration: DUR.base, ease: EASE.standard }}
             className="pointer-events-none fixed inset-0 z-[65] grid place-items-center bg-background/70 backdrop-blur-sm"
           >
             <div className="flex flex-col items-center gap-3 rounded-[var(--radius-panel)] border-2 border-dashed border-gold bg-surface px-12 py-10 shadow-[var(--shadow-pop)]">

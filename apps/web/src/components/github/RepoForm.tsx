@@ -47,7 +47,8 @@ export function RepoNameField({
           bad ? "border-danger focus-within:border-danger" : "border-border focus-within:border-primary",
         )}
       >
-        {ownerPrefix && <span className="shrink-0 border-r border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-faint">{ownerPrefix}/</span>}
+        {/* a long org login must not size the field: cap the prefix and let the input take the rest */}
+        {ownerPrefix && <span className="max-w-[45%] shrink-0 truncate border-r border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-faint">{ownerPrefix}/</span>}
         <input
           id={id}
           value={value}
@@ -59,18 +60,18 @@ export function RepoNameField({
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
-          className="min-w-0 flex-1 bg-transparent px-3 py-2 font-mono text-[14px] outline-none disabled:opacity-60"
+          className="h-9 w-full min-w-0 flex-1 bg-transparent px-3 font-mono text-base outline-none placeholder:text-faint disabled:opacity-60 sm:text-[14px]"
         />
         <span className="grid w-8 shrink-0 place-items-center">
-          {status === "checking" ? <Spinner size={13} className="text-muted" /> : status === "available" && !invalid ? <Check size={15} className="text-ok" /> : null}
+          {status === "checking" ? <Spinner size={15} className="text-muted" /> : status === "available" && !invalid ? <Check size={15} className="text-ok" /> : null}
         </span>
       </div>
       {invalid ? (
-        <p className="mt-1 text-[11.5px] text-danger">Only letters, numbers, '.', '_' and '-' are allowed.</p>
+        <p className="mt-1 text-[12.5px] text-danger">Only letters, numbers, '.', '_' and '-' are allowed.</p>
       ) : status === "taken" ? (
-        <p className="mt-1 text-[11.5px] text-danger">That name already exists on this account.</p>
+        <p className="mt-1 text-[12.5px] text-danger">That name already exists on this account.</p>
       ) : status === "available" ? (
-        <p className="mt-1 text-[11.5px] text-ok">Name is available.</p>
+        <p className="mt-1 text-[12.5px] text-ok">Name is available.</p>
       ) : null}
     </div>
   );
@@ -113,7 +114,7 @@ function VisButton({ icon: Icon, label, selected, onClick, disabled }: { icon: t
       disabled={disabled}
       aria-pressed={selected}
       className={cn(
-        "flex items-center gap-2 rounded-[var(--radius-control)] border px-3 py-2 text-[13px] transition-colors disabled:opacity-60",
+        "pressable flex items-center gap-2 rounded-[var(--radius-control)] border px-3 py-2 text-[13px] transition-colors disabled:opacity-60 [@media(pointer:coarse)]:min-h-10",
         selected ? "border-primary bg-primary-soft text-primary" : "border-border bg-surface-2 text-muted hover:border-border-strong",
       )}
     >
@@ -130,7 +131,7 @@ function VisibilityCard({ icon: Icon, title, desc, selected, onClick, disabled }
       disabled={disabled}
       aria-pressed={selected}
       className={cn(
-        "flex w-full items-center gap-3 rounded-[var(--radius-control)] border px-3 py-2.5 text-left transition-colors disabled:opacity-60",
+        "pressable flex w-full items-center gap-3 rounded-[var(--radius-control)] border px-3 py-2.5 text-left transition-colors disabled:opacity-60",
         selected ? "border-primary bg-primary-soft" : "border-border bg-surface-2 hover:border-border-strong",
       )}
     >
@@ -139,7 +140,7 @@ function VisibilityCard({ icon: Icon, title, desc, selected, onClick, disabled }
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-[13.5px] font-medium">{title}</span>
-        <span className="block text-[11.5px] leading-snug text-muted">{desc}</span>
+        <span className="block text-[12px] leading-snug text-muted">{desc}</span>
       </span>
       <span className={cn("grid h-4 w-4 shrink-0 place-items-center rounded-full border", selected ? "border-primary bg-primary text-primary-foreground" : "border-border")}>
         {selected && <Check size={11} />}
@@ -179,14 +180,15 @@ export function SecretFindings({
         <div className="min-w-0 flex-1">
           <div className="text-[14px] font-semibold">Possible secrets found</div>
           <p className="mt-0.5 text-[12.5px] text-muted">Review these first — anything you commit to git can be hard to fully erase later.</p>
-          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto font-mono text-[12px]">
+          {/* paths and matched text can be one long token: wrap anywhere so the card never widens the page */}
+          <ul className="mt-2 max-h-40 space-y-1 overflow-y-auto font-mono text-[12px] [overflow-wrap:anywhere]">
             {findings.slice(0, max).map((f, i) => (
               <li key={`${f.path}:${f.line}:${i}`}>
                 <span className="text-foreground">{f.path}</span>:<span className="text-muted">{f.line}</span> — {f.text}
               </li>
             ))}
           </ul>
-          {findings.length > max && <p className="mt-1 text-[11.5px] text-faint">+{findings.length - max} more…</p>}
+          {findings.length > max && <p className="mt-1 text-[12px] text-faint">+{findings.length - max} more…</p>}
           <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[13px]">
             <input type="checkbox" checked={confirmed} onChange={(e) => onConfirm(e.target.checked)} className="h-4 w-4 accent-[var(--primary)]" />
             {confirmLabel}
@@ -207,11 +209,12 @@ export function TopicsInput({ topics, onChange }: { topics: string[]; onChange: 
     setDraft("");
   };
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1.5 focus-within:border-primary focus-within:ring-focus">
+    <div className="flex flex-wrap items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-2 py-1.5 focus-within:border-primary focus-within:ring-focus [@media(pointer:coarse)]:min-h-10">
       {topics.map((t) => (
-        <span key={t} className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[12px] text-muted">
+        <span key={t} className="inline-flex items-center gap-0.5 rounded-full bg-surface-2 py-0.5 pl-2 pr-0.5 text-[12px] text-muted">
           #{t}
-          <button onClick={() => onChange(topics.filter((x) => x !== t))} className="hover:text-danger" aria-label={`Remove ${t}`}><X size={11} /></button>
+          {/* the icon stays 11px; the box grows to a thumb-sized target */}
+          <button onClick={() => onChange(topics.filter((x) => x !== t))} className="-my-1 grid h-7 w-7 place-items-center rounded-full hover:bg-surface-3 hover:text-danger [@media(pointer:coarse)]:-my-1.5 [@media(pointer:coarse)]:h-8 [@media(pointer:coarse)]:w-8" aria-label={`Remove ${t}`}><X size={11} /></button>
         </span>
       ))}
       <input
@@ -223,7 +226,7 @@ export function TopicsInput({ topics, onChange }: { topics: string[]; onChange: 
         }}
         onBlur={() => draft.trim() && add(draft)}
         placeholder={topics.length ? "" : "react, cli, typescript…"}
-        className="min-w-[8ch] flex-1 bg-transparent px-1 py-0.5 text-[13px] outline-none placeholder:text-faint"
+        className="min-w-[8ch] flex-1 self-stretch bg-transparent px-1 py-0.5 text-base outline-none placeholder:text-faint sm:text-[13px] [@media(pointer:coarse)]:min-h-8"
       />
     </div>
   );

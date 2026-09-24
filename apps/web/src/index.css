@@ -296,16 +296,32 @@
       radial-gradient(70% 60% at 80% 100%, color-mix(in oklab, var(--c2) 10%, transparent), transparent 70%);
   }
 
+  /* Immediate press feedback for tappable cards, rows and raw buttons on touch screens (a 2% scale
+     while the finger is down). Transform/opacity only; reduced motion swaps the scale for a dim. */
+  .pressable {
+    transition: transform var(--motion-fast) var(--ease-standard), opacity var(--motion-fast) ease;
+  }
+  @media (hover: none) {
+    .pressable:active {
+      transform: scale(0.98);
+    }
+  }
+
   .card-hover {
-    transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.18s ease, border-color 0.18s ease;
+    transition: transform var(--motion-base) var(--ease-standard), box-shadow var(--motion-base) ease, border-color var(--motion-base) ease;
     box-shadow: var(--edge-highlight);
   }
   /* Lift only on devices that really hover — on touch screens a tap would otherwise leave the
-     card stuck in its raised state until something else is tapped. */
+     card stuck in its raised state until something else is tapped; there it presses instead. */
   @media (hover: hover) {
     .card-hover:hover {
       box-shadow: var(--shadow), var(--edge-highlight);
       transform: translateY(-2px);
+    }
+  }
+  @media (hover: none) {
+    .card-hover:active {
+      transform: scale(0.98);
     }
   }
   .raised {
@@ -364,6 +380,16 @@
     animation: kosh-reveal-in var(--motion-base) var(--ease-standard) both;
   }
 
+  /* Indeterminate progress sweep (HydrationBar): a 40%-wide bar slides edge to edge inside its track
+     (150% of its own width = the remaining 60%). Transform-only, so it never re-layouts. */
+  @keyframes kosh-progress {
+    from { transform: translateX(0); }
+    to { transform: translateX(150%); }
+  }
+  .progress-indeterminate {
+    animation: kosh-progress 1.2s ease-in-out infinite alternate;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -373,12 +399,45 @@
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
-    .card-hover:hover {
+    .card-hover:hover,
+    .card-hover:active {
       transform: none;
+    }
+    /* Pressed feedback survives as a dim instead of a scale. */
+    .pressable:active {
+      transform: none;
+      opacity: 0.8;
+    }
+    .card-hover:active {
+      opacity: 0.8;
     }
     .reveal-in {
       animation: none;
     }
+    /* Progress indication is information, not decoration: spinners keep spinning, the hydration bar
+       becomes a static 40% bar, and skeletons stop shimmering (a static block, not a flash). */
+    .animate-spin {
+      animation-duration: 1s !important;
+      animation-iteration-count: infinite !important;
+    }
+    .shimmer {
+      animation: none;
+      background-position: 0 0;
+    }
+    .progress-indeterminate {
+      animation: none;
+    }
+  }
+}
+
+/* ── Phone input safety net (deliberately outside @layer so it beats any per-site font-size) ───────
+   iOS Safari zooms the viewport into any focused field smaller than 16px and leaves it zoomed after
+   blur. The Input/Textarea primitives already use text-base on phones; this catches the raw fields. */
+@media (max-width: 639px) and (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
   }
 }
 
@@ -387,14 +446,25 @@
   display: flex;
   align-items: center;
   gap: 0.625rem;
-  padding: 0.5rem 0.625rem;
+  padding: 0.625rem;
+  min-height: 2.5rem;
   border-radius: 0.5rem;
   cursor: pointer;
   user-select: none;
-  transition: background-color 0.12s ease;
+  transition: background-color var(--motion-fast) ease;
+}
+/* Dense rows with a mouse; the 40px floor above is for thumbs. */
+@media (min-width: 640px) {
+  .cmdk-item {
+    padding: 0.5rem 0.625rem;
+    min-height: 0;
+  }
 }
 .cmdk-item[data-selected="true"] {
   background: var(--surface-2);
+}
+.cmdk-item:active {
+  background: var(--surface-3);
 }
 .cmdk-item[data-disabled="true"] {
   opacity: 0.4;

@@ -79,34 +79,42 @@ export async function collectFiles(files: FileList): Promise<CollectedFile[]> {
   return out;
 }
 
-function stripCommonRoot(files: CollectedFile[]): CollectedFile[] {
-  const withSlash = files.filter((f) => f.path.includes("/"));
-  if (withSlash.length !== files.length || files.length === 0) return files;
-  const first = files[0]!.path.split("/")[0];
-  if (files.every((f) => f.path.startsWith(`${first}/`))) {
-    return files.map((f) => ({ ...f, path: f.path.slice(first!.length + 1) }));
-  }
-  return files;
+const SKILL_MD = /(^|\/)SKILL\.md$/i;
+
+/** One skill draft from a folder's files (paths already relative to that folder). */
+function skillDraft(files: CollectedFile[]): DropDraft {
+  const entry = files.find((f) => /^SKILL\.md$/i.test(f.path)) ?? files[0]!;
+  const fm = entry.text ? parseFrontmatter(entry.text).data : {};
+  const name = (fm.name as string) ?? "new-skill";
+  const skillFiles: SkillFile[] = files.map((f) => ({ path: f.path, size: f.size, mime: f.mime, content: f.text }));
+  const blobs = files.map((f) => ({ path: f.path, mime: f.mime, blob: f.blob }));
+  const texts = new Map<string, string>();
+  for (const f of files) if (f.text) texts.set(f.path, f.text);
+  const lint = lintSkill({ frontmatter: fm, body: entry.text ? parseFrontmatter(entry.text).content : "", files: files.map((f) => f.path), folderName: name });
+  const scan = scanSkill(texts);
+  return { kind: "skill", name, files: skillFiles, blobs, lint, scan };
 }
 
-/** Group collected files into skill / file drafts (SKILL.md → skill). */
+/** Group collected files into skill / file drafts. Every folder holding a SKILL.md — at any depth, since
+ *  both the folder picker (webkitRelativePath) and a dropped folder prefix paths with the folder's name —
+ *  becomes one skill draft rooted at that folder; whatever sits outside a skill folder is a loose file. */
 export function groupIntoDrafts(collected: CollectedFile[]): DropDraft[] {
   const files = collected.filter((f) => !/(^|\/)(__MACOSX|\.DS_Store|node_modules)(\/|$)/.test(f.path));
-  const skillEntry = files.find((f) => /^SKILL\.md$/i.test(f.path));
+  // Skill roots ("" or "dir/"), shallowest first; a SKILL.md nested inside another skill's folder is
+  // part of that skill, not a second one.
+  const roots: string[] = [];
+  const dirs = files
+    .filter((f) => SKILL_MD.test(f.path))
+    .map((f) => f.path.slice(0, f.path.length - "SKILL.md".length))
+    .sort((a, b) => a.length - b.length);
+  for (const dir of dirs) if (!roots.some((r) => dir.startsWith(r))) roots.push(dir);
 
-  if (skillEntry) {
-    const stripped = stripCommonRoot(files);
-    const entry = stripped.find((f) => /^SKILL\.md$/i.test(f.path)) ?? stripped[0]!;
-    const fm = entry.text ? parseFrontmatter(entry.text).data : {};
-    const name = (fm.name as string) ?? "new-skill";
-    const skillFiles: SkillFile[] = stripped.map((f) => ({ path: f.path, size: f.size, mime: f.mime, content: f.text }));
-    const blobs = stripped.map((f) => ({ path: f.path, mime: f.mime, blob: f.blob }));
-    const texts = new Map<string, string>();
-    for (const f of stripped) if (f.text) texts.set(f.path, f.text);
-    const lint = lintSkill({ frontmatter: fm, body: entry.text ? parseFrontmatter(entry.text).content : "", files: stripped.map((f) => f.path), folderName: name });
-    const scan = scanSkill(texts);
-    return [{ kind: "skill", name, files: skillFiles, blobs, lint, scan }];
+  const drafts: DropDraft[] = roots.map((root) =>
+    skillDraft(files.filter((f) => f.path.startsWith(root)).map((f) => ({ ...f, path: f.path.slice(root.length) }))),
+  );
+  for (const f of files) {
+    if (roots.some((r) => f.path.startsWith(r))) continue;
+    drafts.push({ kind: "file", path: f.path, size: f.size, mime: f.mime, blob: f.blob });
   }
-
-  return files.map((f) => ({ kind: "file", path: f.path, size: f.size, mime: f.mime, blob: f.blob }));
+  return drafts;
 }

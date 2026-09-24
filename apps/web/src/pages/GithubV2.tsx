@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   Activity,
@@ -45,10 +45,13 @@ import { startConnect } from "@/lib/connect";
 import { githubV2Api, type BranchLite, type CommitLite, type IssueLite, type PullLite, type ReleaseLite, type RepoDetail, type RepoSummary, type WorkflowRunLite } from "@/data/githubV2Api";
 import { useGithubV2, visibleRepos, ghToast, type RepoFilter } from "@/data/githubV2";
 import { GitHubMark } from "@/lib/icons";
-import { Button, Spinner } from "@/components/ui";
+import { Badge, Button, Input } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, Modal } from "@/components/overlays";
+import { EmptyState } from "@/components/common";
 import { Markdown } from "@/components/markdown";
-import { FadeSwap } from "@/components/motion";
+import { FadeSwap, Reveal } from "@/components/motion";
+import { PageSkeleton, SkeletonRow, SkeletonText } from "@/components/PageSkeleton";
+import { revealClass, revealStyle } from "@/lib/motion";
 import { GithubNew } from "./GithubNew";
 import { GithubUpload } from "./GithubUpload";
 import { GithubSettings } from "./GithubSettings";
@@ -101,9 +104,10 @@ export function GithubV2() {
   );
 }
 
-function Gate({ title, body, action }: { title: string; body: string; action?: ReactNode }) {
+/** `compact` for inline list/detail errors (no tall vertical centering — the toolbar is right above). */
+function Gate({ title, body, action, compact }: { title: string; body: string; action?: ReactNode; compact?: boolean }) {
   return (
-    <div className="mx-auto grid min-h-[55vh] w-full max-w-lg place-items-center">
+    <div className={cn("mx-auto grid w-full max-w-lg place-items-center", compact ? "py-6" : "min-h-[55vh]")}>
       <div className="w-full rounded-[var(--radius-card)] border border-border bg-surface px-6 py-10 text-center">
         <span className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary"><Github size={26} /></span>
         <h1 className="text-lg font-semibold">{title}</h1>
@@ -184,48 +188,65 @@ function RepoList() {
     stars: repos.reduce((a, r) => a + r.stars, 0),
   }), [repos]);
 
+  const filtered = !!query || prefs.filter !== "all";
+  // Re-key the collection on filter/sort so the first cards reveal again; typing a query does not.
+  const listKey = `${prefs.filter}:${prefs.sort}`;
+
   return (
-    <div className="w-full space-y-4">
-      <header className="flex flex-wrap items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
-        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><Github size={22} /></span>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-semibold leading-tight">GitHub</h1>
-          <p className="mt-0.5 text-[13px] text-muted">
-            {status === "ready" ? `${stats.total} repositories · ${stats.private} private · ${stats.stars.toLocaleString()} stars` : "Manage all your repositories"}
-          </p>
+    // Bottom padding in select mode keeps the last card clear of the fixed selection bar.
+    <div className={cn("w-full space-y-4", selectMode && "pb-24")}>
+      {/* On phones the title block takes the full first row and the actions form a 2-col grid under it. */}
+      <header className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-border bg-surface px-4 py-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4 sm:px-5">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><Github size={22} /></span>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-xl font-semibold leading-tight">GitHub</h1>
+            <p className="mt-0.5 text-pretty text-[13px] text-muted">
+              {status === "ready" ? `${stats.total} repositories · ${stats.private} private · ${stats.stars.toLocaleString()} stars` : "Manage all your repositories"}
+            </p>
+          </div>
+          <Button variant="ghost" size="icon-sm" onClick={() => void load(true)} disabled={status === "loading"} aria-label="Refresh">
+            <RefreshCw size={15} className={cn(status === "loading" && "animate-spin")} />
+          </Button>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => void load(true)} disabled={status === "loading"} aria-label="Refresh">
-          <RefreshCw size={15} className={cn(status === "loading" && "animate-spin")} />
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => navigate("/github/health")}><Activity size={15} /> Health</Button>
-        <Button variant={selectMode ? "secondary" : "ghost"} size="sm" onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}><CheckSquare size={15} /> {selectMode ? "Done" : "Select"}</Button>
-        <Button variant="outline" size="sm" onClick={() => navigate("/github/upload")}><Upload size={15} /> Upload folder</Button>
-        <Button variant="primary" size="sm" onClick={() => navigate("/github/new")}><Plus size={15} /> New repository</Button>
+        {/* ghost buttons get a border below sm so they read as buttons in the grid, not floating labels */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
+          <Button variant="ghost" size="sm" className="border-border sm:border-transparent" onClick={() => navigate("/github/health")}><Activity size={15} /> Health</Button>
+          <Button variant={selectMode ? "secondary" : "ghost"} size="sm" className={cn(!selectMode && "border-border sm:border-transparent")} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}><CheckSquare size={15} /> {selectMode ? "Done" : "Select"}</Button>
+          <Button variant="outline" size="sm" onClick={() => navigate("/github/upload")}><Upload size={15} /> Upload folder</Button>
+          <Button variant="primary" size="sm" className="col-span-2 sm:col-span-1" onClick={() => navigate("/github/new")}><Plus size={15} /> New repository</Button>
+        </div>
       </header>
 
       <RepoToolbar />
 
       {status === "loading" && repos.length === 0 ? (
-        <div className="grid min-h-[40vh] place-items-center"><Spinner size={24} className="text-primary" /></div>
+        <PageSkeleton variant={prefs.layout === "list" ? "table" : "cards"} header={false} rows={6} />
       ) : status === "error" ? (
-        <Gate title="Couldn't load repositories" body={error ?? "GitHub didn't respond."} action={<Button variant="primary" onClick={() => void load(true)}>Retry</Button>} />
+        <Gate compact title="Couldn't load repositories" body={error ?? "GitHub didn't respond."} action={<Button variant="primary" onClick={() => void load(true)}>Retry</Button>} />
       ) : visible.length === 0 ? (
-        <div className="rounded-[var(--radius-card)] border border-dashed border-border bg-surface px-6 py-16 text-center">
-          <p className="text-[14px] font-medium">{query || prefs.filter !== "all" ? "No repositories match" : "No repositories yet"}</p>
-          <p className="mt-1 text-[13px] text-muted">{query || prefs.filter !== "all" ? "Try a different search or filter." : "Create your first repository to get started."}</p>
-          {!query && prefs.filter === "all" && (
-            <p className="mx-auto mt-3 max-w-md text-[12px] text-faint">
-              Expecting existing repos? Kosh needs a classic GitHub <span className="font-medium">OAuth App</span> (with the <span className="font-mono">repo</span> scope) — a <span className="font-medium">GitHub App</span> only shows repositories it's installed on. See <span className="font-mono">docs/GITHUB.md</span>.
-            </p>
-          )}
-        </div>
+        <EmptyState
+          icon={Github}
+          title={filtered ? "No repositories match" : "No repositories yet"}
+          description={
+            filtered ? "Try a different search or filter." : (
+              <>
+                Create your first repository to get started.
+                <span className="mt-2 block text-[12px] text-faint">
+                  Expecting existing repos? Kosh needs a classic GitHub <span className="font-medium">OAuth App</span> (with the <span className="font-mono">repo</span> scope) — a <span className="font-medium">GitHub App</span> only shows repositories it's installed on. See <span className="font-mono">docs/GITHUB.md</span>.
+                </span>
+              </>
+            )
+          }
+          action={!filtered && <Button variant="primary" onClick={() => navigate("/github/new")}><Plus size={15} /> New repository</Button>}
+        />
       ) : prefs.layout === "grid" ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {visible.map((r) => <RepoCard key={r.id} repo={r} onOpen={() => onCardClick(r)} selectMode={selectMode} selected={selected.has(r.id)} />)}
+        <div key={listKey} className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {visible.map((r, i) => <RepoCard key={r.id} repo={r} index={i} onOpen={() => onCardClick(r)} selectMode={selectMode} selected={selected.has(r.id)} />)}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-          {visible.map((r) => <RepoRow key={r.id} repo={r} onOpen={() => onCardClick(r)} selectMode={selectMode} selected={selected.has(r.id)} />)}
+        <div key={listKey} className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+          {visible.map((r, i) => <RepoRow key={r.id} repo={r} index={i} onOpen={() => onCardClick(r)} selectMode={selectMode} selected={selected.has(r.id)} />)}
         </div>
       )}
 
@@ -250,25 +271,29 @@ function SelectionBar({ repos, onAction, onClear }: { repos: RepoSummary[]; onAc
   // Archive / visibility / delete all require admin — offer them only when every selected repo qualifies,
   // otherwise the server would reject the ones the user can't manage.
   const admin = repos.every((r) => r.canAdmin);
+  // Phones: a full-width bar hugging the bottom safe area with icon-only actions (labelled for AT);
+  // sm+: the floating pill with labels. z-40 sits under the bulk modal (z-50) and the toaster (z-70).
+  const actionCls = "min-w-10 px-2.5 sm:min-w-0 sm:px-3";
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 mb-safe flex justify-center px-4">
-      {/* rounded-2xl below sm: the buttons wrap onto two lines on phones, where a pill shape looks broken */}
-      <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-elevated px-3 py-2 shadow-[var(--shadow-pop)] sm:rounded-full">
-        <span className="px-1 text-[13px] font-semibold">{repos.length} selected</span>
-        <span className="h-4 w-px bg-border" />
-        {admin ? (
-          <>
-            <Button variant="ghost" size="sm" onClick={() => onAction("archive")}><Archive size={14} /> Archive</Button>
-            <Button variant="ghost" size="sm" onClick={() => onAction("makePrivate")}><Lock size={14} /> Private</Button>
-            <Button variant="ghost" size="sm" onClick={() => onAction("makePublic")}><Globe size={14} /> Public</Button>
-            <Button variant="ghost" size="sm" className="text-danger hover:bg-danger-soft" onClick={() => onAction("delete")}><Trash2 size={14} /> Delete</Button>
-          </>
-        ) : (
-          <span className="px-1 text-[12px] text-muted">Some selected repos aren't yours to manage</span>
-        )}
-        <span className="h-4 w-px bg-border" />
-        <button onClick={onClear} className="rounded-full p-1.5 text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Clear selection"><X size={15} /></button>
-      </div>
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 mb-safe flex justify-center px-3 pb-3 sm:bottom-4 sm:px-4 sm:pb-0">
+      <Reveal className="pointer-events-auto flex w-full items-center gap-1 rounded-2xl border border-border bg-elevated px-2 py-1.5 shadow-[var(--shadow-pop)] sm:w-auto sm:gap-2 sm:rounded-full sm:px-3 sm:py-2">
+        <span className="shrink-0 px-2 text-[13px] font-semibold tabular sm:px-1">{repos.length} selected</span>
+        <span className="hidden h-4 w-px bg-border sm:block" />
+        <div className="flex min-w-0 flex-1 items-center justify-end gap-1 overflow-x-auto [scrollbar-width:none] sm:flex-none sm:gap-2 sm:overflow-visible">
+          {admin ? (
+            <>
+              <Button variant="ghost" size="sm" className={actionCls} onClick={() => onAction("archive")} aria-label="Archive"><Archive size={15} /> <span className="hidden sm:inline">Archive</span></Button>
+              <Button variant="ghost" size="sm" className={actionCls} onClick={() => onAction("makePrivate")} aria-label="Make private"><Lock size={15} /> <span className="hidden sm:inline">Private</span></Button>
+              <Button variant="ghost" size="sm" className={actionCls} onClick={() => onAction("makePublic")} aria-label="Make public"><Globe size={15} /> <span className="hidden sm:inline">Public</span></Button>
+              <Button variant="ghost" size="sm" className={cn(actionCls, "text-danger hover:bg-danger-soft")} onClick={() => onAction("delete")} aria-label="Delete"><Trash2 size={15} /> <span className="hidden sm:inline">Delete</span></Button>
+            </>
+          ) : (
+            <span className="min-w-0 truncate px-1 text-[12px] text-muted">Some selected repos aren't yours to manage</span>
+          )}
+        </div>
+        <span className="hidden h-4 w-px bg-border sm:block" />
+        <Button variant="ghost" size="icon-sm" className="shrink-0 rounded-full" onClick={onClear} aria-label="Clear selection"><X size={15} /></Button>
+      </Reveal>
     </div>
   );
 }
@@ -313,10 +338,11 @@ function BulkModal({ action, repos, onClose, onDone }: { action: BulkAction; rep
 
   return (
     <Modal open onClose={busy ? () => {} : onClose} className="w-full max-w-md" labelledBy="bulk-title">
-      <div className="p-5">
+      {/* body scrolls, footer stays visible (the Modal panel is a flex column / bottom sheet on phones) */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-2">
         <h2 id="bulk-title" className={cn("flex items-center gap-2 text-[16px] font-semibold", meta.danger && "text-danger")}><meta.icon size={17} /> {meta.verb} {repos.length} {repos.length === 1 ? "repository" : "repositories"}</h2>
         {results ? (
-          <div className="mt-3 max-h-64 space-y-1 overflow-y-auto">
+          <div className="mt-3 space-y-1">
             {results.map((o) => (
               <div key={o.repo.id} className="flex items-center gap-2 text-[12.5px]">
                 <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", o.ok ? "bg-ok" : "bg-danger")} />
@@ -334,15 +360,15 @@ function BulkModal({ action, repos, onClose, onDone }: { action: BulkAction; rep
             {needsType && (
               <div className="mt-3">
                 <label htmlFor="bulk-confirm" className="mb-1 block text-[12px] font-medium text-muted">Type <span className="font-mono text-foreground">delete</span> to confirm</label>
-                <input id="bulk-confirm" autoFocus value={confirm} onChange={(e) => setConfirm(e.target.value)} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none focus:border-danger focus:ring-focus" />
+                <Input id="bulk-confirm" autoFocus value={confirm} onChange={(e) => setConfirm(e.target.value)} className="focus:border-danger" />
               </div>
             )}
           </>
         )}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={busy}>{results ? "Close" : "Cancel"}</Button>
-          {!results && <Button variant={meta.danger ? "danger" : "primary"} onClick={run} disabled={!ready || busy}>{busy ? <Spinner size={15} /> : <meta.icon size={15} />} {meta.verb}</Button>}
-        </div>
+      </div>
+      <div className="flex shrink-0 justify-end gap-2 px-5 pb-5 pt-3">
+        <Button variant="ghost" onClick={onClose} disabled={busy}>{results ? "Close" : "Cancel"}</Button>
+        {!results && <Button variant={meta.danger ? "danger" : "primary"} onClick={run} disabled={!ready} loading={busy}><meta.icon size={15} /> {meta.verb}</Button>}
       </div>
     </Modal>
   );
@@ -358,29 +384,30 @@ function RepoToolbar() {
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-2.5 focus-within:border-primary focus-within:ring-focus sm:max-w-sm">
+      {/* The search takes its own row on phones (basis-full); filter / sort / layout form the row below. */}
+      <label className="flex h-10 basis-full min-w-0 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface px-2.5 focus-within:border-primary focus-within:ring-focus sm:h-9 sm:basis-auto sm:flex-1 sm:max-w-sm">
         <Search size={15} className="shrink-0 text-muted" />
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search repositories…" className="min-w-0 flex-1 bg-transparent text-[13px] outline-none" />
-        {query && <button onClick={() => setQuery("")} aria-label="Clear"><X size={14} className="text-faint hover:text-foreground" /></button>}
+        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search repositories…" className="min-w-0 flex-1 self-stretch bg-transparent text-base outline-none placeholder:text-faint sm:text-[13px]" />
+        {query && <button onClick={() => setQuery("")} className="-mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-full text-faint hover:bg-surface-2 hover:text-foreground" aria-label="Clear"><X size={14} /></button>}
       </label>
 
       <Menu align="start" width={190} trigger={({ toggle, ref }) => (
-        <button ref={ref} onClick={toggle} className={cn("inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] hover:bg-surface-2", prefs.filter !== "all" ? "border-primary text-primary" : "border-border text-muted")}><Filter size={15} /> {FILTERS.find((f) => f.k === prefs.filter)?.label}</button>
+        <button ref={ref} onClick={toggle} className={cn("pressable inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] hover:bg-surface-2 [@media(pointer:coarse)]:h-10", prefs.filter !== "all" ? "border-primary text-primary" : "border-border text-muted")}><Filter size={15} /> {FILTERS.find((f) => f.k === prefs.filter)?.label}</button>
       )}>
         <MenuLabel>Filter</MenuLabel>
         {FILTERS.map((f) => <MenuItem key={f.k} icon={prefs.filter === f.k ? Check : undefined} onClick={() => setFilter(f.k)}>{f.label}</MenuItem>)}
       </Menu>
 
       <Menu align="end" width={190} trigger={({ toggle, ref }) => (
-        <button ref={ref} onClick={toggle} className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[13px] text-muted hover:bg-surface-2"><ArrowUpDown size={15} /> {SORTS.find((s) => s.k === prefs.sort)?.label}</button>
+        <button ref={ref} onClick={toggle} className="pressable inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[13px] text-muted hover:bg-surface-2 [@media(pointer:coarse)]:h-10"><ArrowUpDown size={15} /> {SORTS.find((s) => s.k === prefs.sort)?.label}</button>
       )}>
         <MenuLabel>Sort by</MenuLabel>
         {SORTS.map((s) => <MenuItem key={s.k} icon={prefs.sort === s.k ? Check : undefined} onClick={() => setSort(s.k)}>{s.label}</MenuItem>)}
       </Menu>
 
-      <div className="flex h-9 items-center rounded-[var(--radius-control)] border border-border p-0.5">
-        <button onClick={() => setLayout("grid")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid"><LayoutGrid size={15} /></button>
-        <button onClick={() => setLayout("list")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List"><ListIcon size={15} /></button>
+      <div className="ml-auto flex items-center rounded-[var(--radius-control)] border border-border p-0.5 sm:ml-0">
+        <button onClick={() => setLayout("grid")} className={cn("pressable grid h-8 w-8 place-items-center rounded-[6px] [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-10", prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid"><LayoutGrid size={15} /></button>
+        <button onClick={() => setLayout("list")} className={cn("pressable grid h-8 w-8 place-items-center rounded-[6px] [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-10", prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List"><ListIcon size={15} /></button>
       </div>
     </div>
   );
@@ -388,15 +415,15 @@ function RepoToolbar() {
 
 function VisBadge({ repo }: { repo: RepoSummary }) {
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] text-muted">
+    <Badge className="shrink-0">
       {repo.private ? <Lock size={10} /> : <Globe size={10} />} {repo.private ? "Private" : "Public"}
-    </span>
+    </Badge>
   );
 }
 
 function RepoMeta({ repo }: { repo: RepoSummary }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
       {repo.language && <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-faint" /> {repo.language}</span>}
       {repo.stars > 0 && <span className="inline-flex items-center gap-1"><Star size={12} /> {repo.stars.toLocaleString()}</span>}
       {repo.forks > 0 && <span className="inline-flex items-center gap-1"><GitFork size={12} /> {repo.forks.toLocaleString()}</span>}
@@ -405,9 +432,9 @@ function RepoMeta({ repo }: { repo: RepoSummary }) {
   );
 }
 
-function RepoCard({ repo, onOpen, selectMode, selected }: { repo: RepoSummary; onOpen: () => void; selectMode?: boolean; selected?: boolean }) {
+function RepoCard({ repo, index, onOpen, selectMode, selected }: { repo: RepoSummary; index: number; onOpen: () => void; selectMode?: boolean; selected?: boolean }) {
   return (
-    <button onClick={onOpen} className={cn("card-hover flex h-full flex-col gap-2 rounded-[var(--radius-card)] border bg-surface p-4 text-left", selected ? "border-primary ring-2 ring-primary/40" : "border-border")}>
+    <button onClick={onOpen} style={revealStyle(index)} className={cn("card-hover pressable flex h-full flex-col gap-2 rounded-[var(--radius-card)] border bg-surface p-4 text-left", revealClass(index), selected ? "border-primary ring-2 ring-primary/40" : "border-border")}>
       <div className="flex items-center gap-2">
         {selectMode && (selected ? <CheckSquare size={16} className="shrink-0 text-primary" /> : <Square size={16} className="shrink-0 text-faint" />)}
         <GitHubMark size={16} className="shrink-0 text-muted" />
@@ -421,9 +448,9 @@ function RepoCard({ repo, onOpen, selectMode, selected }: { repo: RepoSummary; o
   );
 }
 
-function RepoRow({ repo, onOpen, selectMode, selected }: { repo: RepoSummary; onOpen: () => void; selectMode?: boolean; selected?: boolean }) {
+function RepoRow({ repo, index, onOpen, selectMode, selected }: { repo: RepoSummary; index: number; onOpen: () => void; selectMode?: boolean; selected?: boolean }) {
   return (
-    <button onClick={onOpen} className={cn("flex w-full items-center gap-3 border-b border-border px-4 py-3 text-left last:border-0 hover:bg-surface-2", selected && "bg-primary-soft/40")}>
+    <button onClick={onOpen} style={revealStyle(index)} className={cn("pressable flex w-full items-center gap-3 border-b border-border px-4 py-3 text-left last:border-0 hover:bg-surface-2 active:bg-surface-2", revealClass(index), selected && "bg-primary-soft/40")}>
       {selectMode && (selected ? <CheckSquare size={16} className="shrink-0 text-primary" /> : <Square size={16} className="shrink-0 text-faint" />)}
       <GitHubMark size={16} className="shrink-0 text-muted" />
       <div className="min-w-0 flex-1">
@@ -433,6 +460,8 @@ function RepoRow({ repo, onOpen, selectMode, selected }: { repo: RepoSummary; on
           <VisBadge repo={repo} />
         </div>
         {repo.description && <p className="mt-0.5 truncate text-[12px] text-muted">{repo.description}</p>}
+        {/* phones get the meta line under the description; wider screens keep it as a trailing column */}
+        <div className="mt-1 sm:hidden"><RepoMeta repo={repo} /></div>
       </div>
       <div className="hidden sm:block"><RepoMeta repo={repo} /></div>
       <ChevronRight size={16} className="shrink-0 text-faint" />
@@ -478,49 +507,80 @@ function RepoDetail() {
 
   useEffect(() => { void reload(); }, [reload]);
 
-  if (loading) return <div className="grid min-h-[50vh] place-items-center"><Spinner size={24} className="text-primary" /></div>;
+  if (loading) return <PageSkeleton variant="detail" />;
   if (error || !detail) {
-    return <Gate title="Repository unavailable" body={error ?? "Not found."} action={<Button variant="outline" onClick={() => navigate("/github")}><ArrowLeft size={15} /> Back to repositories</Button>} />;
+    return <Gate compact title="Repository unavailable" body={error ?? "Not found."} action={<Button variant="outline" onClick={() => navigate("/github")}><ArrowLeft size={15} /> Back to repositories</Button>} />;
   }
 
   return (
     <div className="w-full space-y-4">
-      <button onClick={() => navigate("/github")} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground"><ArrowLeft size={15} /> All repositories</button>
+      <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate("/github")}><ArrowLeft size={15} /> All repositories</Button>
 
       {/* header */}
-      <header className="rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
+      <header className="rounded-[var(--radius-card)] border border-border bg-surface px-4 py-4 sm:px-5">
         <div className="flex flex-wrap items-start gap-3">
           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><GitHubMark size={20} /></span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener" className="truncate text-lg font-semibold hover:text-primary">{detail.owner}/{detail.name}</a>
+              <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener" className="min-w-0 max-w-full truncate py-0.5 text-lg font-semibold hover:text-primary">{detail.owner}/{detail.name}</a>
               <VisBadge repo={detail} />
-              {detail.archived && <span className="inline-flex items-center gap-1 rounded-full border border-warn/40 bg-warn-soft px-1.5 py-0.5 text-[10.5px] text-warn"><Archive size={10} /> Archived</span>}
-              {detail.fork && <span className="inline-flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] text-muted"><GitFork size={10} /> Fork</span>}
+              {detail.archived && <Badge tone="warn" className="shrink-0"><Archive size={10} /> Archived</Badge>}
+              {detail.fork && <Badge className="shrink-0"><GitFork size={10} /> Fork</Badge>}
             </div>
             {detail.description && <p className="mt-1 text-[13px] text-muted">{detail.description}</p>}
             <div className="mt-2"><RepoMeta repo={detail} /></div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-center gap-2">
-            <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="outline" size="sm"><ExternalLink size={14} /> Open</Button></a>
-            {detail.canPush && <Button variant="secondary" size="sm" onClick={() => navigate(`/github/${detail.owner}/${detail.name}/upload`)}><Upload size={14} /> Upload folder</Button>}
-            {detail.canAdmin && <Button variant="ghost" size="sm" onClick={() => navigate(`/github/${detail.owner}/${detail.name}/settings`)}><Settings2 size={14} /> Settings</Button>}
+          {/* phones: the actions drop under the description as one equal-width row; sm+: trailing group */}
+          <div className="grid w-full min-w-0 auto-cols-fr grid-flow-col gap-2 sm:flex sm:w-auto sm:shrink-0 sm:items-center">
+            <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener" className="min-w-0"><Button variant="outline" size="sm" className="w-full sm:w-auto"><ExternalLink size={14} /> Open</Button></a>
+            {detail.canPush && <Button variant="secondary" size="sm" className="min-w-0 px-2 sm:px-3" onClick={() => navigate(`/github/${detail.owner}/${detail.name}/upload`)}><Upload size={14} className="shrink-0" /> <span className="sm:hidden">Upload</span><span className="hidden sm:inline">Upload folder</span></Button>}
+            {detail.canAdmin && <Button variant="ghost" size="sm" className="border-border sm:border-transparent" onClick={() => navigate(`/github/${detail.owner}/${detail.name}/settings`)}><Settings2 size={14} /> Settings</Button>}
           </div>
         </div>
       </header>
 
-      {/* tabs */}
-      <div className="flex gap-1 overflow-x-auto rounded-[var(--radius-card)] border border-border bg-surface p-1">
-        {TABS.map(({ k, label, icon: Icon }) => (
-          <button key={k} onClick={() => goTab(k)} className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium transition-colors", tab === k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground")}>
-            <Icon size={15} /> {label}
-          </button>
-        ))}
-      </div>
+      <TabStrip tab={tab} onChange={goTab} />
 
       <FadeSwap k={tab}>
         {tab === "overview" ? <OverviewTab repo={detail} /> : <ListTab repo={detail} tab={tab} />}
       </FadeSwap>
+    </div>
+  );
+}
+
+/** Horizontal tab strip. On phones only ~3 tabs fit: the active one is scrolled into view (deep links to
+ *  /pulls or /actions) and a right-edge fade signals there is more until the strip is scrolled to its end. */
+function TabStrip({ tab, onChange }: { tab: Tab; onChange: (k: Tab) => void }) {
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [atEnd, setAtEnd] = useState(true);
+  const syncEnd = useCallback(() => {
+    const el = stripRef.current;
+    if (el) setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 2);
+  }, []);
+  useEffect(() => {
+    stripRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    syncEnd();
+  }, [tab, syncEnd]);
+
+  return (
+    <div className="relative">
+      <div ref={stripRef} role="tablist" onScroll={syncEnd} className="flex snap-x gap-1 overflow-x-auto rounded-[var(--radius-card)] border border-border bg-surface p-1 [scrollbar-width:none]">
+        {TABS.map(({ k, label, icon: Icon }) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={tab === k}
+            onClick={() => onChange(k)}
+            className={cn(
+              "pressable inline-flex shrink-0 snap-start items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium transition-colors [@media(pointer:coarse)]:min-h-10",
+              tab === k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground",
+            )}
+          >
+            <Icon size={15} /> {label}
+          </button>
+        ))}
+      </div>
+      <span aria-hidden className={cn("pointer-events-none absolute inset-y-px right-px w-10 rounded-r-[var(--radius-card)] bg-gradient-to-l from-surface to-transparent transition-opacity", atEnd && "opacity-0")} />
     </div>
   );
 }
@@ -544,7 +604,7 @@ function OverviewTab({ repo }: { repo: RepoDetail }) {
           {repo.canPush && <Button variant="ghost" size="sm" onClick={() => navigate(`/github/${repo.owner}/${repo.name}/edit?path=README.md`)}><Pencil size={13} /> {readme ? "Edit" : "Add"}</Button>}
         </div>
         <div className="px-5 py-4">
-          {loading ? <div className="grid h-24 place-items-center"><Spinner size={18} className="text-primary" /></div> : readme ? <Markdown>{readme}</Markdown> : <p className="text-[13px] text-muted">This repository has no README. <button onClick={() => navigate(`/github/${repo.owner}/${repo.name}/edit?path=README.md`)} className="font-medium text-primary hover:underline">Add one</button>.</p>}
+          {loading ? <SkeletonText lines={6} /> : readme ? <Markdown>{readme}</Markdown> : <p className="text-[13px] text-muted">This repository has no README. <button onClick={() => navigate(`/github/${repo.owner}/${repo.name}/edit?path=README.md`)} className="font-medium text-primary hover:underline">Add one</button>.</p>}
         </div>
       </section>
       <aside className="space-y-3">
@@ -560,13 +620,13 @@ function OverviewTab({ repo }: { repo: RepoDetail }) {
             {repo.subscribers != null && <Row label="Watchers">{repo.subscribers.toLocaleString()}</Row>}
             {repo.createdAt && <Row label="Created">{ago(repo.createdAt)}</Row>}
           </dl>
-          {repo.homepage && <a href={repo.homepage} target="_blank" rel="noreferrer noopener" className="mt-3 inline-flex items-center gap-1 text-[12.5px] text-primary hover:underline"><Globe size={13} /> {repo.homepage.replace(/^https?:\/\//, "")}</a>}
+          {repo.homepage && <a href={repo.homepage} target="_blank" rel="noreferrer noopener" className="mt-1.5 inline-flex min-h-8 max-w-full items-center gap-1 text-[12.5px] text-primary hover:underline"><Globe size={13} className="shrink-0" /> <span className="truncate">{repo.homepage.replace(/^https?:\/\//, "")}</span></a>}
         </div>
         {repo.topics.length > 0 && (
           <div className="rounded-[var(--radius-card)] border border-border bg-surface p-4">
             <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-faint">Topics</div>
             <div className="flex flex-wrap gap-1.5">
-              {repo.topics.map((t) => <span key={t} className="rounded-full bg-primary-soft px-2 py-0.5 text-[11.5px] text-primary">{t}</span>)}
+              {repo.topics.map((t) => <Badge key={t} tone="primary">{t}</Badge>)}
             </div>
           </div>
         )}
@@ -605,61 +665,89 @@ function ListTab({ repo, tab }: { repo: RepoDetail; tab: Exclude<Tab, "overview"
     return () => { live = false; };
   }, [repo, tab]);
 
-  if (loading) return <div className="grid h-40 place-items-center rounded-[var(--radius-card)] border border-border bg-surface"><Spinner size={20} className="text-primary" /></div>;
+  const meta = TABS.find((t) => t.k === tab)!;
+  if (loading) {
+    return (
+      <div className="space-y-2" role="status" aria-busy="true" aria-label="Loading">
+        {Array.from({ length: 5 }, (_, i) => <SkeletonRow key={i} avatar={false} />)}
+      </div>
+    );
+  }
   if (error) return <div className="rounded-[var(--radius-card)] border border-danger/40 bg-danger-soft px-4 py-6 text-center text-[13px] text-danger">{error}</div>;
-  if (!rows || rows.length === 0) return <div className="rounded-[var(--radius-card)] border border-dashed border-border bg-surface px-4 py-12 text-center text-[13px] text-muted">Nothing here yet.</div>;
+  if (!rows || rows.length === 0) return <EmptyState size="sm" icon={meta.icon} title="Nothing here yet" description={`This repository has no ${meta.label.toLowerCase()}.`} />;
 
+  const rowCls = "pressable flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0 hover:bg-surface-2 active:bg-surface-2";
+  const subCls = "text-[12px] text-muted";
   return (
     <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
       {tab === "commits" && (rows as CommitLite[]).map((c) => (
-        <a key={c.sha} href={c.htmlUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0 hover:bg-surface-2">
-          <GitCommit size={15} className="shrink-0 text-muted" />
-          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{c.message.split("\n")[0]}</div><div className="text-[11.5px] text-faint">{c.authorLogin ?? c.authorName ?? "unknown"} · {c.date ? ago(c.date) : ""} · <span className="font-mono">{c.sha.slice(0, 7)}</span></div></div>
-          <ExternalLink size={14} className="shrink-0 text-faint" />
+        <a key={c.sha} href={c.htmlUrl} target="_blank" rel="noreferrer noopener" className={cn(rowCls, "items-start")}>
+          <GitCommit size={15} className="mt-0.5 shrink-0 text-muted" />
+          {/* two lines so conventional-commit prefixes don't eat the whole visible subject on phones */}
+          <div className="min-w-0 flex-1"><div className="line-clamp-2 break-words text-[13px] font-medium">{c.message.split("\n")[0]}</div><div className={subCls}>{c.authorLogin ?? c.authorName ?? "unknown"} · {c.date ? ago(c.date) : ""} · <span className="font-mono text-[11.5px]">{c.sha.slice(0, 7)}</span></div></div>
+          <ExternalLink size={14} className="mt-0.5 shrink-0 text-faint" />
         </a>
       ))}
       {tab === "branches" && (rows as BranchLite[]).map((b) => (
         <div key={b.name} className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0">
           <GitBranch size={15} className="shrink-0 text-muted" />
-          <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{b.name}{b.name === repo.defaultBranch && <span className="ml-2 rounded-full bg-primary-soft px-1.5 py-0.5 font-sans text-[10px] text-primary">default</span>}</span>
-          {b.protected && <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] text-muted">protected</span>}
+          <span className="flex min-w-0 flex-1 items-center gap-2 font-mono text-[13px]"><span className="min-w-0 truncate">{b.name}</span>{b.name === repo.defaultBranch && <Badge tone="primary" className="font-sans">default</Badge>}</span>
+          {b.protected && <Badge className="shrink-0">protected</Badge>}
           <span className="shrink-0 font-mono text-[11.5px] text-faint">{b.commitSha.slice(0, 7)}</span>
         </div>
       ))}
       {tab === "releases" && (rows as ReleaseLite[]).map((r) => (
-        <a key={r.id} href={r.htmlUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0 hover:bg-surface-2">
+        <a key={r.id} href={r.htmlUrl} target="_blank" rel="noreferrer noopener" className={rowCls}>
           <Tag size={15} className="shrink-0 text-muted" />
-          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{r.name || r.tag}</div><div className="text-[11.5px] text-faint"><span className="font-mono">{r.tag}</span> · {r.publishedAt ? ago(r.publishedAt) : "unpublished"}</div></div>
-          {r.draft && <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] text-muted">draft</span>}
-          {r.prerelease && <span className="shrink-0 rounded-full border border-warn/40 bg-warn-soft px-1.5 py-0.5 text-[10.5px] text-warn">pre-release</span>}
+          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{r.name || r.tag}</div><div className={subCls}><span className="font-mono">{r.tag}</span> · {r.publishedAt ? ago(r.publishedAt) : "unpublished"}</div></div>
+          {r.draft && <Badge className="shrink-0">draft</Badge>}
+          {r.prerelease && <Badge tone="warn" className="shrink-0">pre-release</Badge>}
         </a>
       ))}
       {tab === "issues" && (rows as IssueLite[]).map((i) => (
-        <a key={i.number} href={i.htmlUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0 hover:bg-surface-2">
+        <a key={i.number} href={i.htmlUrl} target="_blank" rel="noreferrer noopener" className={rowCls}>
           <CircleDot size={15} className="shrink-0 text-ok" />
-          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{i.title}</div><div className="text-[11.5px] text-faint">#{i.number} · {i.authorLogin ?? "unknown"} · {i.createdAt ? ago(i.createdAt) : ""}</div></div>
-          {i.comments > 0 && <span className="shrink-0 text-[11.5px] text-faint">{i.comments} 💬</span>}
+          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{i.title}</div><div className={subCls}>#{i.number} · {i.authorLogin ?? "unknown"} · {i.createdAt ? ago(i.createdAt) : ""}</div></div>
+          {i.comments > 0 && <span className="shrink-0 text-[12px] text-muted">{i.comments} 💬</span>}
         </a>
       ))}
       {tab === "pulls" && (rows as PullLite[]).map((p) => (
-        <a key={p.number} href={p.htmlUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0 hover:bg-surface-2">
+        <a key={p.number} href={p.htmlUrl} target="_blank" rel="noreferrer noopener" className={rowCls}>
           <GitPullRequest size={15} className={cn("shrink-0", p.draft ? "text-muted" : "text-ok")} />
-          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{p.title}</div><div className="text-[11.5px] text-faint">#{p.number} · {p.authorLogin ?? "unknown"} · <span className="font-mono">{p.head}→{p.base}</span></div></div>
-          {p.draft && <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] text-muted">draft</span>}
+          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{p.title}</div><div className={cn(subCls, "[overflow-wrap:anywhere]")}>#{p.number} · {p.authorLogin ?? "unknown"} · <span className="font-mono">{p.head}→{p.base}</span></div></div>
+          {p.draft && <Badge className="shrink-0">draft</Badge>}
         </a>
       ))}
       {tab === "actions" && (rows as WorkflowRunLite[]).map((w) => (
-        <a key={w.id} href={w.htmlUrl} target="_blank" rel="noreferrer noopener" className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-0 hover:bg-surface-2">
+        <a key={w.id} href={w.htmlUrl} target="_blank" rel="noreferrer noopener" className={rowCls}>
           <RunDot conclusion={w.conclusion} status={w.status} />
-          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{w.name || "Workflow run"}</div><div className="text-[11.5px] text-faint">{w.event} · <span className="font-mono">{w.branch}</span> · {w.createdAt ? ago(w.createdAt) : ""}</div></div>
-          <span className="shrink-0 text-[11.5px] text-faint">{w.conclusion ?? w.status}</span>
+          <div className="min-w-0 flex-1"><div className="truncate text-[13px] font-medium">{w.name || "Workflow run"}</div><div className={cn(subCls, "[overflow-wrap:anywhere]")}>{humanize(w.event)} · <span className="font-mono">{w.branch}</span> · {w.createdAt ? ago(w.createdAt) : ""}</div></div>
+          <RunBadge conclusion={w.conclusion} status={w.status} />
         </a>
       ))}
     </div>
   );
 }
 
+/** "workflow_dispatch" → "Workflow dispatch": GitHub's enum strings, made readable. */
+function humanize(s?: string): string {
+  if (!s) return "";
+  const t = s.replace(/_/g, " ");
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+function runTone(conclusion?: string, status?: string): "ok" | "danger" | "warn" | "neutral" {
+  if (conclusion === "success") return "ok";
+  if (conclusion === "failure") return "danger";
+  if (status === "in_progress" || status === "queued") return "warn";
+  return "neutral";
+}
+
 function RunDot({ conclusion, status }: { conclusion?: string; status?: string }) {
-  const tone = conclusion === "success" ? "bg-ok" : conclusion === "failure" ? "bg-danger" : status === "in_progress" || status === "queued" ? "bg-warn" : "bg-faint";
+  const tone = { ok: "bg-ok", danger: "bg-danger", warn: "bg-warn", neutral: "bg-faint" }[runTone(conclusion, status)];
   return <span className={cn("h-2.5 w-2.5 shrink-0 rounded-full", tone)} />;
+}
+
+function RunBadge({ conclusion, status }: { conclusion?: string; status?: string }) {
+  return <Badge tone={runTone(conclusion, status)} className="shrink-0">{humanize(conclusion ?? status ?? "unknown")}</Badge>;
 }

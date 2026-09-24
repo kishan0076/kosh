@@ -1,10 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Pencil, Plus, RotateCcw, RotateCw, Share2, Sparkles, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
+import { motion } from "motion/react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, Share2, Sparkles, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
 import { formatBytes, normalizeTag, parseTags, isNativeGoogleDoc, driveHasTextSource } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { NodeIcon, tagChipClass } from "./items";
-import { Button, Spinner, Textarea } from "@/components/ui";
+import { Button, Input, Skeleton, Spinner, Textarea } from "@/components/ui";
+import { SkeletonText } from "@/components/PageSkeleton";
 import { Markdown } from "@/components/markdown";
 import { useUi } from "@/data/ui";
 import { driveV2Api, kindOf, type DriveComment, type DriveKind, type DriveNode } from "@/data/driveV2Api";
@@ -14,8 +16,25 @@ function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex justify-between gap-3 py-1.5 text-[12.5px]">
       <span className="shrink-0 text-muted">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium">{value}</span>
+      {/* Long values (an owner's full name, a checksum) wrap rather than vanish behind an ellipsis. */}
+      <span className="min-w-0 break-words text-right font-medium">{value}</span>
     </div>
+  );
+}
+
+/** Inline text-link action (Reply, Resolve, Edit…) with a real hit area: 32px tall, 40px on touch. */
+function LinkButton({ onClick, tone = "primary", className, children }: { onClick: () => void; tone?: "primary" | "muted"; className?: string; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={cn(
+        "pressable -mx-1.5 inline-flex min-h-8 items-center gap-1 rounded-md px-1.5 text-[11.5px] [@media(pointer:coarse)]:min-h-10",
+        tone === "primary" ? "text-primary hover:underline" : "text-muted hover:text-foreground",
+        className,
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
@@ -55,7 +74,7 @@ export function DriveDetails({
   // Multi-select aggregate
   if (count > 1) {
     return (
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         <Header title={`${count} items selected`} onClose={onClose} />
         <div className="p-4 text-[13px] text-muted">Total size: <span className="font-medium text-foreground">{formatBytes(totalBytes)}</span></div>
       </div>
@@ -66,9 +85,10 @@ export function DriveDetails({
   const canPreview = !node.isFolder; // images render inline; everything else embeds via Drive's viewer
 
   return (
-    <div className="flex h-full flex-col">
+    // Header pinned, body scrolls — as the phone sheet and the desktop column alike.
+    <div className="flex h-full min-h-0 flex-col">
       <Header title="Details" onClose={onClose} />
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="flex flex-col items-center gap-3 border-b border-border px-4 py-5 text-center">
           <span className="grid h-20 w-20 place-items-center overflow-hidden rounded-xl bg-surface-2"><NodeIcon node={node} size={40} thumb /></span>
           <div className="min-w-0">
@@ -88,7 +108,8 @@ export function DriveDetails({
         </div>
 
         <div className="px-4 py-3">
-          {loading && <div className="mb-2 text-[11.5px] text-faint">Loading details…</div>}
+          {/* The full record is still arriving: a bar the height of the old status line, no layout jump. */}
+          {loading && <Skeleton className="mb-2 h-3 w-24" />}
           <Fact label="Type" value={KIND_LABEL[kind]} />
           {!node.isFolder && node.size != null && <Fact label="Size" value={formatBytes(node.size)} />}
           <Fact label="Owner" value={node.owners?.[0]?.displayName ?? (node.ownedByMe ? "Me" : "—")} />
@@ -132,21 +153,21 @@ function NotesEditor({ node, onSave }: { node: DriveNode; onSave: (desc: string)
       <div className="mb-1 flex items-center justify-between">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-faint">Notes</span>
         {canEdit && !editing && (
-          <button onClick={() => { setValue(node.description ?? ""); setEditing(true); }} className="inline-flex items-center gap-1 text-[11.5px] text-primary hover:underline">
+          <LinkButton onClick={() => { setValue(node.description ?? ""); setEditing(true); }}>
             {node.description ? <><Pencil size={11} /> Edit</> : <><Plus size={12} /> Add</>}
-          </button>
+          </LinkButton>
         )}
       </div>
       {editing ? (
         <div className="space-y-2">
-          <Textarea autoFocus value={value} onChange={(e) => setValue(e.target.value)} rows={3} maxLength={1000} className="min-h-0 resize-none text-[12.5px]" />
+          <Textarea autoFocus value={value} onChange={(e) => setValue(e.target.value)} rows={3} maxLength={1000} className="min-h-0 resize-none sm:text-[12.5px]" />
           <div className="flex justify-end gap-1.5">
             <Button variant="ghost" size="sm" onClick={() => setEditing(false)}><X size={13} /> Cancel</Button>
             <Button variant="primary" size="sm" onClick={() => { onSave(value.trim()); setEditing(false); }}><Check size={13} /> Save</Button>
           </div>
         </div>
       ) : node.description ? (
-        <p className="whitespace-pre-wrap text-[12.5px] text-muted">{node.description}</p>
+        <p className="whitespace-pre-wrap break-words text-[12.5px] text-muted">{node.description}</p>
       ) : (
         <p className="text-[12.5px] text-faint">No notes yet.</p>
       )}
@@ -159,7 +180,22 @@ function AuthorAvatar({ name, photo, size = 24 }: { name: string; photo?: string
   return photo ? (
     <img src={photo} alt="" referrerPolicy="no-referrer" className="shrink-0 rounded-full" style={{ height: size, width: size }} />
   ) : (
-    <span className="grid shrink-0 place-items-center rounded-full bg-primary-soft text-[10px] font-semibold text-primary" style={{ height: size, width: size }}>{name.slice(0, 1).toUpperCase()}</span>
+    <span className="grid shrink-0 place-items-center rounded-full bg-primary-soft text-[11px] font-semibold text-primary" style={{ height: size, width: size }}>{name.slice(0, 1).toUpperCase()}</span>
+  );
+}
+
+/** Comment-card silhouette (avatar, author line, one text line) for the thread list while it loads. */
+function CommentSkeleton() {
+  return (
+    <div className="rounded-[var(--radius-control)] border border-border p-2.5">
+      <div className="flex items-start gap-2">
+        <Skeleton className="h-6 w-6 shrink-0 rounded-full" />
+        <div className="min-w-0 flex-1 space-y-2 pt-1">
+          <Skeleton className="h-3 w-2/5" />
+          <Skeleton className="h-3 w-full" />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -175,6 +211,7 @@ function CommentsSection({ node }: { node: DriveNode }) {
   const [comments, setComments] = useState<DriveComment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0); // bumped by "Try again" to refetch the thread list
   const [draft, setDraft] = useState("");
   const [posting, setPosting] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null); // comment id currently mutating (reply / resolve)
@@ -183,6 +220,7 @@ function CommentsSection({ node }: { node: DriveNode }) {
 
   useEffect(() => {
     let live = true;
+    setLoading(true);
     // Debounce: browsing files with j/k shouldn't fire a comments request per transient selection —
     // only the node you actually land on (>250ms) is fetched.
     const t = setTimeout(() => {
@@ -193,7 +231,7 @@ function CommentsSection({ node }: { node: DriveNode }) {
         .finally(() => { if (live) setLoading(false); });
     }, 250);
     return () => { live = false; clearTimeout(t); };
-  }, [accountId, node.id]);
+  }, [accountId, node.id, attempt]);
 
   async function postComment() {
     const content = draft.trim();
@@ -261,20 +299,26 @@ function CommentsSection({ node }: { node: DriveNode }) {
             maxLength={4000}
             disabled={posting}
             placeholder="Add a comment…"
-            className="min-h-0 resize-none text-[12.5px] disabled:opacity-60"
+            className="min-h-0 resize-none disabled:opacity-60 sm:text-[12.5px]"
           />
           <div className="flex justify-end">
-            <Button variant="primary" size="sm" disabled={!draft.trim() || posting} onClick={() => void postComment()}>
-              {posting ? <Spinner size={13} /> : <MessageSquare size={13} />} Comment
+            <Button variant="primary" size="sm" disabled={!draft.trim()} loading={posting} onClick={() => void postComment()}>
+              <MessageSquare size={13} /> Comment
             </Button>
           </div>
         </div>
       )}
 
       {loading ? (
-        <div className="grid place-items-center py-4"><Spinner size={16} className="text-muted" /></div>
+        <div className="space-y-3" role="status" aria-busy="true" aria-label="Loading comments">
+          <CommentSkeleton />
+          <CommentSkeleton />
+        </div>
       ) : error ? (
-        <p className="py-1 text-[12.5px] text-danger">{error}</p>
+        <div className="flex flex-wrap items-center gap-2 py-1 text-[12.5px] text-danger">
+          <span className="min-w-0 flex-1">{error}</span>
+          <Button variant="outline" size="sm" onClick={() => setAttempt((a) => a + 1)}><RefreshCw size={14} /> Try again</Button>
+        </div>
       ) : comments.length === 0 ? (
         <p className="text-[12.5px] text-faint">No comments yet.</p>
       ) : (
@@ -287,10 +331,11 @@ function CommentsSection({ node }: { node: DriveNode }) {
                 <div className="flex items-start gap-2">
                   <AuthorAvatar name={authorName} photo={c.author?.photoLink} />
                   <div className="min-w-0 flex-1">
+                    {/* Name gives way; the timestamp and badge never wrap. */}
                     <div className="flex items-center gap-1.5">
-                      <span className="truncate text-[12.5px] font-medium">{authorName}</span>
-                      {c.createdTime && <span className="text-[11px] text-faint">· {ago(c.createdTime)}</span>}
-                      {c.resolved && <span className="inline-flex items-center gap-0.5 rounded-[var(--radius-chip)] bg-ok-soft px-1.5 py-0.5 text-[10px] font-medium text-ok"><CheckCircle2 size={10} /> Resolved</span>}
+                      <span className="min-w-0 truncate text-[12.5px] font-medium">{authorName}</span>
+                      {c.createdTime && <span className="shrink-0 whitespace-nowrap text-[11px] text-faint">· {ago(c.createdTime)}</span>}
+                      {c.resolved && <span className="inline-flex shrink-0 items-center gap-0.5 rounded-[var(--radius-chip)] bg-ok-soft px-1.5 py-0.5 text-[11px] font-medium text-ok"><CheckCircle2 size={10} /> Resolved</span>}
                     </div>
                     {c.quotedFileContent?.value && <p className="mt-1 border-l-2 border-border pl-2 text-[11.5px] italic text-muted">{c.quotedFileContent.value}</p>}
                     {c.content && <p className="mt-0.5 whitespace-pre-wrap break-words text-[12.5px]">{c.content}</p>}
@@ -302,8 +347,8 @@ function CommentsSection({ node }: { node: DriveNode }) {
                             <AuthorAvatar name={r.author?.displayName || "Someone"} photo={r.author?.photoLink} size={20} />
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center gap-1.5">
-                                <span className="truncate text-[12px] font-medium">{r.author?.displayName || "Someone"}</span>
-                                {r.createdTime && <span className="text-[11px] text-faint">· {ago(r.createdTime)}</span>}
+                                <span className="min-w-0 truncate text-[12px] font-medium">{r.author?.displayName || "Someone"}</span>
+                                {r.createdTime && <span className="shrink-0 whitespace-nowrap text-[11px] text-faint">· {ago(r.createdTime)}</span>}
                               </div>
                               <p className="mt-0.5 whitespace-pre-wrap break-words text-[12px]">{r.content}</p>
                             </div>
@@ -313,22 +358,22 @@ function CommentsSection({ node }: { node: DriveNode }) {
                     )}
 
                     {canComment && (
-                      busyId === c.id ? (
-                        <div className="mt-2"><Spinner size={13} className="text-muted" /></div>
-                      ) : replyId === c.id ? (
+                      replyId === c.id ? (
                         <div className="mt-2 space-y-1.5">
-                          <Textarea autoFocus value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} rows={2} maxLength={4000} placeholder="Reply…" className="min-h-0 resize-none text-[12px]" />
+                          <Textarea autoFocus value={replyDraft} onChange={(e) => setReplyDraft(e.target.value)} rows={2} maxLength={4000} placeholder="Reply…" disabled={busyId === c.id} className="min-h-0 resize-none sm:text-[12px]" />
                           <div className="flex justify-end gap-1.5">
-                            <Button variant="ghost" size="sm" onClick={() => { setReplyId(null); setReplyDraft(""); }}><X size={12} /> Cancel</Button>
-                            <Button variant="primary" size="sm" disabled={!replyDraft.trim()} onClick={() => void postReply(c)}><CornerDownRight size={12} /> Reply</Button>
+                            <Button variant="ghost" size="sm" disabled={busyId === c.id} onClick={() => { setReplyId(null); setReplyDraft(""); }}><X size={12} /> Cancel</Button>
+                            <Button variant="primary" size="sm" disabled={!replyDraft.trim()} loading={busyId === c.id} onClick={() => void postReply(c)}><CornerDownRight size={12} /> Reply</Button>
                           </div>
                         </div>
+                      ) : busyId === c.id ? (
+                        <div className="mt-2 flex min-h-8 items-center"><Spinner size={13} className="text-muted" /></div>
                       ) : (
-                        <div className="mt-1.5 flex items-center gap-3">
-                          <button onClick={() => { setReplyId(c.id); setReplyDraft(""); }} className="inline-flex items-center gap-1 text-[11.5px] text-primary hover:underline"><CornerDownRight size={11} /> Reply</button>
-                          <button onClick={() => void toggleResolve(c)} className="inline-flex items-center gap-1 text-[11.5px] text-muted hover:text-foreground">
+                        <div className="mt-1 flex items-center gap-4">
+                          <LinkButton onClick={() => { setReplyId(c.id); setReplyDraft(""); }}><CornerDownRight size={11} /> Reply</LinkButton>
+                          <LinkButton tone="muted" onClick={() => void toggleResolve(c)}>
                             {c.resolved ? <><RotateCcw size={11} /> Reopen</> : <><CheckCircle2 size={11} /> Resolve</>}
-                          </button>
+                          </LinkButton>
                         </div>
                       )
                     )}
@@ -341,6 +386,17 @@ function CommentsSection({ node }: { node: DriveNode }) {
       )}
     </div>
   );
+}
+
+/** Flatten the AI summary's light markdown into plain text for the Notes field (which renders as-is):
+ *  headings/bold lose their markers, list dashes become bullets. */
+function summaryToPlainText(md: string): string {
+  return md
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1$2")
+    .replace(/^\s*[-*]\s+/gm, "• ")
+    .trim();
 }
 
 /**
@@ -380,10 +436,12 @@ function AiFileSection({ node, onSaveNote, onAddTags }: { node: DriveNode; onSav
 
   function saveNote() {
     if (!summary) return;
+    // Notes are plain text, so the markdown is flattened first (no literal ** and - in the note).
+    const plain = summaryToPlainText(summary);
     // Never clobber notes the user already wrote — append under a separator (and don't double-append).
     const existing = node.description?.trim() ?? "";
-    if (existing.includes(summary)) { setSavedNote(true); return; }
-    onSaveNote(existing ? `${existing}\n\n${summary}` : summary);
+    if (existing.includes(plain)) { setSavedNote(true); return; }
+    onSaveNote(existing ? `${existing}\n\n${plain}` : plain);
     setSavedNote(true);
     toast({ message: existing ? "Summary added to notes" : "Summary saved to notes", tone: "ok" });
   }
@@ -402,17 +460,15 @@ function AiFileSection({ node, onSaveNote, onAddTags }: { node: DriveNode; onSav
     <div className="border-t border-border px-4 py-3">
       <div className="mb-1.5 flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint"><Sparkles size={12} /> AI</span>
-        {ran && !busy && (
-          <button onClick={() => void run()} className="text-[11.5px] text-primary hover:underline">Regenerate</button>
-        )}
+        {ran && !busy && <LinkButton onClick={() => void run()}>Regenerate</LinkButton>}
       </div>
 
       {!ran ? (
-        <Button variant="outline" size="sm" onClick={() => void run()} disabled={busy}>
-          {busy ? <Spinner size={14} /> : <Sparkles size={14} />} Summarize &amp; suggest tags
+        <Button variant="outline" size="sm" onClick={() => void run()} loading={busy}>
+          <Sparkles size={14} /> Summarize &amp; suggest tags
         </Button>
       ) : busy ? (
-        <div className="grid place-items-center py-4"><Spinner size={18} className="text-muted" /></div>
+        <SkeletonText lines={3} className="py-1" />
       ) : (
         <div className="space-y-2.5">
           {summary ? (
@@ -432,14 +488,14 @@ function AiFileSection({ node, onSaveNote, onAddTags }: { node: DriveNode; onSav
             <div>
               <div className="mb-1 flex items-center justify-between">
                 <span className="text-[11px] text-muted">Suggested tags</span>
-                <button onClick={addAll} className="text-[11.5px] text-primary hover:underline">Add all</button>
+                <LinkButton onClick={addAll}>Add all</LinkButton>
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {suggested.map((t) => (
                   <button
                     key={t}
                     onClick={() => addTag(t)}
-                    className="inline-flex items-center gap-1 rounded-[var(--radius-chip)] border border-dashed border-border-strong px-1.5 py-0.5 text-[11px] font-medium text-muted transition-colors hover:border-primary hover:text-primary"
+                    className="pressable inline-flex min-h-7 items-center gap-1 rounded-[var(--radius-chip)] border border-dashed border-border-strong px-2 py-0.5 text-[11.5px] font-medium text-muted transition-colors hover:border-primary hover:text-primary [@media(pointer:coarse)]:min-h-8"
                   >
                     <Plus size={10} /> {t}
                   </button>
@@ -469,9 +525,16 @@ function TagsEditor({ node, onSetTags }: { node: DriveNode; onSetTags: (tags: st
       {(tags.length > 0 || !canEdit) && (
         <div className="flex flex-wrap items-center gap-1.5">
           {tags.map((t) => (
-            <span key={t} className={cn("inline-flex items-center gap-1 rounded-[var(--radius-chip)] px-1.5 py-0.5 text-[11px] font-medium", tagChipClass(t))}>
+            <span key={t} className={cn("inline-flex items-center gap-1 rounded-[var(--radius-chip)] py-1 pl-2 pr-1 text-[11.5px] font-medium", tagChipClass(t))}>
               {t}
-              {canEdit && <button onClick={() => onSetTags(tags.filter((x) => x !== t))} aria-label={`Remove tag ${t}`} className="opacity-70 transition-opacity hover:opacity-100"><X size={10} /></button>}
+              {/* The × keeps its 11px glyph but gets a padded, round hit area. */}
+              {canEdit && (
+                <button
+                  onClick={() => onSetTags(tags.filter((x) => x !== t))}
+                  aria-label={`Remove tag ${t}`}
+                  className="pressable -my-1 grid h-6 w-6 place-items-center rounded-full opacity-70 transition-opacity hover:bg-foreground/10 hover:opacity-100 [@media(pointer:coarse)]:-my-2 [@media(pointer:coarse)]:h-8 [@media(pointer:coarse)]:w-8"
+                ><X size={11} /></button>
+              )}
             </span>
           ))}
           {!tags.length && <span className="text-[12.5px] text-faint">No tags.</span>}
@@ -479,13 +542,13 @@ function TagsEditor({ node, onSetTags }: { node: DriveNode; onSetTags: (tags: st
       )}
       {canEdit && (
         <div className="mt-2 flex items-center gap-1.5">
-          <input
+          <Input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
             placeholder="Add a tag…"
             maxLength={32}
-            className="min-w-0 flex-1 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2 py-1 text-[12.5px] outline-none focus:border-primary"
+            className="min-w-0 flex-1 bg-surface-2 sm:h-8 sm:text-[12.5px]"
           />
           <Button variant="ghost" size="sm" disabled={!draft.trim()} onClick={add}><Plus size={13} /> Add</Button>
         </div>
@@ -496,16 +559,17 @@ function TagsEditor({ node, onSetTags }: { node: DriveNode; onSetTags: (tags: st
 
 function Header({ title, onClose }: { title: string; onClose: () => void }) {
   return (
-    <div className="flex items-center justify-between border-b border-border px-4 py-3">
+    <div className="flex shrink-0 items-center justify-between border-b border-border py-2 pl-4 pr-2">
       <span className="text-[13px] font-semibold">{title}</span>
-      <button onClick={onClose} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Close details"><X size={16} /></button>
+      {/* The sheet's only close affordance: a full 40px target. */}
+      <button onClick={onClose} className="pressable grid h-10 w-10 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Close details"><X size={18} /></button>
     </div>
   );
 }
 
 function QuickAction({ icon: Icon, label, onClick, href, danger, active }: { icon: typeof Star; label: string; onClick?: () => void; href?: string; danger?: boolean; active?: boolean }) {
   const cls = cn(
-    "grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border transition-colors",
+    "pressable grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border transition-colors [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10",
     danger ? "text-muted hover:border-danger/40 hover:bg-danger-soft hover:text-danger" : active ? "border-gold/40 bg-gold-soft text-gold" : "text-muted hover:bg-surface-2 hover:text-foreground",
   );
   if (href) return <a href={href} target="_blank" rel="noreferrer noopener" className={cls} aria-label={label} title={label}><Icon size={16} /></a>;
@@ -564,12 +628,17 @@ function parseDelimited(text: string, delimiter: string, maxRows: number): strin
   return rows;
 }
 
+// Preview-chrome icon buttons/links: 36px at rest, the 40px floor on touch.
+const CHROME_BTN = "pressable grid h-9 w-9 shrink-0 place-items-center rounded-md text-white transition-colors hover:bg-white/10 disabled:opacity-30 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10";
+
 /** A preview-chrome icon button (module-scope so its type is stable across PreviewOverlay re-renders). */
-function ChromeBtn({ onClick, label, disabled, children }: { onClick: () => void; label: string; disabled?: boolean; children: ReactNode }) {
+function ChromeBtn({ onClick, label, disabled, className, children }: { onClick: () => void; label: string; disabled?: boolean; className?: string; children: ReactNode }) {
   return (
-    <button onClick={onClick} disabled={disabled} aria-label={label} className="grid h-8 w-8 place-items-center rounded-md text-white transition-colors hover:bg-white/10 disabled:opacity-30">{children}</button>
+    <button onClick={onClick} disabled={disabled} aria-label={label} className={cn(CHROME_BTN, className)}>{children}</button>
   );
 }
+
+const SWIPE_PX = 60; // horizontal drag past this pages the filmstrip
 
 /** Full-screen Quick Look: native rendering for images (zoom/rotate) and text/markdown/code/CSV; a
  *  Drive iframe for PDF/Docs/Sheets/Slides/video; filmstrip prev/next across the visible list. */
@@ -590,6 +659,9 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
   const go = (delta: number) => { if (idx < 0) return; const t = list[idx + delta]; if (t) useDriveV2.getState().setPreview(t); };
   const hasPrev = idx > 0;
   const hasNext = idx >= 0 && idx < list.length - 1;
+  const filmstrip = list.length > 1 && idx >= 0;
+  // Swipe between files on images (an iframe swallows the gesture; a zoomed image should pan, not page).
+  const swipeable = filmstrip && isImage && zoom === 1;
 
   // Reset per-node view state whenever the previewed node changes (filmstrip paging reuses this overlay).
   useEffect(() => { setZoom(1); setRot(0); setText(null); setTextErr(false); setLoading(!isImage && !textKind && !!frame); }, [node.id, isImage, textKind, frame]);
@@ -613,71 +685,91 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose, idx, list]);
 
+  // Zoom/rotate live in the header on wide screens and in the bottom toolbar on phones.
+  const imageTools = isImage && (
+    <>
+      <ChromeBtn onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} label="Zoom out"><ZoomOut size={17} /></ChromeBtn>
+      <ChromeBtn onClick={() => setZoom((z) => Math.min(5, z + 0.25))} label="Zoom in"><ZoomIn size={17} /></ChromeBtn>
+      <ChromeBtn onClick={() => setRot((r) => (r + 90) % 360)} label="Rotate"><RotateCw size={17} /></ChromeBtn>
+    </>
+  );
+  const counter = filmstrip && <span className="shrink-0 tabular text-[12px] text-white/60">{idx + 1} / {list.length}</span>;
+
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-black/80 backdrop-blur-sm" onClick={onClose}>
-      <div className="flex items-center gap-2 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>
+      {/* Top bar: on phones the name + close share the first row and the actions wrap to a second one;
+          from sm up it's a single row. Padded past the notch. */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-2 pt-[max(0.5rem,var(--safe-top))] text-white sm:py-3" onClick={(e) => e.stopPropagation()}>
         <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{node.name}</span>
-        {list.length > 1 && idx >= 0 && <span className="shrink-0 tabular text-[12px] text-white/60">{idx + 1} / {list.length}</span>}
-        {isImage && (
-          <>
-            <ChromeBtn onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))} label="Zoom out"><ZoomOut size={17} /></ChromeBtn>
-            <ChromeBtn onClick={() => setZoom((z) => Math.min(5, z + 0.25))} label="Zoom in"><ZoomIn size={17} /></ChromeBtn>
-            <ChromeBtn onClick={() => setRot((r) => (r + 90) % 360)} label="Rotate"><RotateCw size={17} /></ChromeBtn>
-          </>
-        )}
-        {!node.isFolder && <ChromeBtn onClick={() => void useDriveV2.getState().downloadNode(node.id)} label="Download"><Download size={17} /></ChromeBtn>}
-        <ChromeBtn onClick={() => void useDriveV2.getState().toggleStar(node.id)} label={node.starred ? "Unstar" : "Star"}><Star size={17} className={cn(node.starred && "fill-gold text-gold")} /></ChromeBtn>
-        {node.webViewLink && (
-          <a href={node.webViewLink} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1.5 rounded-[var(--radius-control)] bg-white/10 px-3 py-1.5 text-[12.5px] hover:bg-white/20">
-            <ExternalLink size={14} /> Open in Drive
-          </a>
-        )}
-        <ChromeBtn onClick={onClose} label="Close preview"><X size={18} /></ChromeBtn>
+        <ChromeBtn onClick={onClose} label="Close preview" className="sm:order-last"><X size={18} /></ChromeBtn>
+        <div className="flex basis-full items-center justify-end gap-1 sm:basis-auto">
+          <span className="hidden sm:contents">{counter}</span>
+          <span className="hidden sm:contents">{imageTools}</span>
+          {!node.isFolder && <ChromeBtn onClick={() => void useDriveV2.getState().downloadNode(node.id)} label="Download"><Download size={17} /></ChromeBtn>}
+          <ChromeBtn onClick={() => void useDriveV2.getState().toggleStar(node.id)} label={node.starred ? "Unstar" : "Star"}><Star size={17} className={cn(node.starred && "fill-gold text-gold")} /></ChromeBtn>
+          {node.webViewLink && (
+            <>
+              <a href={node.webViewLink} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()} aria-label="Open in Drive" title="Open in Drive" className={cn(CHROME_BTN, "sm:hidden")}><ExternalLink size={17} /></a>
+              <a href={node.webViewLink} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()} className="pressable hidden items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] bg-white/10 px-3 py-1.5 text-[12.5px] hover:bg-white/20 sm:inline-flex [@media(pointer:coarse)]:min-h-10">
+                <ExternalLink size={14} /> Open in Drive
+              </a>
+            </>
+          )}
+        </div>
       </div>
 
-      <div className="relative flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6" onClick={(e) => e.stopPropagation()}>
-        {/* filmstrip arrows */}
-        {hasPrev && <button onClick={() => go(-1)} aria-label="Previous" className="absolute left-2 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"><ChevronLeft size={22} /></button>}
-        {hasNext && <button onClick={() => go(1)} aria-label="Next" className="absolute right-2 top-1/2 z-10 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/10 text-white hover:bg-white/20"><ChevronRight size={22} /></button>}
+      <motion.div
+        className="relative flex min-h-0 flex-1 items-center justify-center p-4 sm:p-6"
+        onClick={(e) => e.stopPropagation()}
+        drag={swipeable ? "x" : false}
+        dragSnapToOrigin
+        dragElastic={0.15}
+        onDragEnd={(_, info) => {
+          if (info.offset.x < -SWIPE_PX && hasNext) go(1);
+          else if (info.offset.x > SWIPE_PX && hasPrev) go(-1);
+        }}
+      >
+        {/* Filmstrip arrows (sm+): a solid chip so they stay visible over a white PDF/Docs card. On phones
+            the bottom bar below carries Previous / Next instead. */}
+        {hasPrev && <button onClick={() => go(-1)} aria-label="Previous" className="pressable absolute left-2 top-1/2 z-10 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white shadow-[var(--shadow-pop)] backdrop-blur hover:bg-black/75 sm:grid"><ChevronLeft size={22} /></button>}
+        {hasNext && <button onClick={() => go(1)} aria-label="Next" className="pressable absolute right-2 top-1/2 z-10 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white shadow-[var(--shadow-pop)] backdrop-blur hover:bg-black/75 sm:grid"><ChevronRight size={22} /></button>}
 
         {isImage && imgSrc ? (
           <img
             src={imgSrc}
             alt={node.name}
             referrerPolicy="no-referrer"
+            draggable={false}
             style={{ transform: `scale(${zoom}) rotate(${rot}deg)` }}
-            className="max-h-full max-w-full rounded-lg object-contain shadow-2xl transition-transform motion-reduce:transition-none"
+            className="max-h-full max-w-full rounded-lg object-contain shadow-2xl transition-transform duration-[var(--motion-base)] ease-[var(--ease-standard)] motion-reduce:transition-none"
           />
         ) : textKind ? (
           <div className="h-full w-full max-w-4xl overflow-auto rounded-lg bg-surface p-5 text-foreground shadow-2xl">
             {text == null && !textErr ? (
-              <div className="grid h-full place-items-center text-muted"><Spinner size={18} /></div>
+              <SkeletonText lines={8} />
             ) : textErr ? (
               <div className="grid h-full place-items-center text-[13px] text-muted">Couldn't load a preview. Open it in Drive instead.</div>
             ) : textKind === "markdown" ? (
               <Markdown>{text!}</Markdown>
             ) : textKind === "csv" ? (
-              <table className="w-full border-collapse text-[12.5px]">
-                <tbody>
-                  {parseDelimited(text!, node.mimeType === "text/tab-separated-values" || node.name.toLowerCase().endsWith(".tsv") ? "\t" : ",", 200).map((r, ri) => (
-                    <tr key={ri} className={ri === 0 ? "bg-surface-2 font-semibold" : ""}>
-                      {r.map((cell, ci) => <td key={ci} className="border border-border px-2 py-1 align-top">{cell}</td>)}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <CsvTable rows={parseDelimited(text!, node.mimeType === "text/tab-separated-values" || node.name.toLowerCase().endsWith(".tsv") ? "\t" : ",", 200)} />
             ) : (
               <pre className="whitespace-pre-wrap break-words font-mono text-[12.5px] leading-relaxed">{text}</pre>
             )}
           </div>
         ) : frame ? (
           <div className="relative h-full w-full max-w-5xl">
-            {loading && <div className="absolute inset-0 grid place-items-center text-white/70"><span className="animate-pulse text-[13px]">Loading preview…</span></div>}
+            {/* The loader sits ON TOP of the (white, otherwise blank) embed until it has loaded. */}
+            {loading && (
+              <div className="absolute inset-0 z-10 grid place-items-center rounded-lg bg-surface text-muted" role="status" aria-busy="true">
+                <div className="flex items-center gap-2 text-[13px]"><Spinner size={18} className="text-primary" /> Loading preview…</div>
+              </div>
+            )}
             <iframe
               src={frame}
               title={node.name}
               onLoad={() => setLoading(false)}
-              className="h-full w-full rounded-lg bg-white shadow-2xl"
+              className={cn("h-full w-full rounded-lg bg-white shadow-2xl transition-opacity duration-[var(--motion-base)]", loading && "opacity-0")}
               allow="autoplay"
               sandbox="allow-scripts allow-same-origin allow-popups allow-forms allow-downloads"
             />
@@ -688,7 +780,42 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
             <p className="text-[13px] text-white/60">Open it in Google Drive to view this item.</p>
           </div>
         )}
-      </div>
+      </motion.div>
+
+      {/* Phone toolbar: filmstrip paging + image tools, above the home indicator. */}
+      {(filmstrip || isImage) && (
+        <div className="flex items-center justify-between gap-2 px-4 pt-2 pb-[max(0.75rem,var(--safe-bottom))] text-white sm:hidden" onClick={(e) => e.stopPropagation()}>
+          {filmstrip ? <ChromeBtn onClick={() => go(-1)} label="Previous" disabled={!hasPrev}><ChevronLeft size={22} /></ChromeBtn> : <span className="w-9" />}
+          <div className="flex min-w-0 items-center justify-center gap-2">
+            {imageTools}
+            {counter}
+          </div>
+          {filmstrip ? <ChromeBtn onClick={() => go(1)} label="Next" disabled={!hasNext}><ChevronRight size={22} /></ChromeBtn> : <span className="w-9" />}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** CSV/TSV Quick Look: one line per row (no wrapping), long cells clipped, header row stuck to the top. */
+function CsvTable({ rows }: { rows: string[][] }) {
+  const [head, ...body] = rows;
+  return (
+    <table className="min-w-full border-collapse text-[12.5px]">
+      {head && (
+        <thead>
+          <tr>
+            {head.map((cell, ci) => <th key={ci} className="sticky top-0 z-10 whitespace-nowrap border border-border bg-surface-2 px-2 py-1 text-left font-semibold"><span className="block max-w-[260px] truncate">{cell}</span></th>)}
+          </tr>
+        </thead>
+      )}
+      <tbody>
+        {body.map((r, ri) => (
+          <tr key={ri}>
+            {r.map((cell, ci) => <td key={ci} className="whitespace-nowrap border border-border px-2 py-1 align-top"><span className="block max-w-[260px] truncate">{cell}</span></td>)}
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

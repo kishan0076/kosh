@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowUpDown,
   Bookmark,
@@ -6,6 +7,7 @@ import {
   Check,
   CheckSquare,
   ChevronRight,
+  Command,
   Copy,
   CornerUpRight,
   MinusSquare,
@@ -38,7 +40,9 @@ import { formatBytes, parseTags, driveExportFormats } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, useBodyScrollLock } from "@/components/overlays";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { startConnect } from "@/lib/connect";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
@@ -58,9 +62,9 @@ import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
 import { drivePaneKey, useDriveV2UrlSync } from "@/data/driveV2Url";
-import { FadeSwap } from "@/components/motion";
+import { Collapse, FadeSwap } from "@/components/motion";
 import { AnimatePresence, motion } from "motion/react";
-import { DUR, EASE } from "@/lib/motion";
+import { DUR, EASE, slideUp } from "@/lib/motion";
 import { ago } from "@/lib/time";
 
 export function DriveV2() {
@@ -77,7 +81,8 @@ export function DriveV2() {
   }, [backend, init]);
 
   if (!backend) return <Gate icon={HardDrive} title="Drive needs the backend" body="Run the API and set VITE_API_URL to use the Drive control center." />;
-  if (status === "loading") return <div className="grid min-h-[50vh] w-full place-items-center"><Spinner size={26} className="text-primary" /></div>;
+  // The shell's silhouette (header + card grid) while accounts/config load — no full-viewport spinner.
+  if (status === "loading") return <PageSkeleton variant="cards" />;
   if (status === "error") return <Gate icon={HardDrive} title="Couldn't reach Drive" body="The Drive service didn't respond. Check the API and retry." action={<Button variant="primary" onClick={() => init()}>Retry</Button>} />;
   if (!configured) return <ScopeGate reason="not-configured" />;
   if (!accounts.length) return <ScopeGate reason="no-account" />;
@@ -227,6 +232,8 @@ function Shell() {
   // Dock on lg+ whenever details are open — including while Activity/Insights occupy the main column
   // (the inspector is a separate third column, so it must not vanish when a panel opens).
   const dockInspector = isLg && !!detailsId;
+  // Under sm the overlay inspector is a bottom sheet (slides up) rather than a right drawer.
+  const phone = useMediaQuery(PHONE_QUERY);
 
   // Global ⌘K / Ctrl+K opens the command palette; "?" opens the shortcuts sheet.
   useEffect(() => {
@@ -342,6 +349,9 @@ function Shell() {
   // Keyboard shortcuts scoped to the content region.
   const onKeyDown = (e: ReactKeyboardEvent) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    // Portaled dialogs/menus still bubble through the React tree: the Escape that closes them must not
+    // also clear the selection they were opened for.
+    if (e.target instanceof Element && e.target.closest("[role=dialog],[role=menu]")) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "a") { e.preventDefault(); void selectAllAcrossPages(); }
     else if (e.key === "Escape") { store.getState().clearSelection(); store.getState().loadDetails(null); }
     else if ((e.key === "Delete" || e.key === "Backspace") && selection.size) { e.preventDefault(); store.getState().openDialog({ kind: "delete", ids: [...selection], permanent: view === "trash" }); }
@@ -371,12 +381,14 @@ function Shell() {
   );
 
   return (
-    <div className="w-full lg:h-[calc(100dvh-7rem)] lg:overflow-hidden" onKeyDown={onKeyDown}>
+    <div data-drive-shell className="w-full lg:h-[calc(100dvh-7rem)] lg:overflow-hidden" onKeyDown={onKeyDown}>
       <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => { void store.getState().uploadFiles(Array.from(e.target.files ?? [])); if (fileInputRef.current) fileInputRef.current.value = ""; }} />
-      <div className={cn("grid gap-4 lg:h-full lg:min-h-0 lg:gap-6", dockInspector ? "lg:grid-cols-[auto_minmax(0,1fr)_360px]" : "lg:grid-cols-[auto_minmax(0,1fr)]")}>
+      {/* `grid-cols-1` pins the phone track to minmax(0,1fr): without it the implicit `auto` track sizes
+          to the widest unbreakable child (a long e-mail in the mobile bar) and the whole page scrolls sideways. */}
+      <div className={cn("grid grid-cols-1 gap-4 lg:h-full lg:min-h-0 lg:gap-6", dockInspector ? "lg:grid-cols-[auto_minmax(0,1fr)_360px]" : "lg:grid-cols-[auto_minmax(0,1fr)]")}>
         {/* Mobile: a compact bar with a hamburger that opens the rail as a drawer (the full rail below
             would otherwise bury the file list under the fold on a phone). */}
-        <MobileDriveBar onOpenNav={() => setMobileNavOpen(true)} />
+        <MobileDriveBar onOpenNav={() => setMobileNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
         {/* Desktop: the persistent sidebar rail. */}
         <div className="hidden lg:block lg:h-full lg:min-h-0">
           <DriveRail
@@ -396,8 +408,12 @@ function Shell() {
               onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
               onUpload={() => fileInputRef.current?.click()}
             />
-            <DriveToolbar orderedIds={orderedIds} />
-            {selection.size > 0 && <SelectionBar />}
+            {/* One sticky block: the toolbar and the selection bar stay together under the topbar while
+                the list scrolls, so the bulk actions never scroll away. */}
+            <div className="sticky top-0 z-20">
+              <DriveToolbar orderedIds={orderedIds} />
+              <Collapse open={selection.size > 0}><SelectionBar /></Collapse>
+            </div>
             <MoreToLoadNotice />
             <DriveContentArea
               view={view}
@@ -416,8 +432,8 @@ function Shell() {
             />
             {nextPageToken && !listLoading && (
               <div className="p-3 text-center">
-                <Button variant="ghost" size="sm" onClick={() => void store.getState().loadMore()} disabled={loadingMore}>
-                  {loadingMore ? <Spinner size={14} /> : <ChevronRight size={14} className="rotate-90" />} Load more
+                <Button variant="ghost" size="sm" onClick={() => void store.getState().loadMore()} loading={loadingMore}>
+                  <ChevronRight size={14} className="rotate-90" /> Load more
                 </Button>
               </div>
             )}
@@ -440,11 +456,12 @@ function Shell() {
         onUpload={() => { setMobileNavOpen(false); fileInputRef.current?.click(); }}
       />
 
-      <BulkProgress />
-
-      {/* Inspector on narrow screens — an animated right drawer with a light scrim. On lg+ the docked
-          column above is used instead (isLg gate ⇒ exactly one inspector instance mounts). */}
-      {!isLg && (
+      {/* Inspector on narrow screens — a right drawer on tablets, a bottom sheet on phones, both with a
+          light scrim and safe-area padding. On lg+ the docked column above is used instead (isLg gate ⇒
+          exactly one inspector instance mounts). Portaled to <body>, like Modal/ContextMenu: the route
+          transition transforms the page for a moment, and a transformed ancestor would drag every
+          `fixed` layer along with it. */}
+      {!isLg && createPortal(
         <AnimatePresence>
           {detailsId && (
             <>
@@ -458,21 +475,40 @@ function Shell() {
                 className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]"
               />
               <motion.aside
-                key="inspector-panel"
-                initial={{ x: "100%" }}
-                animate={{ x: 0 }}
-                exit={{ x: "100%" }}
+                key={phone ? "inspector-sheet" : "inspector-panel"}
+                initial={phone ? { y: "100%" } : { x: "100%" }}
+                animate={phone ? { y: 0 } : { x: 0 }}
+                exit={phone ? { y: "100%" } : { x: "100%" }}
                 transition={{ duration: DUR.slow, ease: EASE.emphasized }}
-                className="fixed inset-y-0 right-0 z-40 flex w-[88vw] max-w-[380px] flex-col border-l border-border bg-surface shadow-[var(--shadow-pop)]"
+                className={cn(
+                  "fixed z-40 flex flex-col border-border bg-surface shadow-[var(--shadow-pop)]",
+                  phone
+                    ? "inset-x-0 bottom-0 top-[calc(var(--safe-top)+2.5rem)] rounded-t-[var(--radius-panel)] border-t pb-safe"
+                    : "inset-y-0 right-0 w-[88vw] max-w-[380px] border-l pb-safe pt-safe",
+                )}
               >
+                {phone && (
+                  <div className="flex shrink-0 justify-center pt-2" aria-hidden>
+                    <span className="h-1 w-9 rounded-full bg-border-strong" />
+                  </div>
+                )}
                 {inspectorEl}
               </motion.aside>
             </>
           )}
-        </AnimatePresence>
+        </AnimatePresence>,
+        document.body,
       )}
 
-      {hasUploads && <UploadTray />}
+      {/* Bottom-anchored layers stack in one column (bulk-op progress above the upload tray) so neither
+          hides the other; the stack's height is published as --drive-bottom-stack for the Toaster. */}
+      {createPortal(
+        <BottomStack>
+          <BulkProgress />
+          {hasUploads && <UploadTray />}
+        </BottomStack>,
+        document.body,
+      )}
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} onUpload={() => fileInputRef.current?.click()} />
       <ShortcutsSheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
@@ -491,21 +527,26 @@ function Shell() {
 }
 
 /* ── mobile top bar + rail drawer (shown below lg, where the full sidebar would bury the file list) ── */
-function MobileDriveBar({ onOpenNav }: { onOpenNav: () => void }) {
+function MobileDriveBar({ onOpenNav, onOpenPalette }: { onOpenNav: () => void; onOpenPalette: () => void }) {
   const accounts = useDriveV2((s) => s.accounts);
   const accountId = useDriveV2((s) => s.accountId);
   const spaceId = useDriveV2((s) => s.spaceId);
   const spaceName = useDriveV2((s) => s.spaceName);
   const account = accounts.find((a) => a.id === accountId);
   return (
-    <div className="flex items-center gap-2.5 rounded-[var(--radius-panel)] border border-border bg-surface px-2.5 py-2 lg:hidden">
-      <button onClick={onOpenNav} aria-label="Open navigation menu" className="grid h-9 w-9 shrink-0 place-items-center rounded-[var(--radius-control)] border border-border text-muted transition-colors hover:bg-surface-2">
+    // `min-w-0` lets the truncated name/e-mail actually shrink instead of widening the grid track.
+    <div className="flex min-w-0 items-center gap-2.5 rounded-[var(--radius-panel)] border border-border bg-surface px-2.5 py-2 lg:hidden">
+      <Button variant="outline" size="icon" onClick={onOpenNav} aria-label="Open navigation menu" className="shrink-0 text-muted">
         <MenuIcon size={18} />
-      </button>
+      </Button>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-semibold leading-tight">{spaceId ? spaceName ?? "Shared drive" : account?.name ?? "Drive"}</div>
         <div className="truncate text-[11px] text-muted">{spaceId ? "Shared drive" : account?.email ?? ""}</div>
       </div>
+      {/* The ⌘K palette (search + selection actions) has no keyboard on a phone — give it a button. */}
+      <Button variant="ghost" size="icon" onClick={onOpenPalette} aria-label="Command palette" className="shrink-0">
+        <Command size={17} />
+      </Button>
     </div>
   );
 }
@@ -518,7 +559,8 @@ function MobileRailDrawer({ open, onClose, onNewFolder, onUpload }: { open: bool
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
-  return (
+  // Portaled to <body> so the page transition's transform can't displace the fixed drawer.
+  return createPortal(
     <AnimatePresence>
       {open && (
         <>
@@ -537,13 +579,18 @@ function MobileRailDrawer({ open, onClose, onNewFolder, onUpload }: { open: bool
             animate={{ x: 0 }}
             exit={{ x: "-100%" }}
             transition={{ duration: DUR.slow, ease: EASE.emphasized }}
-            className="fixed inset-y-0 left-0 z-40 w-[84vw] max-w-[300px] p-2 lg:hidden"
+            className="fixed inset-y-0 left-0 z-40 w-[84vw] max-w-[300px] p-2 pb-[calc(0.5rem+var(--safe-bottom))] pt-[calc(0.5rem+var(--safe-top))] lg:hidden"
           >
             <DriveRail variant="drawer" onNavigate={onClose} onNewFolder={onNewFolder} onUpload={onUpload} />
+            {/* An explicit close control (the scrim alone is not discoverable); sits on the drawer's edge. */}
+            <Button variant="secondary" size="icon" onClick={onClose} aria-label="Close menu" className="absolute -right-12 top-[calc(0.75rem+var(--safe-top))] shadow-[var(--shadow-pop)]">
+              <X size={18} />
+            </Button>
           </motion.div>
         </>
       )}
-    </AnimatePresence>
+    </AnimatePresence>,
+    document.body,
   );
 }
 
@@ -611,8 +658,9 @@ function SyncPill() {
   return (
     <button
       onClick={() => setActivity(true)}
+      aria-label={`${label} — open activity`}
       title={sync.via === "push" ? "Live push sync with Google Drive — open activity" : "Live two-way sync with Google Drive — open activity"}
-      className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[12px] text-muted hover:bg-surface-2"
+      className={cn(TOOL_BTN, "min-w-9 justify-center gap-1.5 px-2.5 text-[12px] text-muted [@media(pointer:coarse)]:min-w-10")}
     >
       {sync.status === "syncing" ? <RefreshCw size={13} className="animate-spin text-primary" /> : <span className={cn("h-1.5 w-1.5 rounded-full", dot)} />}
       <span className="hidden md:inline">{label}</span>
@@ -621,6 +669,12 @@ function SyncPill() {
 }
 
 /* ── toolbar (utility strip on the borderless canvas) ── */
+// Raw toolbar controls: 36px on desktop, the 40px floor on touch screens, press feedback on tap.
+const TOOL_BTN = "pressable inline-flex h-9 shrink-0 items-center rounded-[var(--radius-control)] border border-border transition-colors hover:bg-surface-2 [@media(pointer:coarse)]:h-10";
+const TOOL_ICON_BTN = cn(TOOL_BTN, "w-9 justify-center text-muted [@media(pointer:coarse)]:w-10");
+// A half of a segmented toggle (grid/list, density): fills the 36/40px frame minus its 2px padding.
+const SEG_BTN = "pressable grid h-8 w-8 place-items-center rounded-[6px] [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-10";
+
 /** Honest "select all": drain every remaining page first, then select — but never select in a
  *  different view if the user navigated away mid-drain (loadAll took seconds over many pages). */
 async function selectAllAcrossPages() {
@@ -658,8 +712,9 @@ function SelectAllToggle({ orderedIds }: { orderedIds: string[] }) {
       role="checkbox"
       aria-checked={all ? "true" : some ? "mixed" : "false"}
       className={cn(
-        "inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] transition-colors hover:bg-surface-2 disabled:opacity-50",
-        all || some ? "border-primary text-primary" : "border-border text-muted",
+        TOOL_BTN,
+        "gap-1.5 px-2.5 text-[13px] disabled:opacity-50",
+        all || some ? "border-primary text-primary" : "text-muted",
       )}
       title={all ? "Deselect all" : hasMore ? "Load every page, then select all" : "Select all"}
     >
@@ -687,8 +742,8 @@ function MoreToLoadNotice() {
     <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 text-[12.5px] text-muted">
       <Filter size={14} className="shrink-0 text-primary" />
       <span className="min-w-0 flex-1">{msg}</span>
-      <Button variant="outline" size="sm" onClick={() => void useDriveV2.getState().loadAll()} disabled={loadingAll}>
-        {loadingAll ? <Spinner size={13} /> : null} Load all
+      <Button variant="outline" size="sm" onClick={() => void useDriveV2.getState().loadAll()} loading={loadingAll}>
+        Load all
       </Button>
     </div>
   );
@@ -702,6 +757,7 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
   const aiEnabled = useDriveV2((s) => s.aiEnabled);
   const aiSearchBusy = useDriveV2((s) => s.aiSearchBusy);
   const aiSearchNote = useDriveV2((s) => s.aiSearchNote);
+  const phone = useMediaQuery(PHONE_QUERY);
   const [q, setQ] = useState(searchQuery);
 
   useEffect(() => setQ(searchQuery), [searchQuery]);
@@ -724,15 +780,19 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
   ];
 
   return (
-    <div className="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-border bg-background/80 py-2 backdrop-blur">
-      <label className="mr-auto flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 focus-within:border-primary focus-within:ring-focus sm:max-w-sm">
+    // The block above is sticky (Shell); this strip only paints the frosted background.
+    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background/80 py-2 backdrop-blur">
+      {/* Phones: the search field takes its own full-width row (it used to shrink to an icon next to
+          five fixed controls); from sm it shares the row and grows to fill. */}
+      <label className="flex h-9 min-w-[160px] basis-full items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 focus-within:border-primary focus-within:ring-focus sm:mr-auto sm:min-w-0 sm:basis-auto sm:flex-1 sm:max-w-sm [@media(pointer:coarse)]:h-10">
         <Search size={15} className="shrink-0 text-muted" />
-        <span className="hidden shrink-0 rounded-[var(--radius-chip)] bg-surface-3 px-1.5 py-0.5 text-[10.5px] capitalize text-muted sm:inline">{view === "myDrive" ? "My Drive" : view === "search" ? "results" : view}</span>
+        <span className="hidden shrink-0 rounded-[var(--radius-chip)] bg-surface-3 px-1.5 py-0.5 text-[11px] capitalize text-muted sm:inline">{view === "myDrive" ? "My Drive" : view === "search" ? "results" : view}</span>
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder={aiEnabled ? "Search or ask AI… (⌘K)" : "Search Drive… (⌘K)"}
-          className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+          placeholder={phone ? (aiEnabled ? "Search or ask AI…" : "Search Drive…") : aiEnabled ? "Search or ask AI… (⌘K)" : "Search Drive… (⌘K)"}
+          // 16px on phones: iOS Safari zooms into any smaller focused field and stays zoomed.
+          className="min-w-0 flex-1 self-stretch bg-transparent text-base outline-none sm:text-[13px]"
         />
         {aiEnabled && q.trim() && (
           aiSearchBusy ? (
@@ -742,17 +802,21 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
               onClick={() => void useDriveV2.getState().aiSearch(q.trim())}
               aria-label="Search with AI"
               title="Interpret this with AI"
-              className="shrink-0 text-primary transition-opacity hover:opacity-70"
+              className="pressable -my-2 grid h-9 w-9 shrink-0 place-items-center text-primary transition-opacity hover:opacity-70 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
             ><Sparkles size={15} /></button>
           )
         )}
-        {q && <button onClick={() => setQ("")} aria-label="Clear search"><X size={14} className="text-faint hover:text-foreground" /></button>}
+        {q && <button onClick={() => setQ("")} aria-label="Clear search" className="pressable -my-2 -mr-2 grid h-9 w-9 shrink-0 place-items-center [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"><X size={14} className="text-faint hover:text-foreground" /></button>}
       </label>
 
+      {/* Phones: the controls are one sideways-scrolling row under the search field (three wrapped
+          rows of sticky toolbar ate the screen); from sm the wrapper dissolves (`contents`) and the
+          controls wrap in the strip as before. */}
+      <div className="flex min-w-0 basis-full items-center gap-2 overflow-x-auto pb-px [scrollbar-width:none] sm:contents [&::-webkit-scrollbar]:hidden">
       <SyncPill />
 
       <Menu align="end" width={248} trigger={({ toggle, ref }) => (
-        <button ref={ref} onClick={toggle} className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted hover:bg-surface-2" aria-label="Smart collections"><Bookmark size={15} /></button>
+        <button ref={ref} onClick={toggle} className={TOOL_ICON_BTN} aria-label="Smart collections"><Bookmark size={15} /></button>
       )}>
         <MenuLabel>Collections</MenuLabel>
         {collections.length === 0 && <div className="px-2.5 py-2 text-[12.5px] text-muted">No collections yet. Search, then save it.</div>}
@@ -769,7 +833,7 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
       <SelectAllToggle orderedIds={orderedIds} />
 
       <Menu align="end" width={200} trigger={({ toggle, ref }) => (
-        <button ref={ref} onClick={toggle} className="inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border border-border px-2.5 text-[13px] text-muted hover:bg-surface-2"><ArrowUpDown size={15} /> Sort</button>
+        <button ref={ref} onClick={toggle} className={cn(TOOL_BTN, "gap-1.5 px-2.5 text-[13px] text-muted")}><ArrowUpDown size={15} /> Sort</button>
       )}>
         <MenuLabel>Sort by</MenuLabel>
         {SORTS.map((s) => (
@@ -780,7 +844,7 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
       </Menu>
 
       <Menu align="end" width={190} trigger={({ toggle, ref }) => (
-        <button ref={ref} onClick={toggle} className={cn("inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] hover:bg-surface-2", prefs.filterKind ? "border-primary text-primary" : "border-border text-muted")}><Filter size={15} /> Filter</button>
+        <button ref={ref} onClick={toggle} className={cn(TOOL_BTN, "gap-1.5 px-2.5 text-[13px]", prefs.filterKind ? "border-primary text-primary" : "text-muted")}><Filter size={15} /> Filter</button>
       )}>
         <MenuLabel>Show</MenuLabel>
         {FILTERS.map((f) => (
@@ -790,14 +854,15 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
 
       <TagFilter />
 
-      <div className="flex h-9 items-center rounded-[var(--radius-control)] border border-border p-0.5">
-        <button onClick={() => useDriveV2.getState().setLayout("grid")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid view"><LayoutGrid size={15} /></button>
-        <button onClick={() => useDriveV2.getState().setLayout("list")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List view"><ListIcon size={15} /></button>
+      <div className="flex h-9 shrink-0 items-center rounded-[var(--radius-control)] border border-border p-0.5 [@media(pointer:coarse)]:h-10">
+        <button onClick={() => useDriveV2.getState().setLayout("grid")} className={cn(SEG_BTN, prefs.layout === "grid" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Grid view" aria-pressed={prefs.layout === "grid"}><LayoutGrid size={15} /></button>
+        <button onClick={() => useDriveV2.getState().setLayout("list")} className={cn(SEG_BTN, prefs.layout === "list" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="List view" aria-pressed={prefs.layout === "list"}><ListIcon size={15} /></button>
       </div>
 
-      <div className="hidden h-9 items-center rounded-[var(--radius-control)] border border-border p-0.5 sm:flex">
-        <button onClick={() => useDriveV2.getState().setDensity("comfortable")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.density === "comfortable" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Comfortable density" aria-pressed={prefs.density === "comfortable"}><Rows2 size={15} /></button>
-        <button onClick={() => useDriveV2.getState().setDensity("compact")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.density === "compact" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Compact density" aria-pressed={prefs.density === "compact"}><Rows3 size={15} /></button>
+      <div className="hidden h-9 shrink-0 items-center rounded-[var(--radius-control)] border border-border p-0.5 sm:flex [@media(pointer:coarse)]:h-10">
+        <button onClick={() => useDriveV2.getState().setDensity("comfortable")} className={cn(SEG_BTN, prefs.density === "comfortable" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Comfortable density" aria-pressed={prefs.density === "comfortable"}><Rows2 size={15} /></button>
+        <button onClick={() => useDriveV2.getState().setDensity("compact")} className={cn(SEG_BTN, prefs.density === "compact" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Compact density" aria-pressed={prefs.density === "compact"}><Rows3 size={15} /></button>
+      </div>
       </div>
 
       {aiSearchNote && view === "search" && (
@@ -827,11 +892,11 @@ const SHORTCUTS: { keys: string; label: string }[] = [
 function ShortcutsSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <Modal open={open} onClose={onClose} className="max-w-md">
-      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
         <h2 className="font-display text-[15px] font-semibold">Keyboard shortcuts</h2>
-        <button onClick={onClose} aria-label="Close" className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2"><X size={16} /></button>
+        <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close"><X size={16} /></Button>
       </div>
-      <div className="max-h-[70vh] overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <dl className="flex flex-col gap-2">
           {SHORTCUTS.map((s) => (
             <div key={s.label} className="flex items-center justify-between gap-4">
@@ -858,7 +923,7 @@ function TagFilter() {
   if (!allTags.length) return null;
   return (
     <Menu align="end" width={220} trigger={({ toggle, ref }) => (
-      <button ref={ref} onClick={toggle} className={cn("inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-2.5 text-[13px] hover:bg-surface-2", filterTag ? "border-primary text-primary" : "border-border text-muted")}>
+      <button ref={ref} onClick={toggle} className={cn(TOOL_BTN, "gap-1.5 px-2.5 text-[13px]", filterTag ? "border-primary text-primary" : "text-muted")}>
         <Tag size={15} /> {filterTag ? `#${filterTag}` : "Tags"}
       </button>
     )}>
@@ -872,24 +937,56 @@ function TagFilter() {
 }
 
 /* ── bulk-op progress bar (trash / restore / delete / move) ── */
+/** Slides up into the bottom stack while an op runs and fades out when it's done. */
 function BulkProgress() {
   const op = useDriveV2((s) => s.bulkOp);
-  if (!op) return null;
-  const pct = op.indeterminate ? 100 : op.total > 0 ? Math.round((op.done / op.total) * 100) : 0;
+  const pct = op ? (op.indeterminate ? 100 : op.total > 0 ? Math.round((op.done / op.total) * 100) : 0) : 0;
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 mb-safe flex justify-center px-4" aria-live="polite">
-      <div className="pointer-events-auto w-full max-w-sm rounded-[var(--radius-card)] border border-border bg-elevated px-4 py-3 shadow-[var(--shadow-pop)]">
-        <div className="mb-1.5 flex items-center justify-between text-[12.5px]">
-          <span className="inline-flex items-center gap-1.5 font-medium"><Spinner size={13} className="text-primary" /> {op.label}…</span>
-          {!op.indeterminate && <span className="tabular text-muted">{op.done} / {op.total}</span>}
-        </div>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
-          <div
-            className={cn("h-full rounded-full bg-primary transition-[width] duration-200 ease-out", op.indeterminate && "motion-safe:animate-pulse")}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-      </div>
+    <AnimatePresence>
+      {op && (
+        <motion.div
+          key="bulk-op"
+          variants={slideUp}
+          initial="hidden"
+          animate="show"
+          exit="exit"
+          aria-live="polite"
+          className="pointer-events-auto w-full rounded-[var(--radius-card)] border border-border bg-elevated px-4 py-3 shadow-[var(--shadow-pop)] sm:w-80"
+        >
+          <div className="mb-1.5 flex items-center justify-between text-[12.5px]">
+            <span className="inline-flex items-center gap-1.5 font-medium"><Spinner size={13} className="text-primary" /> {op.label}…</span>
+            {!op.indeterminate && <span className="tabular text-muted">{op.done} / {op.total}</span>}
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
+            {op.indeterminate ? (
+              <div className="progress-indeterminate h-full w-2/5 rounded-full bg-primary" />
+            ) : (
+              <div className="h-full rounded-full bg-primary transition-[width] duration-[var(--motion-base)] ease-out" style={{ width: `${pct}%` }} />
+            )}
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/** The column of bottom-anchored cards (bulk progress, upload tray). Sits above the home indicator and
+ *  publishes its height as `--drive-bottom-stack` on <html> so the Toaster can rise above it. */
+function BottomStack({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const root = document.documentElement;
+    const publish = () => root.style.setProperty("--drive-bottom-stack", `${el.scrollHeight}px`);
+    publish();
+    const ro = new ResizeObserver(publish);
+    ro.observe(el);
+    return () => { ro.disconnect(); root.style.removeProperty("--drive-bottom-stack"); };
+  }, []);
+  return (
+    <div ref={ref} className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-stretch gap-2 px-4 pb-[calc(1rem+var(--safe-bottom))] sm:items-end">
+      {children}
     </div>
   );
 }
@@ -898,25 +995,39 @@ function BulkProgress() {
 function SelectionBar() {
   const selection = useDriveV2((s) => s.selection);
   const view = useDriveV2((s) => s.view);
+  const nodes = useDriveV2((s) => s.nodes);
   const s = useDriveV2.getState;
-  const ids = [...selection];
+  // The bar collapses out AFTER the selection is cleared — keep the last non-empty ids through the exit
+  // animation so it never flashes "0 selected" on its way out.
+  const lastIds = useRef<string[]>([]);
+  if (selection.size) lastIds.current = [...selection];
+  const ids = lastIds.current;
+  // Total size of the selection — the aggregate inspector only exists in the docked lg+ column, so on
+  // phones this line is the one place to read it.
+  const totalBytes = useMemo(() => {
+    let t = 0;
+    for (const n of nodes) if (selection.has(n.id) && !n.isFolder) t += n.size ?? 0;
+    return t;
+  }, [nodes, selection]);
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-primary-soft/50 px-3 py-2 text-[13px]">
-      <button onClick={() => s().clearSelection()} className="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-surface-2" aria-label="Clear selection"><X size={15} /></button>
-      <span className="font-medium">{ids.length} selected</span>
-      <div className="ml-auto flex items-center gap-1.5">
+    <div className="flex items-center gap-2 border-b border-border bg-primary-soft/50 px-2 py-1.5 text-[13px] backdrop-blur sm:px-3">
+      <Button variant="ghost" size="icon-sm" className="shrink-0" onClick={() => s().clearSelection()} aria-label="Clear selection"><X size={15} /></Button>
+      <span className="shrink-0 font-medium">{ids.length} selected</span>
+      {totalBytes > 0 && <span className="hidden shrink-0 font-mono text-[11.5px] tabular text-muted min-[400px]:inline">· {formatBytes(totalBytes)}</span>}
+      {/* The actions scroll sideways on phones (Move/Trash used to be cut off past the right edge). */}
+      <div className="ml-auto flex min-w-0 items-center gap-1 overflow-x-auto [scrollbar-width:none] sm:flex-none [&::-webkit-scrollbar]:hidden">
         {view === "trash" ? (
           <>
-            <Button variant="ghost" size="sm" onClick={() => void s().restore(ids)}><RotateCcw size={14} /> Restore</Button>
-            <Button variant="ghost" size="sm" className="text-danger" onClick={() => s().openDialog({ kind: "delete", ids, permanent: true })}><Trash2 size={14} /> Delete forever</Button>
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => void s().restore(ids)}><RotateCcw size={14} /> Restore</Button>
+            <Button variant="ghost" size="sm" className="shrink-0 text-danger" onClick={() => s().openDialog({ kind: "delete", ids, permanent: true })}><Trash2 size={14} /> Delete forever</Button>
           </>
         ) : (
           <>
-            <Button variant="ghost" size="sm" onClick={() => void s().toggleStarMany(ids)}><Star size={14} /> Star</Button>
-            <Button variant="ghost" size="sm" onClick={() => (ids.length === 1 ? void s().downloadNode(ids[0]!) : void s().downloadZip(ids))}><Download size={14} /> Download</Button>
-            {ids.length > 1 && <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "rename-bulk", ids })}><Type size={14} /> Rename</Button>}
-            <Button variant="ghost" size="sm" onClick={() => s().openDialog({ kind: "move", ids })}><CornerUpRight size={14} /> Move</Button>
-            <Button variant="ghost" size="sm" className="text-danger" onClick={() => s().openDialog({ kind: "delete", ids, permanent: false })}><Trash2 size={14} /> Trash</Button>
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => void s().toggleStarMany(ids)}><Star size={14} /> Star</Button>
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => (ids.length === 1 ? void s().downloadNode(ids[0]!) : void s().downloadZip(ids))}><Download size={14} /> Download</Button>
+            {ids.length > 1 && <Button variant="ghost" size="sm" className="shrink-0" onClick={() => s().openDialog({ kind: "rename-bulk", ids })}><Type size={14} /> Rename</Button>}
+            <Button variant="ghost" size="sm" className="shrink-0" onClick={() => s().openDialog({ kind: "move", ids })}><CornerUpRight size={14} /> Move</Button>
+            <Button variant="ghost" size="sm" className="shrink-0 text-danger" onClick={() => s().openDialog({ kind: "delete", ids, permanent: false })}><Trash2 size={14} /> Trash</Button>
           </>
         )}
       </div>
@@ -939,6 +1050,7 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
       if (!a) return;
       const x = Math.min(a.x, e.clientX), y = Math.min(a.y, e.clientY);
       const w = Math.abs(e.clientX - a.x), h = Math.abs(e.clientY - a.y);
+      if (![x, y, w, h].every(Number.isFinite)) return; // a synthetic event without coordinates — never style `left: NaN`
       if (w < 5 && h < 5) return; // still a click, not a drag
       setBox({ x, y, w, h });
       const sel = { left: x, top: y, right: x + w, bottom: y + h };
@@ -1012,6 +1124,14 @@ function DriveContentArea({
   const canDrop = view === "myDrive";
   const marquee = useMarqueeSelect(scrollRef);
   const filterTag = useDriveV2((s) => s.filterTag);
+  // Below lg the page (`main`) is the only scroller: the list virtualizes against it (with a scroll
+  // margin for everything above the rows) instead of living in a nested max-height box — no scroll
+  // trap, and "Load more" sits in normal flow right under the rows. On lg the content div scrolls.
+  const isLg = useMediaQuery("(min-width: 1024px)");
+  const getScrollEl = useCallback(
+    () => (isLg ? scrollRef.current : (scrollRef.current?.closest("main") as HTMLElement | null) ?? scrollRef.current),
+    [isLg],
+  );
 
   // ── Keyboard focus cursor. Anchored to a node ID (not an index) so it survives live-sync reorders
   // and inserts. Focus lives on the focused gridcell (roving tabindex). Arrows move it, Enter opens,
@@ -1096,36 +1216,43 @@ function DriveContentArea({
       onDragOver={canDrop ? (e) => { if (hasExternalFiles(e) && !hasDriveDrag(e)) { e.preventDefault(); setDrag(true); } } : undefined}
       onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
       onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
-      className={cn("relative max-h-[calc(100dvh-13rem)] min-h-[360px] overflow-y-auto overflow-x-hidden rounded-[var(--radius-card)] lg:max-h-none lg:min-h-0 lg:flex-1", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
+      // `overflow-x-clip` (not hidden) below lg: it clips without turning the div into a scroll box.
+      className={cn("relative min-h-[360px] overflow-x-clip rounded-[var(--radius-card)] lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overflow-x-hidden", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
     >
       {marquee.box && <div className="pointer-events-none fixed z-30 rounded-[3px] border border-primary bg-primary/10" style={{ left: marquee.box.x, top: marquee.box.y, width: marquee.box.w, height: marquee.box.h }} />}
       {drag && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-primary-soft/40 text-[14px] font-semibold text-primary">Drop to upload here</div>}
       {/* Stale-while-revalidate: a thin top bar while a background refresh runs over a listing that stays
-          visible — no full-skeleton flash. Indeterminate pulse; respects prefers-reduced-motion. */}
+          visible — no full-skeleton flash. Indeterminate sweep; static under prefers-reduced-motion. */}
       {refreshing && !listLoading && (
-        <div className="pointer-events-none sticky top-0 z-20 h-0.5 bg-primary motion-safe:animate-pulse" role="status" aria-label="Refreshing" />
+        <div className="pointer-events-none sticky top-0 z-20 h-0.5 overflow-hidden" role="status" aria-label="Refreshing">
+          <div className="progress-indeterminate h-full w-2/5 bg-primary" />
+        </div>
       )}
-      {listLoading ? (
-        <DriveContentSkeleton layout={layout} />
-      ) : listError ? (
-        <DriveErrorState message={listError} onRetry={() => void useDriveV2.getState().load(true)} />
-      ) : !visible.length ? (
-        filterTag ? (
-          <div className="grid min-h-[360px] place-items-center p-6 text-center">
-            <div>
-              <div className="font-display text-[15px] font-semibold">No loaded items tagged <span className="text-primary">#{filterTag}</span></div>
-              <p className="mx-auto mt-1.5 max-w-xs text-[13px] text-muted">Tag filtering applies to items already loaded. Load more, or clear the filter.</p>
-              <Button variant="ghost" size="sm" className="mx-auto mt-4" onClick={() => useDriveV2.getState().setFilterTag(null)}>Clear tag filter</Button>
+      {/* The only animated boundary around the virtualized rows: a crossfade between skeleton, states
+          and content, and between the grid and list layouts. */}
+      <FadeSwap k={`${layout}|${listLoading ? "loading" : listError ? "error" : visible.length ? "content" : "empty"}`}>
+        {listLoading ? (
+          <DriveContentSkeleton layout={layout} />
+        ) : listError ? (
+          <DriveErrorState message={listError} onRetry={() => void useDriveV2.getState().load(true)} />
+        ) : !visible.length ? (
+          filterTag ? (
+            <div className="grid min-h-[360px] place-items-center p-6 text-center">
+              <div>
+                <div className="font-display text-[15px] font-semibold">No loaded items tagged <span className="text-primary">#{filterTag}</span></div>
+                <p className="mx-auto mt-1.5 max-w-xs text-[13px] text-muted">Tag filtering applies to items already loaded. Load more, or clear the filter.</p>
+                <Button variant="ghost" size="sm" className="mx-auto mt-4" onClick={() => useDriveV2.getState().setFilterTag(null)}>Clear tag filter</Button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <DriveEmptyState view={view} onUpload={onUpload} />
+          )
+        ) : layout === "list" ? (
+          <VirtualList scrollRef={scrollRef} getScrollEl={getScrollEl} visible={visible} rowProps={rowProps} focusIdx={focusIdx} focusNonce={focusNonce} />
         ) : (
-          <DriveEmptyState view={view} onUpload={onUpload} />
-        )
-      ) : layout === "list" ? (
-        <VirtualList scrollRef={scrollRef} visible={visible} rowProps={rowProps} focusIdx={focusIdx} focusNonce={focusNonce} />
-      ) : (
-        <VirtualGrid scrollRef={scrollRef} visible={visible} rowProps={rowProps} focusIdx={focusIdx} focusNonce={focusNonce} onCols={setCols} />
-      )}
+          <VirtualGrid scrollRef={scrollRef} getScrollEl={getScrollEl} visible={visible} rowProps={rowProps} focusIdx={focusIdx} focusNonce={focusNonce} onCols={setCols} />
+        )}
+      </FadeSwap>
     </div>
   );
 }
@@ -1134,11 +1261,34 @@ type ItemRowProps = { node: DriveNode; index: number; colIndex: number; selected
 
 type VirtualProps = {
   scrollRef: RefObject<HTMLDivElement | null>;
+  /** The element the virtualizer scrolls against — the content div on lg, the page's `main` below. */
+  getScrollEl: () => HTMLElement | null;
   visible: DriveNode[];
   rowProps: (n: DriveNode, index: number, colIndex: number) => ItemRowProps;
   focusIdx: number;
   focusNonce: number;
 };
+
+/** Distance from the scroll element's top to the list's top, so a list virtualized against the page
+ *  knows where its rows begin. Re-measured whenever the Drive shell resizes (selection bar collapsing,
+ *  header/toolbar wrapping) — a layout read, but only on those events. Zero when the list's own
+ *  container is the scroller (lg+). */
+function useScrollMargin(listRef: RefObject<HTMLDivElement | null>, getScrollEl: () => HTMLElement | null): number {
+  const [margin, setMargin] = useState(0);
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const sc = getScrollEl();
+    const shell = list?.closest<HTMLElement>("[data-drive-shell]");
+    if (!list || !sc || !shell) return;
+    if (!sc.contains(shell)) { setMargin(0); return; } // the content div itself scrolls — rows start at 0
+    const measure = () => setMargin(Math.max(0, Math.round(list.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop)));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(shell);
+    return () => ro.disconnect();
+  }, [listRef, getScrollEl]);
+  return margin;
+}
 
 /** Move real DOM focus onto the focused cell (roving-tabindex cursor). Fires ONLY on an explicit
  *  keyboard move (focusNonce), never on resize/reflow, so layout changes don't yank focus back into
@@ -1162,19 +1312,21 @@ function useFocusScroll(scrollRef: RefObject<HTMLDivElement | null>, focusIdx: n
 
 /** Virtualized list — only the visible rows are mounted, so 10k-item folders stay smooth. Exposed as a
  *  single-column ARIA grid (role=grid/row/gridcell) so per-item buttons are valid cell widgets. */
-function VirtualList({ scrollRef, visible, rowProps, focusIdx, focusNonce }: VirtualProps) {
+function VirtualList({ scrollRef, getScrollEl, visible, rowProps, focusIdx, focusNonce }: VirtualProps) {
   const compact = useDriveV2((s) => s.prefs.density === "compact");
-  const virt = useVirtualizer({ count: visible.length, getScrollElement: () => scrollRef.current, estimateSize: () => (compact ? 40 : 48), overscan: 12 });
+  const listRef = useRef<HTMLDivElement>(null);
+  const scrollMargin = useScrollMargin(listRef, getScrollEl);
+  const virt = useVirtualizer({ count: visible.length, getScrollElement: getScrollEl, estimateSize: () => (compact ? 40 : 48), overscan: 12, scrollMargin });
   useEffect(() => { if (focusNonce) virt.scrollToIndex(focusIdx, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
   useFocusScroll(scrollRef, focusIdx, focusNonce);
   return (
     <div>
       <ListHeader />
-      <div role="grid" aria-multiselectable="true" aria-label="Files and folders" aria-rowcount={visible.length} aria-colcount={1} style={{ height: virt.getTotalSize(), position: "relative" }}>
+      <div ref={listRef} role="grid" aria-multiselectable="true" aria-label="Files and folders" aria-rowcount={visible.length} aria-colcount={1} style={{ height: virt.getTotalSize(), position: "relative" }}>
         {virt.getVirtualItems().map((vi) => {
           const n = visible[vi.index]!;
           return (
-            <div key={n.id} role="row" aria-rowindex={vi.index + 1} data-index={vi.index} ref={virt.measureElement} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start}px)` }}>
+            <div key={n.id} role="row" aria-rowindex={vi.index + 1} data-index={vi.index} ref={virt.measureElement} style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vi.start - scrollMargin}px)` }}>
               <FileRow {...rowProps(n, vi.index, 1)} />
             </div>
           );
@@ -1186,14 +1338,16 @@ function VirtualList({ scrollRef, visible, rowProps, focusIdx, focusNonce }: Vir
 
 /** Virtualized responsive grid — columns from container width, rows virtualized. Exposed as a 2D ARIA
  *  grid (role=grid/row/gridcell) matching the Left/Right + Up/Down keyboard model. */
-function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCols }: VirtualProps & { onCols: (n: number) => void }) {
+function VirtualGrid({ scrollRef, getScrollEl, visible, rowProps, focusIdx, focusNonce, onCols }: VirtualProps & { onCols: (n: number) => void }) {
   const gridRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
+  const [narrow, setNarrow] = useState(false);
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
     // Narrower minimum on phones so 360–430px screens get two columns instead of a single tall card.
-    const compute = () => { const w = el.clientWidth; const min = w < 640 ? 140 : 176, gap = 16; const c = Math.max(1, Math.floor((w + gap) / (min + gap))); setCols(c); onCols(c); };
+    const compute = () => { const w = el.clientWidth; const min = w < 640 ? 140 : 176, gap = 16; const c = Math.max(1, Math.floor((w + gap) / (min + gap))); setCols(c); setNarrow(w < 640); onCols(c); };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(el);
@@ -1201,13 +1355,15 @@ function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCol
   }, [onCols]);
   const compact = useDriveV2((s) => s.prefs.density === "compact");
   const rows = Math.ceil(visible.length / cols);
-  const virt = useVirtualizer({ count: rows, getScrollElement: () => scrollRef.current, estimateSize: () => (compact ? 176 : 208), overscan: 6, measureElement: (el) => el.getBoundingClientRect().height });
+  const scrollMargin = useScrollMargin(listRef, getScrollEl);
+  // Phone cards have a 112px hero and a two-line name (~196px + gap); desktop 144px hero (~208px).
+  const virt = useVirtualizer({ count: rows, getScrollElement: getScrollEl, estimateSize: () => (compact ? 176 : narrow ? 212 : 208), overscan: 6, measureElement: (el) => el.getBoundingClientRect().height, scrollMargin });
   const focusRow = Math.floor(focusIdx / cols);
   useEffect(() => { if (focusNonce) virt.scrollToIndex(focusRow, { align: "auto" }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [focusNonce]);
   useFocusScroll(scrollRef, focusIdx, focusNonce);
   return (
     <div ref={gridRef} className="py-2">
-      <div role="grid" aria-multiselectable="true" aria-label="Files and folders" aria-rowcount={rows} aria-colcount={cols} style={{ height: virt.getTotalSize(), position: "relative" }}>
+      <div ref={listRef} role="grid" aria-multiselectable="true" aria-label="Files and folders" aria-rowcount={rows} aria-colcount={cols} style={{ height: virt.getTotalSize(), position: "relative" }}>
         {virt.getVirtualItems().map((vr) => {
           const items = visible.slice(vr.index * cols, vr.index * cols + cols);
           return (
@@ -1217,7 +1373,7 @@ function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCol
               aria-rowindex={vr.index + 1}
               data-index={vr.index}
               ref={virt.measureElement}
-              style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start}px)`, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px", paddingBottom: "16px" }}
+              style={{ position: "absolute", top: 0, left: 0, right: 0, transform: `translateY(${vr.start - scrollMargin}px)`, display: "grid", gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gap: "16px", paddingBottom: "16px" }}
             >
               {items.map((n, i) => <FileCard key={n.id} {...rowProps(n, vr.index * cols + i, i + 1)} />)}
             </div>
@@ -1247,12 +1403,13 @@ function UploadTray() {
       ? `Uploading ${active.length} file${active.length === 1 ? "" : "s"}${total > active.length ? ` · ${done}/${total} done` : ""}`
       : `${done} upload${done === 1 ? "" : "s"} complete${failed ? ` · ${failed} failed` : ""}`;
 
+  // Lives in the BottomStack (which owns the fixed position, the safe-area padding and the z-index).
   return (
-    <div className="fixed bottom-4 right-4 z-40 mb-safe w-[calc(100vw-2rem)] max-w-80 overflow-hidden rounded-[var(--radius-card)] border border-border bg-elevated shadow-[var(--shadow-pop)]">
-      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
+    <motion.div variants={slideUp} initial="hidden" animate="show" className="pointer-events-auto w-full overflow-hidden rounded-[var(--radius-card)] border border-border bg-elevated shadow-[var(--shadow-pop)] sm:w-80">
+      <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="pressable flex min-h-10 w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
         {active.length > 0 ? <Spinner size={14} className="text-primary" /> : <Check size={15} className="text-ok" />}
         <span className="flex-1 truncate text-left" title={heading}>{heading}</span>
-        <ChevronRight size={15} className={cn("text-muted transition-transform", open && "rotate-90")} />
+        <ChevronRight size={15} className={cn("text-muted transition-transform duration-[var(--motion-base)]", open && "rotate-90")} />
       </button>
       {active.length > 0 && (
         <div className="border-b border-border px-3.5 py-2">
@@ -1263,7 +1420,7 @@ function UploadTray() {
           </div>
         </div>
       )}
-      {open && (
+      <Collapse open={open}>
         <div className="max-h-64 overflow-y-auto">
           {uploads.slice(0, 30).map((u) => (
             <div key={u.id} className="flex items-center gap-2.5 border-b border-border px-3.5 py-2 last:border-0">
@@ -1272,7 +1429,7 @@ function UploadTray() {
                 {u.status === "uploading" ? (
                   <>
                     <Progress value={u.size ? Math.round((u.uploaded / u.size) * 100) : 0} className="mt-1" />
-                    <div className="mt-0.5 text-[10.5px] text-faint">{formatBytes(u.uploaded)} / {formatBytes(u.size)}</div>
+                    <div className="mt-0.5 font-mono text-[11.5px] tabular text-faint">{formatBytes(u.uploaded)} / {formatBytes(u.size)}</div>
                   </>
                 ) : (
                   <div className={cn("text-[11px]", u.status === "done" ? "text-ok" : u.status === "error" ? "text-danger" : "text-muted")}>{u.status === "done" ? formatBytes(u.size) + " · Done" : u.status === "error" ? u.error ?? "Failed" : "Canceled"}</div>
@@ -1282,7 +1439,7 @@ function UploadTray() {
             </div>
           ))}
         </div>
-      )}
-    </div>
+      </Collapse>
+    </motion.div>
   );
 }

@@ -58,11 +58,11 @@ export function InstallMenu({ skill }: { skill: Skill }) {
 
       {/* trust gate */}
       <Modal open={!!gate} onClose={() => setGate(null)} className="max-w-lg">
-        <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+        <div className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-warn-soft text-warn">
             <AlertTriangle size={18} />
           </span>
-          <div>
+          <div className="min-w-0">
             <h2 className="text-base font-semibold">Install an unreviewed skill?</h2>
             <p className="mt-0.5 text-[13px] text-muted">
               <span className="font-mono">{skill.name}</span> was copied from{" "}
@@ -71,11 +71,11 @@ export function InstallMenu({ skill }: { skill: Skill }) {
             </p>
           </div>
         </div>
-        <div className="max-h-60 space-y-1.5 overflow-y-auto px-5 py-4">
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-5 py-4 sm:max-h-60">
           {version?.scan.findings.map((f, i) => (
             <div key={i} className="flex items-start gap-2 rounded-lg border border-border bg-danger-soft/50 px-3 py-2 text-[13px]">
               <AlertTriangle size={14} className="mt-0.5 shrink-0 text-danger" />
-              <div>
+              <div className="min-w-0 break-words [overflow-wrap:anywhere]">
                 <span className="font-mono text-[12px] text-muted">
                   {f.path}:{f.line}
                 </span>
@@ -84,12 +84,14 @@ export function InstallMenu({ skill }: { skill: Skill }) {
             </div>
           ))}
         </div>
-        <div className="flex flex-wrap justify-end gap-2 border-t border-border px-5 py-3.5">
-          <Button variant="ghost" onClick={() => setGate(null)}>
+        {/* Stacked full-width on phones (primary on top), a right-aligned row from sm up. */}
+        <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-border px-5 py-3.5 sm:flex-row sm:justify-end">
+          <Button variant="ghost" className="w-full sm:w-auto" onClick={() => setGate(null)}>
             Cancel
           </Button>
           <Button
             variant="outline"
+            className="w-full sm:w-auto"
             onClick={() => {
               if (gate) doInstall(gate);
               setGate(null);
@@ -99,6 +101,7 @@ export function InstallMenu({ skill }: { skill: Skill }) {
           </Button>
           <Button
             variant="primary"
+            className="w-full sm:w-auto"
             onClick={() => {
               reviewSkill(skill.id);
               if (gate) doInstall(gate);

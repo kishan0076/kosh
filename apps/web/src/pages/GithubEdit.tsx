@@ -5,9 +5,10 @@ import { cn } from "@/lib/cn";
 import { ApiError } from "@/data/api";
 import { githubV2Api, type BranchLite, type PushResult } from "@/data/githubV2Api";
 import { useGithubV2, ghToast } from "@/data/githubV2";
-import { Button, Input, Spinner, Toggle } from "@/components/ui";
+import { Button, Input, Toggle } from "@/components/ui";
 import { SelectMenu } from "@/components/overlays";
 import { Markdown } from "@/components/markdown";
+import { PageSkeleton } from "@/components/PageSkeleton";
 
 /**
  * In-app text/README editor. Loads a file (or starts a new one), edits it with a live sanitized preview
@@ -95,7 +96,7 @@ export function GithubEdit() {
     }
   }
 
-  if (loading) return <div className="grid min-h-[50vh] place-items-center"><Spinner size={24} className="text-primary" /></div>;
+  if (loading) return <PageSkeleton variant="form" />;
   if (loadError) {
     return (
       <div className="mx-auto grid min-h-[50vh] w-full max-w-lg place-items-center">
@@ -110,18 +111,20 @@ export function GithubEdit() {
 
   return (
     <div className="w-full space-y-4">
-      <button onClick={() => navigate(`/github/${owner}/${repo}`)} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground"><ArrowLeft size={15} /> Back to repository</button>
+      <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(`/github/${owner}/${repo}`)}><ArrowLeft size={15} /> Back to repository</Button>
 
-      <header className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
+      <header className="flex flex-wrap items-center gap-3 rounded-[var(--radius-card)] border border-border bg-surface px-4 py-4 sm:px-5">
         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><Pencil size={20} /></span>
         <div className="min-w-0 flex-1">
-          <h1 className="text-lg font-semibold leading-tight">{isNew ? "Create" : "Edit"} <span className="font-mono">{path}</span></h1>
+          {/* break-all: a nested path must wrap rather than truncate — which file is being edited is the point */}
+          <h1 className="break-all text-[17px] font-semibold leading-tight sm:text-lg">{isNew ? "Create" : "Edit"} <span className="font-mono">{path}</span></h1>
           <p className="mt-0.5 truncate font-mono text-[12.5px] text-muted">{owner}/{repo}</p>
         </div>
         {isMarkdown && (
-          <div className="flex rounded-[var(--radius-control)] border border-border p-0.5 text-[12.5px]">
-            <button onClick={() => setView("edit")} className={cn("flex items-center gap-1.5 rounded-[6px] px-2.5 py-1 font-medium", view === "edit" ? "bg-surface-2 text-foreground" : "text-muted")}><FileCode2 size={13} /> Edit</button>
-            <button onClick={() => setView("preview")} className={cn("flex items-center gap-1.5 rounded-[6px] px-2.5 py-1 font-medium", view === "preview" ? "bg-surface-2 text-foreground" : "text-muted")}><Eye size={13} /> Preview</button>
+          // phones: the segmented control takes its own full-width row under the title
+          <div className="flex basis-full rounded-[var(--radius-control)] border border-border p-0.5 text-[12.5px] sm:basis-auto">
+            <button onClick={() => setView("edit")} className={cn("pressable flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2.5 py-1 font-medium sm:flex-none [@media(pointer:coarse)]:min-h-9", view === "edit" ? "bg-surface-2 text-foreground" : "text-muted")}><FileCode2 size={13} /> Edit</button>
+            <button onClick={() => setView("preview")} className={cn("pressable flex flex-1 items-center justify-center gap-1.5 rounded-[6px] px-2.5 py-1 font-medium sm:flex-none [@media(pointer:coarse)]:min-h-9", view === "preview" ? "bg-surface-2 text-foreground" : "text-muted")}><Eye size={13} /> Preview</button>
           </div>
         )}
       </header>
@@ -132,27 +135,29 @@ export function GithubEdit() {
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-ok-soft text-ok"><Check size={20} /></span>
             <div><h2 className="text-[15px] font-semibold">{result.pullRequestUrl ? "Pull request opened" : "Changes committed"}</h2><p className="text-[12.5px] text-muted">on <span className="font-mono">{result.branch}</span></p></div>
           </div>
-          <div className="flex flex-wrap justify-end gap-2 px-5 py-3.5">
-            <Button variant="ghost" onClick={() => setResult(null)}>Keep editing</Button>
-            <Button variant="outline" onClick={() => navigate(`/github/${owner}/${repo}`)}>Back to repository</Button>
+          {/* phones: full-width buttons stacked with the primary action first; sm+: a right-aligned row */}
+          <div className="flex flex-col gap-2 px-5 py-3.5 sm:flex-row sm:flex-wrap sm:justify-end">
             {result.pullRequestUrl ? (
-              <a href={result.pullRequestUrl} target="_blank" rel="noreferrer noopener"><Button variant="primary"><GitPullRequest size={15} /> View pull request</Button></a>
+              <a href={result.pullRequestUrl} target="_blank" rel="noreferrer noopener" className="order-first sm:order-last"><Button variant="primary" className="w-full sm:w-auto"><GitPullRequest size={15} /> View pull request</Button></a>
             ) : (
-              <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="primary"><ExternalLink size={15} /> View commit</Button></a>
+              <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener" className="order-first sm:order-last"><Button variant="primary" className="w-full sm:w-auto"><ExternalLink size={15} /> View commit</Button></a>
             )}
+            <Button variant="outline" className="w-full sm:w-auto" onClick={() => navigate(`/github/${owner}/${repo}`)}>Back to repository</Button>
+            <Button variant="ghost" className="w-full sm:w-auto sm:order-first" onClick={() => setResult(null)}>Keep editing</Button>
           </div>
         </div>
       ) : (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
           {/* editor / preview */}
-          <div className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+          <div className="min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
             {view === "edit" ? (
+              // A borderless editor, so it stays a raw textarea; 16px on phones keeps iOS from zooming on focus.
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 spellCheck={isMarkdown}
                 placeholder={`# ${repo}\n\nWrite your ${path}…`}
-                className="min-h-[420px] w-full resize-y bg-surface p-4 font-mono text-[13px] leading-relaxed outline-none placeholder:text-faint"
+                className="min-h-[420px] w-full resize-y bg-surface p-4 font-mono text-base leading-relaxed outline-none placeholder:text-faint sm:text-[13px]"
               />
             ) : (
               <div className="min-h-[420px] p-5">{content.trim() ? <Markdown>{content}</Markdown> : <p className="text-[13px] text-muted">Nothing to preview yet.</p>}</div>
@@ -160,22 +165,23 @@ export function GithubEdit() {
           </div>
 
           {/* commit controls */}
-          <aside className="space-y-4 lg:sticky lg:top-4">
-            <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+          <aside className="min-w-0 space-y-4 lg:sticky lg:top-4">
+            {/* no overflow-hidden here: it would turn the card into the sticky scrollport for the Commit row */}
+            <section className="rounded-[var(--radius-card)] border border-border bg-surface">
               <div className="border-b border-border px-4 py-3 text-[12px] font-semibold uppercase tracking-wide text-faint">Commit changes</div>
               <div className="space-y-4 px-4 py-4">
                 <div>
                   <label className="mb-1.5 block text-[12px] font-medium text-muted">Branch</label>
                   <div className="mb-2 flex rounded-[var(--radius-control)] border border-border p-0.5 text-[12px]">
-                    <button onClick={() => setBranchMode("existing")} className={cn("flex-1 rounded-[6px] px-2 py-1 font-medium", branchMode === "existing" ? "bg-surface-2 text-foreground" : "text-muted")}>Existing</button>
-                    <button onClick={() => setBranchMode("new")} className={cn("flex-1 rounded-[6px] px-2 py-1 font-medium", branchMode === "new" ? "bg-surface-2 text-foreground" : "text-muted")}>New branch</button>
+                    <button onClick={() => setBranchMode("existing")} className={cn("pressable flex-1 rounded-[6px] px-2 py-1 font-medium [@media(pointer:coarse)]:min-h-9", branchMode === "existing" ? "bg-surface-2 text-foreground" : "text-muted")}>Existing</button>
+                    <button onClick={() => setBranchMode("new")} className={cn("pressable flex-1 rounded-[6px] px-2 py-1 font-medium [@media(pointer:coarse)]:min-h-9", branchMode === "new" ? "bg-surface-2 text-foreground" : "text-muted")}>New branch</button>
                   </div>
                   {branchMode === "existing" ? (
                     <SelectMenu value={branch} onChange={setBranch} options={branchOptions} width={280} ariaLabel="Branch" className="w-full font-mono" />
                   ) : (
                     <div className="flex items-center overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface focus-within:border-primary focus-within:ring-focus">
                       <span className="grid h-9 w-9 shrink-0 place-items-center border-r border-border bg-surface-2 text-faint"><GitBranch size={14} /></span>
-                      <input value={newBranch} onChange={(e) => setNewBranch(e.target.value.replace(/\s+/g, "-"))} placeholder="docs/update-readme" className="min-w-0 flex-1 bg-transparent px-2.5 py-2 font-mono text-[13px] outline-none" />
+                      <input value={newBranch} onChange={(e) => setNewBranch(e.target.value.replace(/\s+/g, "-"))} placeholder="docs/update-readme" className="h-9 min-w-0 flex-1 bg-transparent px-2.5 font-mono text-base outline-none placeholder:text-faint sm:text-[13px]" />
                     </div>
                   )}
                 </div>
@@ -192,7 +198,7 @@ export function GithubEdit() {
                   </label>
                   {openPr && (
                     <div className="mt-2.5 space-y-2">
-                      {prBaseSameAsHead && <p className="text-[11.5px] text-danger">Use a branch other than {defaultBranch}.</p>}
+                      {prBaseSameAsHead && <p className="text-[12.5px] text-danger">Use a branch other than {defaultBranch}.</p>}
                       <Input value={prTitle} onChange={(e) => setPrTitle(e.target.value)} placeholder="PR title (defaults to commit message)" />
                     </div>
                   )}
@@ -200,12 +206,11 @@ export function GithubEdit() {
 
                 {error && <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
 
-                {phase === "saving" ? (
-                  <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5 text-[12.5px]"><Spinner size={15} className="text-primary" /> Saving…</div>
-                ) : (
-                  <Button variant="primary" className="w-full" onClick={save} disabled={!canSave}><Check size={15} /> {openPr ? "Commit & open PR" : "Commit changes"}</Button>
-                )}
-                {!dirty && <p className="text-center text-[11.5px] text-faint">No changes yet.</p>}
+                {/* Sticky on phones so Commit stays reachable while the branch/PR fields (and keyboard) are open. */}
+                <div className="sticky bottom-0 z-10 -mx-4 -mb-4 space-y-2 rounded-b-[var(--radius-card)] border-t border-border bg-surface px-4 pb-[calc(0.75rem+var(--safe-bottom))] pt-3 lg:static lg:m-0 lg:space-y-4 lg:rounded-none lg:border-0 lg:p-0">
+                  <Button variant="primary" className="w-full" onClick={save} disabled={!canSave} loading={phase === "saving"}><Check size={15} /> {phase === "saving" ? "Saving…" : openPr ? "Commit & open PR" : "Commit changes"}</Button>
+                  {!dirty && <p className="text-center text-[12px] text-faint">No changes yet.</p>}
+                </div>
               </div>
             </section>
           </aside>

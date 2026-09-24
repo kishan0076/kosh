@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useReducedMotion, type Transition, type Variants } from "motion/react";
 
 /**
@@ -42,6 +43,15 @@ export const slideUp: Variants = {
   exit: { opacity: 0, y: 6, transition: { duration: DUR.fast, ease: EASE.exit } },
 };
 
+/** Route-level page swap (see components/PageTransition.tsx): a 4px rise in, a 2px drop out. Transform +
+ *  opacity only, so the whole page moves as one composited layer; MotionConfig drops the `y` under
+ *  reduced motion and leaves the opacity fade. */
+export const pageVariants: Variants = {
+  hidden: { opacity: 0, y: 4 },
+  show: { opacity: 1, y: 0, transition: { duration: DUR.base, ease: EASE.standard } },
+  exit: { opacity: 0, y: -2, transition: { duration: DUR.fast, ease: EASE.exit } },
+};
+
 /** Parent that staggers its direct children (each should use `slideUp`/`staggerChild`). */
 export const staggerParent: Variants = {
   hidden: {},
@@ -52,4 +62,16 @@ export const staggerChild: Variants = slideUp;
 /** True when the user prefers reduced motion — for the rare case a component must branch itself. */
 export function useReduced(): boolean {
   return useReducedMotion() ?? false;
+}
+
+/* ── List reveal (CSS-only) ─────────────────────────────────────
+   Stagger the first REVEAL_CAP rows of a freshly keyed collection with the `.reveal-in` keyframe
+   (index.css) — no framer wrapper, no `layout`, so it's safe on long/virtualized lists. Key the list
+   container by its filter/sort so re-filtering re-reveals; never re-trigger on data patches. */
+export const REVEAL_CAP = 12;
+export function revealClass(i: number): string {
+  return i < REVEAL_CAP ? "reveal-in" : "";
+}
+export function revealStyle(i: number): CSSProperties | undefined {
+  return i < REVEAL_CAP ? { animationDelay: `${i * 30}ms` } : undefined;
 }

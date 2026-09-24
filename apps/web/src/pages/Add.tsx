@@ -8,6 +8,7 @@ import { live } from "@/data/selectors";
 import { itemIcon } from "@/lib/icons";
 import { ago } from "@/lib/time";
 import { PageHeader, SectionCard } from "@/components/common";
+import { Button } from "@/components/ui";
 import { QuickAdd } from "@/components/quickadd/QuickAdd";
 
 /** Dedicated "Add" module — a full page (not a popup) for capturing and creating. */
@@ -42,23 +43,23 @@ export function Add() {
       {/* primary capture */}
       <QuickAdd />
 
-      {/* create */}
+      {/* create — 2-up on phones (like "Other ways in") so the page doesn't push everything below the fold */}
       <div>
         <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wide text-faint">Create</h2>
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
           {creators.map((c) => {
             const Icon = c.icon;
             return (
               <button
                 key={c.title}
                 onClick={c.onClick}
-                className="group flex flex-col items-start rounded-[var(--radius-card)] border border-border bg-surface p-4 text-left card-hover hover:border-border-strong"
+                className="group flex flex-col items-start rounded-[var(--radius-card)] border border-border bg-surface p-3 text-left card-hover hover:border-border-strong sm:p-4"
               >
-                <span className="mb-3 grid h-10 w-10 place-items-center rounded-xl" style={{ backgroundColor: `color-mix(in oklab, ${c.accent} 15%, transparent)`, color: c.accent }}>
+                <span className="mb-2 grid h-10 w-10 place-items-center rounded-xl sm:mb-3" style={{ backgroundColor: `color-mix(in oklab, ${c.accent} 15%, transparent)`, color: c.accent }}>
                   <Icon size={19} />
                 </span>
-                <span className="text-[14.5px] font-semibold">{c.title}</span>
-                <span className="mt-0.5 text-[12.5px] leading-snug text-muted">{c.desc}</span>
+                <span className="text-[13.5px] font-semibold sm:text-[14.5px]">{c.title}</span>
+                <span className="mt-0.5 line-clamp-2 text-[12.5px] leading-snug text-muted">{c.desc}</span>
               </button>
             );
           })}
@@ -70,16 +71,16 @@ export function Add() {
         <SectionCard
           title="Recently added"
           action={
-            <button onClick={() => navigate("/library")} className="inline-flex items-center gap-1 text-[13px] font-medium text-primary hover:opacity-80">
+            <Button variant="ghost" size="sm" onClick={() => navigate("/library")}>
               View all <ArrowRight size={14} />
-            </button>
+            </Button>
           }
         >
           <div className="divide-y divide-border">
             {recent.map((i) => {
               const Icon = itemIcon(i);
               return (
-                <button key={i.id} onClick={() => openItem(i.id)} className="flex w-full items-center gap-3 py-2.5 text-left first:pt-0 last:pb-0 hover:opacity-80">
+                <button key={i.id} onClick={() => openItem(i.id)} className="flex w-full items-center gap-3 py-2.5 text-left first:pt-0 last:pb-0 pressable hover:opacity-80">
                   <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted">
                     <Icon size={15} />
                   </span>

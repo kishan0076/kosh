@@ -23,7 +23,7 @@ import { githubV2Api, type BranchLite, type PushResult, type RepoSummary } from 
 import { useGithubV2, ghToast } from "@/data/githubV2";
 import { readFolderPlan, readDropPlan, gitBlobSha, type LoadedRepoFile } from "@/lib/repoFolder";
 import { GitHubMark } from "@/lib/icons";
-import { Button, Input, Spinner, Toggle } from "@/components/ui";
+import { Badge, Button, Input, Skeleton, Spinner, Textarea, Toggle } from "@/components/ui";
 import { SelectMenu } from "@/components/overlays";
 import { SecretFindings, type SecretFinding } from "@/components/github/RepoForm";
 
@@ -270,14 +270,16 @@ export function GithubUpload() {
     value: r.fullName,
     label: <span className="flex items-center gap-2"><GitHubMark size={12} className="shrink-0 text-muted" /><span className="truncate">{r.fullName}</span></span>,
   }));
+  // With nothing selected the trigger would be an empty box: show a placeholder row until a repo is picked.
+  const placeholderOption = { value: "", label: <span className="text-faint">Choose a repository…</span> };
 
   return (
     <div className="w-full space-y-5">
-      <button onClick={() => navigate(deepLinked ? `/github/${params.owner}/${params.repo}` : "/github")} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground">
+      <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(deepLinked ? `/github/${params.owner}/${params.repo}` : "/github")}>
         <ArrowLeft size={15} /> {deepLinked ? "Back to repository" : "All repositories"}
-      </button>
+      </Button>
 
-      <header className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
+      <header className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-4 py-4 sm:px-5">
         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><FolderInput size={22} /></span>
         <div className="min-w-0">
           <h1 className="text-xl font-semibold leading-tight">Upload a folder</h1>
@@ -294,23 +296,23 @@ export function GithubUpload() {
               <p className="mt-0.5 text-[13px] text-muted">{result.count} file{result.count === 1 ? "" : "s"} committed to <span className="font-mono">{result.branch}</span> on {target?.owner}/{target?.name}.</p>
             </div>
           </div>
-          <div className="flex flex-wrap justify-end gap-2 px-5 py-3.5">
-            <Button variant="ghost" onClick={reset}>Upload another folder</Button>
-            {target && <Button variant="outline" onClick={() => navigate(`/github/${target.owner}/${target.name}`)}>Open repository</Button>}
+          {/* phones: full-width buttons stacked with the primary action first; sm+: a right-aligned row */}
+          <div className="flex flex-col gap-2 px-5 py-3.5 sm:flex-row sm:flex-wrap sm:justify-end">
             {result.pullRequestUrl ? (
-              <>
-                <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="outline"><ExternalLink size={15} /> Commit</Button></a>
-                <a href={result.pullRequestUrl} target="_blank" rel="noreferrer noopener"><Button variant="primary"><GitPullRequest size={15} /> View pull request</Button></a>
-              </>
+              <a href={result.pullRequestUrl} target="_blank" rel="noreferrer noopener" className="order-first sm:order-last"><Button variant="primary" className="w-full sm:w-auto"><GitPullRequest size={15} /> View pull request</Button></a>
             ) : (
-              <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="primary"><ExternalLink size={15} /> View commit</Button></a>
+              <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener" className="order-first sm:order-last"><Button variant="primary" className="w-full sm:w-auto"><ExternalLink size={15} /> View commit</Button></a>
             )}
+            {result.pullRequestUrl && <a href={result.htmlUrl} target="_blank" rel="noreferrer noopener"><Button variant="outline" className="w-full sm:w-auto"><ExternalLink size={15} /> Commit</Button></a>}
+            {target && <Button variant="outline" className="w-full sm:w-auto" onClick={() => navigate(`/github/${target.owner}/${target.name}`)}>Open repository</Button>}
+            <Button variant="ghost" className="w-full sm:w-auto sm:order-first" onClick={reset}>Upload another folder</Button>
           </div>
         </div>
       ) : (
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
+        // minmax(0,1fr): the file rows' mono paths must not size the column past the phone (they truncate instead)
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start">
           {/* left: source + review */}
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             <input ref={inputRef} type="file" multiple hidden onChange={(e) => onPickList(e.target.files)} />
 
             {files.length === 0 ? (
@@ -329,56 +331,61 @@ export function GithubUpload() {
                 <span className="grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary">{reading ? <Spinner size={26} /> : <FolderUp size={28} />}</span>
                 <span className="text-[15px] font-semibold">{reading ? "Reading folder…" : dragOver ? "Drop to read the folder" : "Drop a folder here, or choose one"}</span>
                 <span className="max-w-sm text-[12.5px] text-muted">Prepared in your browser — build files, dependencies and secrets are filtered out automatically. Up to {PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB.</span>
+                <span className="text-[12.5px] text-muted [@media(pointer:fine)]:hidden">Folder upload works best in a desktop browser.</span>
               </button>
             ) : (
               <>
-                <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-3">
-                    <FileCode2 size={17} className="shrink-0 text-primary" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[14px] font-semibold">{folderName || "Folder"}</div>
-                      <div className="text-[12px] text-muted">
-                        {included.length} of {files.length} file{files.length === 1 ? "" : "s"} · {formatBytes(includedBytes)}
-                        {diffCounts && <span className="ml-1 text-faint">· {diffCounts.added} new · {diffCounts.overwrite} overwrite{diffCounts.unchanged ? ` · ${diffCounts.unchanged} unchanged` : ""}</span>}
+                <section className="min-w-0 overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
+                  {/* phones: folder + counts take the first row, All / None / Change sit right-aligned on the next */}
+                  <div className="flex flex-wrap items-center gap-x-1 gap-y-2 border-b border-border px-4 py-3">
+                    <div className="flex min-w-0 basis-full items-center gap-2 sm:basis-auto sm:flex-1">
+                      <FileCode2 size={17} className="shrink-0 text-primary" />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-[14px] font-semibold">{folderName || "Folder"}</div>
+                        <div className="text-pretty text-[12px] text-muted">
+                          {included.length} of {files.length} file{files.length === 1 ? "" : "s"} · {formatBytes(includedBytes)}
+                          {diffCounts && <span className="ml-1 text-faint">· {diffCounts.added} new · {diffCounts.overwrite} overwrite{diffCounts.unchanged ? ` · ${diffCounts.unchanged} unchanged` : ""}</span>}
+                        </div>
                       </div>
                     </div>
-                    <button onClick={() => setAll(true)} className="text-[12px] font-medium text-muted hover:text-foreground">All</button>
-                    <span className="text-faint">·</span>
-                    <button onClick={() => setAll(false)} className="text-[12px] font-medium text-muted hover:text-foreground">None</button>
-                    <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()} disabled={phase !== "idle"}><RefreshCw size={14} /> Change</Button>
+                    <div className="ml-auto flex items-center gap-1">
+                      <Button variant="ghost" size="sm" onClick={() => setAll(true)}>All</Button>
+                      <Button variant="ghost" size="sm" onClick={() => setAll(false)}>None</Button>
+                      <Button variant="ghost" size="sm" onClick={() => inputRef.current?.click()} disabled={phase !== "idle"}><RefreshCw size={14} /> Change</Button>
+                    </div>
                   </div>
                   <div className="max-h-72 overflow-y-auto">
                     {files.map((f) => {
                       const on = !excluded.has(f.path);
                       const label = on ? labelOf(f) : undefined;
                       return (
-                        <label key={f.path} className={cn("flex cursor-pointer items-center gap-2 border-b border-border px-4 py-1.5 font-mono text-[12px] last:border-0 hover:bg-surface-2", !on && "opacity-45")}>
-                          <input type="checkbox" checked={on} onChange={() => toggleFile(f.path)} className="h-3.5 w-3.5 shrink-0 accent-[var(--primary)]" />
+                        <label key={f.path} className={cn("pressable flex min-w-0 cursor-pointer items-center gap-2 border-b border-border px-4 py-1.5 font-mono text-[12px] last:border-0 hover:bg-surface-2 [@media(pointer:coarse)]:min-h-10 [@media(pointer:coarse)]:py-2.5", !on && "opacity-45")}>
+                          <input type="checkbox" checked={on} onChange={() => toggleFile(f.path)} className="h-4 w-4 shrink-0 accent-[var(--primary)]" />
                           <span className={cn("min-w-0 flex-1 truncate", !on && "line-through")}>{destPath(f.path)}</span>
                           <DiffBadge label={label} />
-                          {f.encoding === "base64" && <span className="shrink-0 rounded bg-surface-3 px-1.5 text-[10px] text-muted">binary</span>}
+                          {f.encoding === "base64" && <Badge className="font-sans">binary</Badge>}
                           <span className="shrink-0 text-faint">{formatBytes(f.size)}</span>
                         </label>
                       );
                     })}
                   </div>
-                  {diffState === "unavailable" && <div className="border-t border-border px-4 py-2 text-[11.5px] text-faint">Change preview unavailable — files will still push (add/overwrite only; nothing is deleted).</div>}
+                  {diffState === "unavailable" && <div className="border-t border-border px-4 py-2 text-[12px] text-faint">Change preview unavailable — files will still push (add/overwrite only; nothing is deleted).</div>}
                   {(tooLarge.length > 0 || otherSkipped.length > 0) && (
                     <div className="space-y-2 border-t border-border px-4 py-2.5">
                       {tooLarge.length > 0 && (
                         <div className="rounded-[var(--radius-control)] border border-warn/40 bg-warn-soft px-3 py-2">
                           <div className="flex items-center gap-2 text-[12.5px] font-medium text-warn"><FileWarning size={14} /> {tooLarge.length} file{tooLarge.length === 1 ? "" : "s"} too large to push</div>
-                          <div className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto font-mono text-[11.5px] text-muted">
+                          <div className="mt-1.5 max-h-28 space-y-0.5 overflow-y-auto font-mono text-[12px] text-muted">
                             {tooLarge.map((s) => <div key={s.path} className="truncate">{s.path} — {s.reason}</div>)}
                           </div>
-                          <p className="mt-1 text-[11px] text-faint">Push these with git directly, or via git-LFS for very large files.</p>
+                          <p className="mt-1 text-[12px] leading-snug text-faint">Push these with git directly, or via git-LFS for very large files.</p>
                         </div>
                       )}
                       {otherSkipped.length > 0 && (
                         <div>
-                          <button onClick={() => setShowSkipped((v) => !v)} className="text-[12px] font-medium text-muted hover:text-foreground">
+                          <Button variant="ghost" size="sm" className="-ml-3" onClick={() => setShowSkipped((v) => !v)}>
                             {showSkipped ? "Hide" : "Show"} {otherSkipped.length} auto-skipped file{otherSkipped.length === 1 ? "" : "s"}
-                          </button>
+                          </Button>
                           {showSkipped && (
                             <div className="mt-2 max-h-40 overflow-y-auto rounded-[var(--radius-control)] border border-border">
                               {otherSkipped.map((s) => (
@@ -401,7 +408,7 @@ export function GithubUpload() {
           </div>
 
           {/* right: target + options */}
-          <aside className="space-y-4 lg:sticky lg:top-4">
+          <aside className="min-w-0 space-y-4 lg:sticky lg:top-4">
             <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
               <div className="border-b border-border px-4 py-3 text-[12px] font-semibold uppercase tracking-wide text-faint">Destination</div>
               <div className="space-y-4 px-4 py-4">
@@ -417,19 +424,20 @@ export function GithubUpload() {
                         <span className="min-w-0 flex-1 truncate">{target.owner}/{target.name}</span>
                       </div>
                     ) : (
-                      <div className="grid h-9 place-items-center"><Spinner size={16} className="text-muted" /></div>
+                      // field-shaped so the resolved repo row lands in the same 36px without a jump
+                      <Skeleton className="h-9 w-full rounded-[var(--radius-control)]" />
                     )
                   ) : (
                     <SelectMenu
                       value={target ? `${target.owner}/${target.name}` : ""}
                       onChange={(full) => { const r = pushable.find((x) => x.fullName === full); if (r) selectRepo(r); }}
-                      options={repoOptions.length ? repoOptions : [{ value: "", label: "No push-capable repositories" }]}
+                      options={repoOptions.length ? (target ? repoOptions : [placeholderOption, ...repoOptions]) : [{ value: "", label: "No push-capable repositories" }]}
                       width={320}
                       ariaLabel="Target repository"
                       className="w-full"
                     />
                   )}
-                  {target && !target.canPush && <p className="mt-1 text-[11.5px] text-danger">You don't have push access to this repository.</p>}
+                  {target && !target.canPush && <p className="mt-1 text-[12.5px] text-danger">You don't have push access to this repository.</p>}
                 </div>
 
                 {files.length > 0 && target && (
@@ -454,9 +462,9 @@ export function GithubUpload() {
                         <>
                           <div className="flex items-center overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface focus-within:border-primary focus-within:ring-focus">
                             <span className="grid h-9 w-9 shrink-0 place-items-center border-r border-border bg-surface-2 text-faint"><GitBranch size={14} /></span>
-                            <input value={newBranch} onChange={(e) => setNewBranch(e.target.value.replace(/\s+/g, "-"))} placeholder="feature/upload" className="min-w-0 flex-1 bg-transparent px-2.5 py-2 font-mono text-[13px] outline-none" />
+                            <input value={newBranch} onChange={(e) => setNewBranch(e.target.value.replace(/\s+/g, "-"))} placeholder="feature/upload" className="h-9 min-w-0 flex-1 bg-transparent px-2.5 font-mono text-base outline-none placeholder:text-faint sm:text-[13px]" />
                           </div>
-                          <p className="mt-1 text-[11px] text-faint">Branches off <span className="font-mono">{target.defaultBranch}</span>.</p>
+                          <p className="mt-1 text-[12px] leading-snug text-faint">Branches off <span className="font-mono">{target.defaultBranch}</span>.</p>
                         </>
                       )}
                     </div>
@@ -469,10 +477,10 @@ export function GithubUpload() {
                       </label>
                       {openPr && (
                         <div className="mt-2.5 space-y-2">
-                          {prBaseSameAsHead && <p className="text-[11.5px] text-danger">Pick a branch other than {target.defaultBranch} to open a PR against it.</p>}
+                          {prBaseSameAsHead && <p className="text-[12.5px] text-danger">Pick a branch other than {target.defaultBranch} to open a PR against it.</p>}
                           <Input value={prTitle} onChange={(e) => setPrTitle(e.target.value)} placeholder={`PR title (defaults to the commit message)`} />
-                          <textarea value={prBody} onChange={(e) => setPrBody(e.target.value)} rows={2} placeholder="Description (optional)" className="w-full resize-none rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[13px] outline-none focus:border-primary focus:ring-focus placeholder:text-faint" />
-                          <p className="text-[11px] text-faint">Opens <span className="font-mono">{effectiveBranch || "…"} → {target.defaultBranch}</span>.</p>
+                          <Textarea value={prBody} onChange={(e) => setPrBody(e.target.value)} rows={2} placeholder="Description (optional)" className="min-h-0 resize-none" />
+                          <p className="text-[12px] leading-snug text-faint">Opens <span className="font-mono">{effectiveBranch || "…"} → {target.defaultBranch}</span>.</p>
                         </div>
                       )}
                     </div>
@@ -481,7 +489,7 @@ export function GithubUpload() {
                     <div>
                       <label htmlFor="up-subpath" className="mb-1.5 block text-[12px] font-medium text-muted">Destination folder <span className="text-faint">(optional)</span></label>
                       <Input id="up-subpath" value={subpath} onChange={(e) => setSubpath(e.target.value)} placeholder="e.g. src/vendor" className={cn("font-mono", subpathInvalid && "border-danger")} />
-                      <p className={cn("mt-1 text-[11px]", subpathInvalid ? "text-danger" : "text-faint")}>
+                      <p className={cn("mt-1 leading-snug", subpathInvalid ? "text-[12.5px] text-danger" : "text-[12px] text-faint")}>
                         {subpathInvalid ? "Invalid path (no leading slash or “..”)." : cleanSubpath ? `Writes to ${target.name}/${cleanSubpath}/…` : "Writes to the repository root."}
                       </p>
                     </div>
@@ -504,17 +512,11 @@ export function GithubUpload() {
 
                 {error && <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
 
-                {phase === "pushing" ? (
-                  <div className="flex items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5 text-[12.5px]">
-                    <Spinner size={15} className="text-primary" /> Pushing to {target?.name}…
-                  </div>
-                ) : (
-                  <Button variant="primary" className="w-full" onClick={push} disabled={!canPush}>
-                    <Upload size={15} /> Push {included.length > 0 ? `${included.length} file${included.length === 1 ? "" : "s"}` : "files"}
-                  </Button>
-                )}
-                {files.length === 0 && <p className="text-center text-[11.5px] text-faint">Choose a folder to get started.</p>}
-                <p className="flex items-center justify-center gap-1 text-center text-[11px] text-faint"><AlertTriangle size={11} /> Up to {PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB per push · merges, never deletes.</p>
+                <Button variant="primary" className="w-full" onClick={push} disabled={!canPush} loading={phase === "pushing"}>
+                  <Upload size={15} /> {phase === "pushing" ? `Pushing to ${target?.name}…` : `Push ${included.length > 0 ? `${included.length} file${included.length === 1 ? "" : "s"}` : "files"}`}
+                </Button>
+                {files.length === 0 && <p className="text-center text-[12px] text-faint">Choose a folder to get started.</p>}
+                <p className="flex items-center justify-center gap-1 text-center text-[12px] text-faint"><AlertTriangle size={11} /> Up to {PUBLISH_LIMITS.maxTotalBytes / (1024 * 1024)} MB per push · merges, never deletes.</p>
               </div>
             </section>
           </aside>
@@ -530,7 +532,7 @@ export function GithubUpload() {
 
 function SegBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button onClick={onClick} className={cn("flex-1 rounded-[6px] px-2 py-1 font-medium transition-colors", active ? "bg-surface-2 text-foreground" : "text-muted hover:text-foreground")}>
+    <button onClick={onClick} className={cn("pressable flex-1 rounded-[6px] px-2 py-1 font-medium transition-colors [@media(pointer:coarse)]:min-h-9", active ? "bg-surface-2 text-foreground" : "text-muted hover:text-foreground")}>
       {children}
     </button>
   );
@@ -538,11 +540,11 @@ function SegBtn({ active, onClick, children }: { active: boolean; onClick: () =>
 
 function DiffBadge({ label }: { label?: DiffLabel }) {
   if (!label) return null;
-  const map: Record<DiffLabel, [string, string]> = {
-    added: ["New", "bg-ok-soft text-ok"],
-    overwrite: ["Overwrite", "bg-warn-soft text-warn"],
-    unchanged: ["Unchanged", "bg-surface-3 text-faint"],
+  const map: Record<DiffLabel, [string, "ok" | "warn" | "neutral"]> = {
+    added: ["New", "ok"],
+    overwrite: ["Overwrite", "warn"],
+    unchanged: ["Unchanged", "neutral"],
   };
-  const [t, cls] = map[label];
-  return <span className={cn("shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-sans font-medium", cls)}>{t}</span>;
+  const [t, tone] = map[label];
+  return <Badge tone={tone} className="shrink-0 font-sans">{t}</Badge>;
 }

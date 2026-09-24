@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, FolderOpen, FolderPlus } from "lucide-react";
+import type { Collection } from "@kosh/shared";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
+import { cn } from "@/lib/cn";
 import { EmptyState, PageHeader } from "@/components/common";
 import { ItemGrid } from "@/components/ItemGrid";
-import { Button } from "@/components/ui";
+import { Button, Input } from "@/components/ui";
 import { Modal } from "@/components/overlays";
+import { useReveal } from "@/components/cards/ItemCard";
 
 export function Collections() {
   const items = useData((s) => s.items);
@@ -25,6 +28,8 @@ export function Collections() {
     }
   }, [params, setParams]);
 
+  const liveItems = live(items);
+
   return (
     <div>
       <PageHeader
@@ -38,29 +43,47 @@ export function Collections() {
         }
       />
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {collections.map((c) => {
-          const count = live(items).filter((i) => i.collections.includes(c.id)).length;
-          return (
-            <Link
-              key={c.id}
-              to={`/collections/${c.slug}`}
-              className="group flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface p-4 card-hover hover:border-border-strong"
-            >
-              <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl" style={{ backgroundColor: `color-mix(in oklab, ${c.color} 16%, transparent)`, color: c.color }}>
-                <FolderOpen size={22} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[15px] font-semibold">{c.name}</div>
-                <div className="text-[12.5px] text-muted">{count} item{count !== 1 ? "s" : ""}</div>
-              </div>
-            </Link>
-          );
-        })}
-      </div>
+      {collections.length === 0 ? (
+        <EmptyState
+          icon={FolderOpen}
+          title="No collections yet"
+          description="Group links, skills and prompts into a collection — add items from any card's menu."
+          action={
+            <Button variant="primary" onClick={() => setNewOpen(true)}>
+              <FolderPlus size={16} /> New collection
+            </Button>
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {collections.map((c, i) => (
+            <CollectionCard key={c.id} c={c} index={i} count={liveItems.filter((it) => it.collections.includes(c.id)).length} />
+          ))}
+        </div>
+      )}
 
       <NewCollectionModal open={newOpen} onClose={() => setNewOpen(false)} />
     </div>
+  );
+}
+
+function CollectionCard({ c, index, count }: { c: Collection; index: number; count: number }) {
+  const reveal = useReveal(index);
+  return (
+    <Link
+      to={`/collections/${c.slug}`}
+      onAnimationEnd={reveal.onAnimationEnd}
+      style={reveal.style}
+      className={cn("group flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface p-4 card-hover hover:border-border-strong", reveal.className)}
+    >
+      <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl" style={{ backgroundColor: `color-mix(in oklab, ${c.color} 16%, transparent)`, color: c.color }}>
+        <FolderOpen size={22} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[15px] font-semibold">{c.name}</div>
+        <div className="text-[12.5px] text-muted">{count} item{count !== 1 ? "s" : ""}</div>
+      </div>
+    </Link>
   );
 }
 
@@ -80,7 +103,11 @@ export function CollectionDetail() {
 
   return (
     <div>
-      <Link to="/collections" className="mb-3 inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground">
+      {/* The only way back on a phone: a real 40px target, not a text link. */}
+      <Link
+        to="/collections"
+        className="-ml-2 mb-2 inline-flex min-h-10 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-[13px] text-muted hover:bg-surface-2 hover:text-foreground pressable"
+      >
         <ArrowLeft size={15} /> All collections
       </Link>
       <PageHeader
@@ -91,7 +118,7 @@ export function CollectionDetail() {
       {list.length === 0 ? (
         <EmptyState icon={FolderOpen} title="Empty collection" description="Add items to this collection from any card's menu or the detail panel." />
       ) : (
-        <ItemGrid items={list} />
+        <ItemGrid key={collection.id} items={list} />
       )}
     </div>
   );
@@ -102,6 +129,7 @@ function NewCollectionModal({ open, onClose }: { open: boolean; onClose: () => v
   const toast = useUi((s) => s.toast);
   const [name, setName] = useState("");
 
+  // Optimistic: the store adds the collection at once and syncs behind it, so no loading state.
   const save = () => {
     if (!name.trim()) return;
     createCollection(name.trim());
@@ -111,21 +139,22 @@ function NewCollectionModal({ open, onClose }: { open: boolean; onClose: () => v
   };
 
   return (
-    <Modal open={open} onClose={onClose} className="max-w-sm">
-      <div className="border-b border-border px-5 py-4">
-        <h2 className="text-base font-semibold">New collection</h2>
+    <Modal open={open} onClose={onClose} className="max-w-sm" labelledBy="new-collection-title">
+      <div className="shrink-0 border-b border-border px-5 py-4">
+        <h2 id="new-collection-title" className="text-base font-semibold">New collection</h2>
       </div>
-      <div className="p-5">
-        <input
+      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        <Input
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && save()}
           autoFocus
           placeholder="Collection name"
-          className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus"
+          aria-label="Collection name"
+          className="sm:text-[14px]"
         />
       </div>
-      <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3.5">
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>

@@ -1,3 +1,4 @@
+import { useState, type AnimationEvent } from "react";
 import { motion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -24,6 +25,7 @@ import {
 } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
+import { revealClass, revealStyle } from "@/lib/motion";
 import { GitHubMark, itemIcon, TOOL_COLOR_VAR } from "@/lib/icons";
 import { useSetStage } from "@/lib/useSetStage";
 import { useData } from "@/data/store";
@@ -31,6 +33,24 @@ import { useUi } from "@/data/ui";
 import { Badge, Spinner } from "../ui";
 import { Menu, MenuItem, MenuSeparator } from "../overlays";
 import { StageChip, StageDot } from "../common";
+
+/**
+ * CSS stagger for the first cards of a freshly keyed list (see lib/motion revealClass). The class is
+ * dropped once the keyframe finishes: `.reveal-in` fills forwards, and a filled `transform: none` would
+ * otherwise pin the card and swallow `.card-hover`'s lift/press for good. Re-renders (pins, SSE
+ * patches) never re-add it — only a remount (new list key) reveals again.
+ */
+export function useReveal(index: number) {
+  const [done, setDone] = useState(false);
+  const className = done ? "" : revealClass(index);
+  return {
+    className,
+    style: className ? revealStyle(index) : undefined,
+    onAnimationEnd: (e: AnimationEvent<HTMLElement>) => {
+      if (e.animationName === "kosh-reveal-in") setDone(true);
+    },
+  };
+}
 
 function edgeColor(item: Item, skill?: Skill): string {
   if (item.status === "dead") return "var(--danger)";
@@ -48,6 +68,11 @@ function fileExt(path?: string): string {
   return m ? m[1]!.toLowerCase() : "file";
 }
 
+// Always-visible on touch, hover-revealed with a mouse; 40px hit boxes under a thumb (the negative
+// margins keep the header row's height, so the card doesn't grow on phones).
+const ACTION_BTN =
+  "grid h-8 w-8 place-items-center rounded-md text-faint hover:bg-surface-2 hover:text-foreground pressable [@media(pointer:coarse)]:-my-1 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10";
+
 export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
   const skills = useData((s) => s.skills);
   const skill = item.skillId ? skills.find((s) => s.id === item.skillId) : undefined;
@@ -61,6 +86,7 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
   const openItem = useUi((s) => s.openItem);
   const toast = useUi((s) => s.toast);
   const navigate = useNavigate();
+  const reveal = useReveal(index);
 
   const Icon = itemIcon(item);
   const edge = edgeColor(item, skill);
@@ -86,15 +112,16 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
   };
 
   return (
+    // motion.article (no layout/enter props) so ItemGrid's AnimatePresence can still track it; the
+    // enter is the CSS reveal above — no framer stagger, no FLIP on re-sorts.
     <motion.article
-      layout
-      initial={index < 24 ? { opacity: 0, y: 8 } : false}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.28, delay: Math.min(index * 0.02, 0.2), ease: [0.2, 0.8, 0.2, 1] }}
       onClick={() => openItem(item.id)}
+      onAnimationEnd={reveal.onAnimationEnd}
+      style={reveal.style}
       className={cn(
         "group relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface pl-4 pr-3.5 py-3.5 card-hover hover:border-border-strong",
         enriching && "animate-pulse-gold",
+        reveal.className,
       )}
     >
       <span className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: edge }} aria-hidden />
@@ -117,29 +144,19 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
           <MetaLine item={item} />
         </div>
 
-        <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              togglePin(item.id);
-            }}
-            className="rounded-md p-1.5 text-faint hover:bg-surface-2 hover:text-foreground"
-            aria-label="Pin"
-          >
+        {/* Menu items render in a portal but bubble through the React tree: stop them here so picking
+            "Delete"/"Pin" never also opens the card. */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="-mr-1 flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 [@media(pointer:coarse)]:opacity-100"
+        >
+          <button type="button" onClick={() => togglePin(item.id)} className={ACTION_BTN} aria-label={item.pinned ? "Unpin" : "Pin"} aria-pressed={item.pinned}>
             <Pin size={14} className={cn(item.pinned && "rotate-45 fill-gold text-gold")} />
           </button>
           <Menu
             align="end"
             trigger={({ toggle, ref }) => (
-              <button
-                ref={ref}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  toggle();
-                }}
-                className="rounded-md p-1.5 text-faint hover:bg-surface-2 hover:text-foreground"
-                aria-label="More actions"
-              >
+              <button type="button" ref={ref} onClick={toggle} className={ACTION_BTN} aria-label="More actions">
                 <MoreHorizontal size={16} />
               </button>
             )}
@@ -200,7 +217,7 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
 
           {item.kind === "prompt" && item.prompt && (
             <div className="mt-2 rounded-lg border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] leading-snug text-muted">
-              <span className="line-clamp-2">{item.prompt.body}</span>
+              <span className="line-clamp-2 break-words [overflow-wrap:anywhere]">{item.prompt.body}</span>
             </div>
           )}
 
@@ -227,11 +244,11 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
           {item.tags.length > 0 && item.kind !== "skill" && (
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
               {item.tags.slice(0, 3).map((t) => (
-                <span key={t} className="rounded-md bg-surface-2 px-1.5 py-0.5 text-[11px] text-muted">
+                <span key={t} className="max-w-full truncate rounded-md bg-surface-2 px-1.5 py-0.5 text-[11.5px] text-muted">
                   #{t}
                 </span>
               ))}
-              {item.tags.length > 3 && <span className="text-[11px] text-faint">+{item.tags.length - 3}</span>}
+              {item.tags.length > 3 && <span className="text-[11.5px] text-faint">+{item.tags.length - 3}</span>}
             </div>
           )}
         </>
@@ -239,13 +256,13 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
 
       {/* footer */}
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-2.5">
-        <div onClick={(e) => e.stopPropagation()}>
+        <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
           <StageChip stage={item.stage} onChange={(s) => setStage(item.id, s)} size="sm" />
         </div>
-        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-faint">
-          {item.foundVia && <span className="truncate">via {item.foundVia.label}</span>}
+        <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted">
+          {item.foundVia && <span className="min-w-0 line-clamp-1 break-all">via {item.foundVia.label}</span>}
           {item.foundVia && <span aria-hidden>·</span>}
-          <span className="shrink-0">{ago(item.updatedAt)}</span>
+          <span className="shrink-0 text-faint">{ago(item.updatedAt)}</span>
         </div>
       </div>
     </motion.article>

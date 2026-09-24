@@ -47,31 +47,33 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
       <div className="hidden flex-1 sm:block" />
 
       <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* The primary capture action stays one tap away on phones as an icon button; the theme toggle
+            steps aside there (it lives in Settings → Appearance) so the search pill keeps its width. */}
+        <Button variant="primary" size="icon" className="sm:hidden" onClick={() => navigate("/add")} aria-label="Add">
+          <Plus size={18} />
+        </Button>
         <Button variant="primary" size="sm" className="hidden sm:inline-flex" onClick={() => navigate("/add")}>
           <Plus size={16} />
           Add
         </Button>
 
-        <ThemeToggle compact />
+        <div className="hidden sm:block">
+          <ThemeToggle compact />
+        </div>
 
         {/* notifications */}
         <Menu
           align="end"
           width={300}
           trigger={({ toggle, ref }) => (
-            <button
-              ref={ref}
-              onClick={toggle}
-              className="relative grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted transition-colors hover:bg-surface-2 hover:text-foreground"
-              aria-label="Notifications"
-            >
+            <Button ref={ref} variant="outline" size="icon" onClick={toggle} className="text-muted" aria-label="Notifications">
               <Bell size={17} />
               {changeCount > 0 && (
-                <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                <span className="absolute -right-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-primary px-1 text-[11px] font-bold text-primary-foreground">
                   {changeCount}
                 </span>
               )}
-            </button>
+            </Button>
           )}
         >
           <MenuLabel>Watched changes</MenuLabel>
@@ -91,7 +93,12 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           align="end"
           width={220}
           trigger={({ toggle, ref }) => (
-            <button ref={ref} onClick={toggle} className="rounded-full ring-offset-2 ring-offset-background transition-shadow hover:ring-2 hover:ring-border-strong" aria-label="Account">
+            <button
+              ref={ref}
+              onClick={toggle}
+              className="grid place-items-center rounded-full ring-offset-2 ring-offset-background transition-shadow hover:ring-2 hover:ring-border-strong pressable [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+              aria-label="Account"
+            >
               <Avatar name={user.name} src={user.avatarUrl} size={36} />
             </button>
           )}
