@@ -307,9 +307,10 @@ Benchmarked against modern tools; effort tags S/M/L. All feasible with the per-u
 
 ## 6. Suggested execution order
 
-**Implementation status:** Phases A, B, C, D, E — ✅ **shipped**. Phase F — ✅ **collaboration slice shipped**
-(link-share power controls, background-change notifications, inline comments); AI/offline items remain deferred
-(each shipped item: implement → verify typecheck/test/build → code-review → fix findings → commit).
+**Implementation status:** Phases A, B, C, D, E, F — ✅ **shipped**, plus the **AI slice** (summaries + auto-tag,
+natural-language search, cleanup wizard). Still deferred: a true embedding/vector semantic index, offline read
+cache, cross-account transfer, file-request links (each shipped item: implement → verify typecheck/test/build →
+code-review → fix findings → commit).
 
 **Phase E:** tags/labels (Drive `appProperties`), smart collections (named saved searches), keyboard
 palette-on-selection + `?` cheat sheet + vim `j/k`, and the **IO slice** — OAuth-token downloads (fixes
@@ -341,6 +342,17 @@ filtering currently scopes to the loaded view).
   background-change notifications — a hidden-tab unread counter (from SSE push *and* the slower hidden-tab poll),
   a `(N)` tab-title badge cleared on refocus, and an opt-in, permission-gated desktop notification that focuses
   the tab on click. **F3** inline Drive comments — read/compose/reply plus resolve/reopen (Drive's reply
-  `action`) in the details inspector, rendering plain-text `content` only (never `htmlContent`). **Still
-  deferred (AI/infra-gated):** semantic search + summaries + auto-tagging + cleanup wizard (need an AI backend),
-  offline read cache, cross-account/space transfer, file-request/upload links.
+  `action`) in the details inspector, rendering plain-text `content` only (never `htmlContent`).
+- **AI slice — ✅ shipped** (built on the Sprint-6 Anthropic client + per-user daily spend cap; gated on an `ai`
+  config flag). Foundation: exported budget-capped primitives in `claude.ts` (`completeText`, `extractJson`,
+  `ensureAiBudget`/`reserveBudget`/`refundBudget`, serialized per user), server `fetchFileTextServer` (export
+  native docs / read text binaries, byte-capped) + shared tested `driveTextSource`. **Summaries + auto-tag:**
+  `/files/:id/summarize` → an inspector "AI" section (summary via `<Markdown>`, append-to-notes, dashed
+  suggested-tag chips). **Natural-language search:** `/ai-search` → the LLM emits the app's own Drive operator
+  DSL (parsed/tested by `parseDriveSearch`), run through the normal search path with the executed query
+  decoupled from the displayed text + an interpretation chip; timezone-correct via a client-supplied date.
+  **Cleanup wizard:** shared tested `computeCleanupBuckets` (duplicates/stale/large, each file claimed once,
+  ids capped) + `/ai-cleanup` that ranks/explains buckets by KEY only (never inventing file ids); a modal
+  applies a bucket through the shared `bulkOp` trash path and degrades gracefully without AI. **Still
+  deferred:** a true embedding/vector semantic index (no vector store in the stack), offline read cache,
+  cross-account/space transfer, file-request links.

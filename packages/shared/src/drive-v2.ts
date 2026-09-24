@@ -288,7 +288,9 @@ export function computeCleanupBuckets(files: CleanupFile[], opts: CleanupOptions
   const byHash = new Map<string, CleanupFile[]>();
   for (const f of files) {
     if (!f.md5Checksum) continue;
-    (byHash.get(f.md5Checksum) ?? byHash.set(f.md5Checksum, []).get(f.md5Checksum)!).push(f);
+    let arr = byHash.get(f.md5Checksum);
+    if (!arr) byHash.set(f.md5Checksum, (arr = []));
+    arr.push(f);
   }
   const dups: CleanupFile[] = [];
   for (const group of byHash.values()) {

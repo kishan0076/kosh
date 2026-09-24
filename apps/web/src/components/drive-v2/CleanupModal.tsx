@@ -21,6 +21,7 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [buckets, setBuckets] = useState<CleanupBucket[]>([]);
   const [recs, setRecs] = useState<DriveCleanupRecommendation[]>([]);
+  const [sampled, setSampled] = useState(false);
   const [applied, setApplied] = useState<Set<string>>(new Set());
   const [applyingKey, setApplyingKey] = useState<string | null>(null);
 
@@ -29,10 +30,19 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
     setLoading(true);
     (async () => {
       try {
-        const { files } = await driveV2Api.scan(accountId, { orderBy: "quotaBytesUsed desc", cap: 10, driveId: spaceId ?? undefined });
+        // Two scans, merged: largest-first surfaces big files, least-recently-viewed surfaces stale ones —
+        // a single size-ordered scan would bias the "stale" bucket toward large files (mirrors InsightsPanel).
+        const driveId = spaceId ?? undefined;
+        const [bySize, byViewed] = await Promise.all([
+          driveV2Api.scan(accountId, { orderBy: "quotaBytesUsed desc", cap: 10, driveId }),
+          driveV2Api.scan(accountId, { orderBy: "viewedByMeTime", cap: 2, driveId }),
+        ]);
         if (!live) return;
-        const found = computeCleanupBuckets(files);
+        const merged = new Map<string, (typeof bySize.files)[number]>();
+        for (const f of [...bySize.files, ...byViewed.files]) merged.set(f.id, f);
+        const found = computeCleanupBuckets([...merged.values()]);
         setBuckets(found);
+        setSampled(bySize.truncated || byViewed.truncated);
         setError(null);
         // AI prioritization is a best-effort enhancement — the buckets stand on their own without it.
         if (aiEnabled && found.length) {
@@ -74,14 +84,15 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
     const ids = [...bucket.fileIds];
     const total = ids.length;
     const label = `Trashing ${bucket.label.toLowerCase()}`;
-    let done = 0;
-    useDriveV2.setState({ bulkOp: { label, total, done } });
+    let processed = 0;
+    let ok = 0; // count only files that actually moved, so the toast can't lie on failure
+    useDriveV2.setState({ bulkOp: { label, total, done: 0 } });
     const worker = async () => {
       while (ids.length) {
         const id = ids.shift()!;
-        try { await driveV2Api.setTrash(accountId, id, true); } catch { /* keep going; a failure just isn't counted */ }
-        done++;
-        useDriveV2.setState({ bulkOp: { label, total, done } });
+        try { await driveV2Api.setTrash(accountId, id, true); ok++; } catch { /* keep going; failures aren't counted as done */ }
+        processed++;
+        useDriveV2.setState({ bulkOp: { label, total, done: processed } });
       }
     };
     try {
@@ -90,10 +101,14 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
       useDriveV2.setState({ bulkOp: null });
       setApplyingKey(null);
     }
-    setApplied((s) => new Set(s).add(bucket.key));
-    toast({ message: `Moved ${done} file${done === 1 ? "" : "s"} to trash`, tone: "ok" });
-    void useDriveV2.getState().loadQuota();
-    void useDriveV2.getState().load(true); // refresh the list behind the modal so the freed files disappear
+    if (ok > 0) {
+      setApplied((s) => new Set(s).add(bucket.key)); // only lock the row once something actually moved (else allow retry)
+      toast({ message: `Moved ${ok} file${ok === 1 ? "" : "s"} to trash`, tone: ok === total ? "ok" : "warn" });
+      void useDriveV2.getState().loadQuota();
+      void useDriveV2.getState().load(true); // refresh the list behind the modal so the freed files disappear
+    } else {
+      toast({ message: "Couldn't move those files to trash — try again.", tone: "danger" });
+    }
   }
 
   return (
@@ -129,6 +144,11 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
           </div>
         ) : (
           <div className="space-y-3">
+            {sampled && (
+              <p className="rounded-[var(--radius-control)] bg-warn-soft px-3 py-2 text-[11.5px] text-warn">
+                Your Drive is large, so this analyzed a sample of your files — clear these, then run it again for more.
+              </p>
+            )}
             {ordered.map(({ bucket, rec }) => {
               const Icon = BUCKET_ICON[bucket.key];
               const isApplied = applied.has(bucket.key);
@@ -145,7 +165,7 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
                       </div>
                       <p className="mt-0.5 text-[12.5px] text-muted">
                         {rec?.rationale ? `${rec.rationale} ` : ""}
-                        {bucket.count} file{bucket.count === 1 ? "" : "s"} · {formatBytes(bucket.bytes)}{bucket.capped ? " (showing the first 500)" : ""}
+                        {bucket.count} file{bucket.count === 1 ? "" : "s"} · {formatBytes(bucket.bytes)}{bucket.capped ? ` — clearing ${bucket.fileIds.length} at a time` : ""}
                       </p>
                       <p className="mt-1 truncate text-[11.5px] text-faint">{bucket.sampleNames.join(" · ")}</p>
                     </div>
@@ -159,7 +179,7 @@ export function CleanupModal({ onClose }: { onClose: () => void }) {
                           disabled={!!applyingKey}
                           onClick={() => void apply(bucket)}
                         >
-                          {isApplying ? <Spinner size={13} /> : <Trash2 size={13} />} Trash {bucket.count}
+                          {isApplying ? <Spinner size={13} /> : <Trash2 size={13} />} Trash {bucket.fileIds.length}
                         </Button>
                       )}
                     </div>
