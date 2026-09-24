@@ -38,6 +38,7 @@ export type Dialog =
   | { kind: "rename-bulk"; ids: string[] }
   | { kind: "revisions"; node: DriveNode }
   | { kind: "empty-trash" }
+  | { kind: "cleanup" }
   | null;
 
 export interface UploadTask {

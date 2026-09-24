@@ -53,6 +53,7 @@ import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
 import { ActivityPanel, ACTION_META } from "@/components/drive-v2/ActivityPanel";
 import { RevisionsModal } from "@/components/drive-v2/RevisionsModal";
+import { CleanupModal } from "@/components/drive-v2/CleanupModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
@@ -483,6 +484,7 @@ function Shell() {
       {dialog?.kind === "rename-bulk" && <BulkRenameModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "revisions" && <RevisionsModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "empty-trash" && <EmptyTrashModal onClose={() => store.getState().closeDialog()} />}
+      {dialog?.kind === "cleanup" && <CleanupModal onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} list={visible} onClose={() => store.getState().setPreview(null)} />}
     </div>
   );

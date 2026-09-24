@@ -16,6 +16,7 @@ import {
   Trash2,
   Upload,
   Users,
+  Wand2,
   X,
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
@@ -46,7 +47,7 @@ function StorageRing({ pct, size = 44, children }: { pct: number; size?: number;
 }
 
 interface NavDef {
-  v: DriveView | "insights" | "activity";
+  v: DriveView | "insights" | "activity" | "cleanup";
   label: string;
   icon: typeof HardDrive;
   gold?: boolean;
@@ -61,6 +62,7 @@ const BROWSE: NavDef[] = [
 const MANAGE: NavDef[] = [
   { v: "insights", label: "Storage", icon: Sparkles },
   { v: "activity", label: "Activity", icon: Activity },
+  { v: "cleanup", label: "AI Cleanup", icon: Wand2 }, // opens a modal; shown only when AI is configured
 ];
 
 export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNavigate }: { onNewFolder: () => void; onUpload: () => void; variant?: "sidebar" | "drawer"; onNavigate?: () => void }) {
@@ -77,6 +79,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
   const sync = useDriveV2((s) => s.sync);
   const collections = useDriveV2((s) => s.collections);
   const searchQuery = useDriveV2((s) => s.searchQuery);
+  const aiEnabled = useDriveV2((s) => s.aiEnabled);
 
   const [collapsedState, setCollapsed] = useState(() => { try { return localStorage.getItem(RAIL_KEY) === "1"; } catch { return false; } });
   const toggleCollapsed = () => setCollapsed((c) => { const n = !c; try { localStorage.setItem(RAIL_KEY, n ? "1" : "0"); } catch { /* ignore */ } return n; });
@@ -94,9 +97,11 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
     const s = useDriveV2.getState();
     if (v === "insights") s.setInsights(true);
     else if (v === "activity") s.setActivity(true);
+    else if (v === "cleanup") s.openDialog({ kind: "cleanup" }); // a modal launcher, not a persistent view
     else s.setView(v);
     onNavigate?.(); // close the mobile drawer after a nav tap
   };
+  const manage = MANAGE.filter((d) => d.v !== "cleanup" || aiEnabled);
 
   const Item = ({ def }: { def: NavDef }) => {
     const active = activeKey === def.v;
@@ -188,7 +193,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
         {BROWSE.map((d) => <Item key={d.v} def={d} />)}
         <div className="my-2 h-px bg-border" />
         {!collapsed && <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-faint">Manage</div>}
-        {MANAGE.map((d) => <Item key={d.v} def={d} />)}
+        {manage.map((d) => <Item key={d.v} def={d} />)}
 
         {/* Smart collections — named saved searches, run through the search API on click. */}
         {!collapsed && (collections.length > 0 || view === "search") && (

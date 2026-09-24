@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Clock, CornerDownLeft, CornerUpRight, Download, FolderPlus, HardDrive, Info, LayoutGrid, List as ListIcon, RotateCcw, Search, Share2, Sparkles, Star, Trash2, Upload } from "lucide-react";
+import { Clock, CornerDownLeft, CornerUpRight, Download, FolderPlus, HardDrive, Info, LayoutGrid, List as ListIcon, RotateCcw, Search, Share2, Sparkles, Star, Trash2, Upload, Wand2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/ui";
 import { driveV2Api, type DriveNode } from "@/data/driveV2Api";
@@ -21,6 +21,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
   const accountId = useDriveV2((s) => s.accountId);
   const selection = useDriveV2((s) => s.selection);
   const view = useDriveV2((s) => s.view);
+  const aiEnabled = useDriveV2((s) => s.aiEnabled);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<DriveNode[]>([]);
   const [searching, setSearching] = useState(false);
@@ -87,6 +88,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
       { id: "v-starred", label: "Go to Starred", icon: Star, run: () => s().setView("starred") },
       { id: "v-trash", label: "Go to Trash", icon: Trash2, run: () => s().setView("trash") },
       { id: "v-insights", label: "Open Insights", icon: Sparkles, keywords: "duplicates largest stale storage", run: () => s().setInsights(true) },
+      ...(aiEnabled ? [{ id: "ai-cleanup", label: "AI Cleanup", icon: Wand2, keywords: "clean duplicates stale large reclaim space trash", run: () => s().openDialog({ kind: "cleanup" }) } as Command] : []),
       { id: "a-newfolder", label: "New folder", icon: FolderPlus, keywords: "create", run: () => s().openDialog({ kind: "newFolder", parentId: s().path.at(-1)?.id ?? s().spaceId ?? "root" }) },
       { id: "a-upload", label: "Upload files", icon: Upload, run: onUpload },
       { id: "a-grid", label: "Switch to grid view", icon: LayoutGrid, run: () => s().setLayout("grid") },
@@ -94,7 +96,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
     );
     const q = query.trim().toLowerCase();
     return q ? list.filter((c) => (c.label + " " + (c.keywords ?? "")).toLowerCase().includes(q)) : list;
-  }, [query, onUpload, s, selection, view]);
+  }, [query, onUpload, s, selection, view, aiEnabled]);
 
   // Combined, index-addressable rows: commands first, then file results.
   const fileRows = results.map((node) => ({

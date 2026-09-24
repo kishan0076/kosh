@@ -3,7 +3,7 @@ import { z } from "zod";
 import { canGrantExpiry, driveHasTextSource, EXPIRY_ROLES } from "@kosh/shared";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
 import { aiConfigured, AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
-import { nlToDriveQuery, summarizeDriveFile } from "../integrations/driveAi.js";
+import { nlToDriveQuery, prioritizeCleanup, summarizeDriveFile } from "../integrations/driveAi.js";
 import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
 import { decryptSecret } from "../auth/crypto.js";
@@ -615,5 +615,31 @@ driveV2Router.post(
       .object({ query: z.string().trim().min(1).max(500), today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() })
       .parse(req.body);
     res.json(await runAi(() => nlToDriveQuery(uid, query, today)));
+  }),
+);
+
+/* ── AI: cleanup wizard — prioritize/explain the buckets the client detected (keys only, no file ids) ── */
+
+driveV2Router.post(
+  "/drive-v2/accounts/:id/ai-cleanup",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    if (!aiConfigured()) throw new AppError("AI_OFF", "AI isn't configured on the server.", 503);
+    const { buckets } = z
+      .object({
+        buckets: z
+          .array(
+            z.object({
+              key: z.string().min(1).max(40),
+              label: z.string().min(1).max(80),
+              count: z.number().int().nonnegative(),
+              bytes: z.number().nonnegative(),
+              sampleNames: z.array(z.string().max(300)).max(8),
+            }),
+          )
+          .max(10),
+      })
+      .parse(req.body);
+    res.json(await runAi(() => prioritizeCleanup(uid, buckets)));
   }),
 );

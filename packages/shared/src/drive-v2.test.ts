@@ -12,6 +12,7 @@ import {
   driveExportFormats,
   driveTextSource,
   driveHasTextSource,
+  computeCleanupBuckets,
   canGrantExpiry,
   EXPIRY_ROLES,
   TAG_PROP_KEY,
@@ -281,5 +282,72 @@ describe("driveTextSource", () => {
     expect(driveHasTextSource("text/csv")).toBe(true);
     expect(driveHasTextSource("application/pdf")).toBe(false);
     expect(driveHasTextSource(undefined)).toBe(false);
+  });
+});
+
+describe("computeCleanupBuckets", () => {
+  const NOW = Date.parse("2026-01-01T00:00:00Z");
+  const daysAgo = (n: number) => new Date(NOW - n * 86400000).toISOString();
+  const MB = 1024 * 1024;
+
+  it("flags duplicates (keeping the newest) with correct reclaimable bytes", () => {
+    const files = [
+      { id: "a", name: "a.jpg", size: 100, md5Checksum: "x", modifiedTime: daysAgo(1) },
+      { id: "b", name: "b.jpg", size: 100, md5Checksum: "x", modifiedTime: daysAgo(5) },
+      { id: "c", name: "c.jpg", size: 100, md5Checksum: "x", modifiedTime: daysAgo(9) },
+      { id: "solo", name: "solo.jpg", size: 100, md5Checksum: "y" },
+    ];
+    const dup = computeCleanupBuckets(files, { now: NOW }).find((b) => b.key === "duplicates")!;
+    expect(dup.count).toBe(2); // two of the three are redundant
+    expect(dup.bytes).toBe(200);
+    expect(dup.fileIds).toEqual(["b", "c"]); // "a" (newest) is kept
+  });
+
+  it("flags stale files but never never-opened ones", () => {
+    const files = [
+      { id: "old", name: "old.txt", size: 10, viewedByMeTime: daysAgo(400) },
+      { id: "recent", name: "recent.txt", size: 10, viewedByMeTime: daysAgo(30) },
+      { id: "never", name: "never.txt", size: 10 }, // no viewedByMeTime -> left alone
+    ];
+    const buckets = computeCleanupBuckets(files, { now: NOW, staleDays: 365 });
+    const stale = buckets.find((b) => b.key === "stale")!;
+    expect(stale.fileIds).toEqual(["old"]);
+  });
+
+  it("flags large files over the threshold, biggest first", () => {
+    const files = [
+      { id: "big", name: "big.zip", size: 300 * MB },
+      { id: "huge", name: "huge.mov", size: 900 * MB },
+      { id: "small", name: "small.txt", size: 5 },
+    ];
+    const large = computeCleanupBuckets(files, { now: NOW, largeBytes: 100 * MB }).find((b) => b.key === "large")!;
+    expect(large.fileIds).toEqual(["huge", "big"]);
+    expect(large.count).toBe(2);
+  });
+
+  it("claims each file once (duplicates win over stale/large)", () => {
+    const files = [
+      { id: "keep", name: "k", size: 200 * MB, md5Checksum: "d", modifiedTime: daysAgo(1) },
+      { id: "dupOldBig", name: "d", size: 200 * MB, md5Checksum: "d", modifiedTime: daysAgo(400), viewedByMeTime: daysAgo(400) },
+    ];
+    const buckets = computeCleanupBuckets(files, { now: NOW, largeBytes: 100 * MB, staleDays: 365 });
+    expect(buckets.find((b) => b.key === "duplicates")!.fileIds).toEqual(["dupOldBig"]);
+    // dupOldBig is claimed by duplicates, so it must NOT reappear under stale or large
+    expect(buckets.find((b) => b.key === "stale")).toBeUndefined();
+    const large = buckets.find((b) => b.key === "large");
+    expect(large?.fileIds ?? []).not.toContain("dupOldBig");
+    expect(large?.fileIds).toEqual(["keep"]); // the kept large file is still a legit large-file candidate
+  });
+
+  it("caps ids per bucket and marks capped", () => {
+    const files = Array.from({ length: 10 }, (_, i) => ({ id: `f${i}`, name: `f${i}`, size: 200 * MB }));
+    const large = computeCleanupBuckets(files, { now: NOW, largeBytes: 100 * MB, maxIdsPerBucket: 4 }).find((b) => b.key === "large")!;
+    expect(large.fileIds).toHaveLength(4);
+    expect(large.count).toBe(10);
+    expect(large.capped).toBe(true);
+  });
+
+  it("returns no buckets for a clean drive", () => {
+    expect(computeCleanupBuckets([{ id: "a", name: "a", size: 5, viewedByMeTime: daysAgo(1) }], { now: NOW })).toEqual([]);
   });
 });

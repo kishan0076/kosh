@@ -220,6 +220,104 @@ export function driveHasTextSource(mimeType?: string): boolean {
   return driveTextSource(mimeType) !== null;
 }
 
+/* ── cleanup wizard: deterministic reclaimable-space buckets ── */
+
+/** The subset of a scanned Drive file the cleanup analysis needs. */
+export interface CleanupFile {
+  id: string;
+  name: string;
+  mimeType?: string;
+  size?: number;
+  quotaBytesUsed?: number;
+  md5Checksum?: string;
+  viewedByMeTime?: string;
+  modifiedTime?: string;
+}
+
+export type CleanupBucketKey = "duplicates" | "stale" | "large";
+
+export interface CleanupBucket {
+  key: CleanupBucketKey;
+  label: string;
+  count: number; // files this bucket would move to trash
+  bytes: number; // reclaimable bytes
+  fileIds: string[]; // the files to trash (capped)
+  sampleNames: string[]; // a few example names, for the digest / UI
+  capped: boolean; // fileIds was truncated at the cap
+}
+
+export interface CleanupOptions {
+  now?: number; // ms epoch (defaults to Date.now())
+  staleDays?: number; // "not opened in N days" cutoff (default 365)
+  largeBytes?: number; // "large file" threshold (default 100 MB)
+  maxIdsPerBucket?: number; // safety cap on how many ids one apply can trash (default 500)
+}
+
+const cleanupSize = (f: CleanupFile) => f.size ?? f.quotaBytesUsed ?? 0;
+
+/**
+ * Deterministically bucket scanned files into reclaimable-space groups the cleanup wizard can act on:
+ *  - duplicates: same md5 (keep the newest, trash the rest),
+ *  - stale: not opened since the cutoff,
+ *  - large: over the size threshold.
+ * A file is claimed by at most one bucket (duplicates > stale > large) so counts/bytes never double-count.
+ * File ids never go to the model — the client keeps them and maps a recommendation back by bucket key.
+ */
+export function computeCleanupBuckets(files: CleanupFile[], opts: CleanupOptions = {}): CleanupBucket[] {
+  const now = opts.now ?? Date.now();
+  const staleMs = (opts.staleDays ?? 365) * 24 * 60 * 60 * 1000;
+  const largeBytes = opts.largeBytes ?? 100 * 1024 * 1024;
+  const cap = opts.maxIdsPerBucket ?? 500;
+  const claimed = new Set<string>();
+
+  const finalize = (key: CleanupBucketKey, label: string, picked: CleanupFile[]): CleanupBucket | null => {
+    if (!picked.length) return null;
+    const ids = picked.map((f) => f.id).slice(0, cap);
+    return {
+      key,
+      label,
+      count: picked.length,
+      bytes: picked.reduce((a, f) => a + cleanupSize(f), 0),
+      fileIds: ids,
+      sampleNames: picked.slice(0, 6).map((f) => f.name),
+      capped: picked.length > cap,
+    };
+  };
+
+  // Duplicates: group by checksum, keep the newest per group, trash the rest.
+  const byHash = new Map<string, CleanupFile[]>();
+  for (const f of files) {
+    if (!f.md5Checksum) continue;
+    (byHash.get(f.md5Checksum) ?? byHash.set(f.md5Checksum, []).get(f.md5Checksum)!).push(f);
+  }
+  const dups: CleanupFile[] = [];
+  for (const group of byHash.values()) {
+    if (group.length < 2) continue;
+    const sorted = [...group].sort((a, b) => (b.modifiedTime ?? "").localeCompare(a.modifiedTime ?? ""));
+    for (const f of sorted.slice(1)) { dups.push(f); claimed.add(f.id); } // keep sorted[0] (newest)
+  }
+
+  // Stale: explicitly not opened since the cutoff (never-opened files are left alone — too risky to auto-flag).
+  const stale = files.filter((f) => {
+    if (claimed.has(f.id) || !f.viewedByMeTime) return false;
+    const t = Date.parse(f.viewedByMeTime);
+    return Number.isFinite(t) && now - t > staleMs;
+  });
+  for (const f of stale) claimed.add(f.id);
+
+  // Large: over the threshold, biggest first (review candidates, not necessarily junk).
+  const large = files
+    .filter((f) => !claimed.has(f.id) && cleanupSize(f) > largeBytes)
+    .sort((a, b) => cleanupSize(b) - cleanupSize(a));
+  for (const f of large) claimed.add(f.id);
+
+  return [
+    finalize("duplicates", "Duplicate files", dups),
+    finalize("stale", "Not opened in a while", stale),
+    finalize("large", "Large files", large),
+  ].filter((b): b is CleanupBucket => b !== null);
+}
+
 /* ── sharing: access expiry eligibility ── */
 
 /** The only roles Drive will attach an access-expiry to (never owner/organizer/fileOrganizer). */
