@@ -28,6 +28,7 @@ import {
   RotateCcw,
   Search,
   Share2,
+  Sparkles,
   Star,
   Trash2,
   Type,
@@ -696,6 +697,9 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
   const prefs = useDriveV2((s) => s.prefs);
   const searchQuery = useDriveV2((s) => s.searchQuery);
   const collections = useDriveV2((s) => s.collections);
+  const aiEnabled = useDriveV2((s) => s.aiEnabled);
+  const aiSearchBusy = useDriveV2((s) => s.aiSearchBusy);
+  const aiSearchNote = useDriveV2((s) => s.aiSearchNote);
   const [q, setQ] = useState(searchQuery);
 
   useEffect(() => setQ(searchQuery), [searchQuery]);
@@ -722,7 +726,24 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
       <label className="mr-auto flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 focus-within:border-primary focus-within:ring-focus sm:max-w-sm">
         <Search size={15} className="shrink-0 text-muted" />
         <span className="hidden shrink-0 rounded-[var(--radius-chip)] bg-surface-3 px-1.5 py-0.5 text-[10.5px] capitalize text-muted sm:inline">{view === "myDrive" ? "My Drive" : view === "search" ? "results" : view}</span>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search Drive… (⌘K)" className="min-w-0 flex-1 bg-transparent text-[13px] outline-none" />
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={aiEnabled ? "Search Drive, or ask AI…" : "Search Drive… (⌘K)"}
+          className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
+        />
+        {aiEnabled && q.trim() && (
+          aiSearchBusy ? (
+            <Spinner size={14} className="shrink-0 text-primary" />
+          ) : (
+            <button
+              onClick={() => void useDriveV2.getState().aiSearch(q.trim())}
+              aria-label="Search with AI"
+              title="Interpret this with AI"
+              className="shrink-0 text-primary transition-opacity hover:opacity-70"
+            ><Sparkles size={15} /></button>
+          )
+        )}
         {q && <button onClick={() => setQ("")} aria-label="Clear search"><X size={14} className="text-faint hover:text-foreground" /></button>}
       </label>
 
@@ -776,6 +797,13 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
         <button onClick={() => useDriveV2.getState().setDensity("comfortable")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.density === "comfortable" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Comfortable density" aria-pressed={prefs.density === "comfortable"}><Rows2 size={15} /></button>
         <button onClick={() => useDriveV2.getState().setDensity("compact")} className={cn("grid h-8 w-8 place-items-center rounded-[6px]", prefs.density === "compact" ? "bg-surface-2 text-foreground" : "text-muted")} aria-label="Compact density" aria-pressed={prefs.density === "compact"}><Rows3 size={15} /></button>
       </div>
+
+      {aiSearchNote && view === "search" && (
+        <div className="flex basis-full items-center gap-1.5 text-[11.5px] text-muted" aria-live="polite">
+          <Sparkles size={12} className="shrink-0 text-primary" />
+          <span className="min-w-0 truncate">{aiSearchNote}</span>
+        </div>
+      )}
     </div>
   );
 }

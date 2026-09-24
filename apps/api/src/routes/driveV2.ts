@@ -3,7 +3,7 @@ import { z } from "zod";
 import { canGrantExpiry, driveHasTextSource, EXPIRY_ROLES } from "@kosh/shared";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
 import { aiConfigured, AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
-import { summarizeDriveFile } from "../integrations/driveAi.js";
+import { nlToDriveQuery, summarizeDriveFile } from "../integrations/driveAi.js";
 import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
 import { decryptSecret } from "../auth/crypto.js";
@@ -600,5 +600,18 @@ driveV2Router.post(
     const result = await runAi(() => summarizeDriveFile(uid, { name: node.name, mimeType: node.mimeType, text }));
     if (!result.summary && result.suggestedTags.length === 0) throw new AppError("AI_FAILED", "The AI couldn't generate a summary right now — please try again.", 502);
     res.json(result);
+  }),
+);
+
+/* ── AI: natural-language search (NL -> the Drive operator DSL parseDriveSearch understands) ── */
+
+driveV2Router.post(
+  "/drive-v2/accounts/:id/ai-search",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    if (!aiConfigured()) throw new AppError("AI_OFF", "AI isn't configured on the server.", 503);
+    // Pure LLM step (no Drive call) — the client runs the returned query through the normal search path.
+    const { query } = z.object({ query: z.string().trim().min(1).max(500) }).parse(req.body);
+    res.json(await runAi(() => nlToDriveQuery(uid, query)));
   }),
 );

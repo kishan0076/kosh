@@ -102,6 +102,8 @@ interface DriveV2State {
   prefs: ViewPrefs;
   searchQuery: string;
   searchStarredOnly: boolean;
+  aiSearchNote: string | null; // the AI's interpretation of the last natural-language search (chip under the toolbar)
+  aiSearchBusy: boolean; // an AI natural-language search request is in flight
   filterTag: string | null; // client-side tag filter over the loaded view (like filterKind); not persisted
   collections: SmartCollection[]; // named saved searches (persisted to localStorage)
 
@@ -166,6 +168,7 @@ interface DriveV2State {
   setFilter: (k: FilterKind | null) => void;
   setFilterTag: (tag: string | null) => void;
   runSearch: (text: string) => void;
+  aiSearch: (nl: string) => Promise<void>; // natural-language -> the Drive operator DSL, then runSearch
   setSearchStarred: (v: boolean) => void;
   clearSearch: () => void;
   saveCollection: (name: string, query: string) => void;
@@ -759,6 +762,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     prefs: loadPrefs(),
     searchQuery: "",
     searchStarredOnly: false,
+    aiSearchNote: null,
+    aiSearchBusy: false,
     filterTag: null,
     collections: loadCollections(),
     selection: new Set(),
@@ -1040,15 +1045,32 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     setFilterTag: (tag) => set({ filterTag: tag }),
 
     runSearch: (text) => {
-      set({ searchQuery: text, view: "search" });
+      // Clear any prior AI interpretation — aiSearch re-sets it after calling this.
+      set({ searchQuery: text, view: "search", aiSearchNote: null });
       void load(true);
+    },
+    aiSearch: async (nl) => {
+      const accountId = get().accountId;
+      const q = nl.trim();
+      if (!accountId || !q || get().aiSearchBusy) return;
+      set({ aiSearchBusy: true });
+      try {
+        const { query, explanation } = await driveV2Api.aiSearch(accountId, q);
+        // Run the interpreted operator query (falling back to the raw words), then surface how it was read.
+        get().runSearch(query || q);
+        set({ aiSearchNote: explanation || null });
+      } catch (err) {
+        pushToast({ message: err instanceof Error ? err.message : "AI search failed", tone: "danger" });
+      } finally {
+        set({ aiSearchBusy: false });
+      }
     },
     setSearchStarred: (v) => {
       set({ searchStarredOnly: v });
       if (get().view === "search") void load(true);
     },
     clearSearch: () => {
-      set({ searchQuery: "", view: "myDrive" });
+      set({ searchQuery: "", view: "myDrive", aiSearchNote: null });
       void load();
     },
 

@@ -310,6 +310,8 @@ export const driveV2Api = {
 
   summarizeFile: (accountId: string, fileId: string) =>
     v2req<DriveFileAi>(`${base(accountId)}/files/${fileId}/summarize`, { method: "POST" }),
+  aiSearch: (accountId: string, query: string) =>
+    v2req<{ query: string; explanation: string }>(`${base(accountId)}/ai-search`, { method: "POST", body: JSON.stringify({ query }) }),
 
   listComments: (accountId: string, fileId: string) => v2req<{ comments: DriveComment[] }>(`${base(accountId)}/files/${fileId}/comments`),
   addComment: (accountId: string, fileId: string, content: string) =>
