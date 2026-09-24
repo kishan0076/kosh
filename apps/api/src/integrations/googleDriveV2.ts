@@ -679,9 +679,9 @@ export async function createReply(accessToken: string, fileId: string, commentId
 
 /** Read a Drive file's plain text for the AI features (summaries / auto-tagging), server-side.
  *  Exports native Google docs to text, reads text-y binaries via alt=media, returns null for types
- *  with no cheap text form. The caller must gate binary reads on `size` first (this reads the whole
- *  body); the returned text is sliced to `maxChars` and the model truncates further. */
-export async function fetchFileTextServer(accessToken: string, fileId: string, mimeType: string, maxChars = 20000): Promise<string | null> {
+ *  with no cheap text form. The body is read from the stream and STOPPED at `maxBytes` (a large Sheet
+ *  export can be tens of MB — never buffer it whole), then decoded and sliced to `maxChars`. */
+export async function fetchFileTextServer(accessToken: string, fileId: string, mimeType: string, maxChars = 20000, maxBytes = 2_000_000): Promise<string | null> {
   const src = driveTextSource(mimeType);
   if (!src) return null;
   let url: URL;
@@ -694,8 +694,29 @@ export async function fetchFileTextServer(accessToken: string, fileId: string, m
     url.searchParams.set("supportsAllDrives", "true");
   }
   const res = await driveFetch(accessToken, url, {}, "Couldn't read the file for AI");
-  const text = await res.text();
-  return text.slice(0, maxChars);
+  const reader = res.body?.getReader();
+  if (!reader) return (await res.text()).slice(0, maxChars); // no stream (shouldn't happen) — fall back
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.length;
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {}); // stop the download once we have enough
+  }
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    buf.set(c, off);
+    off += c.length;
+  }
+  return new TextDecoder("utf-8", { fatal: false }).decode(buf).slice(0, maxChars);
 }
 
 /** Resolve the ancestor chain (breadcrumb) for a folder id, walking `parents` up to root. */

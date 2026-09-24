@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import { canGrantExpiry, driveHasTextSource, EXPIRY_ROLES } from "@kosh/shared";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
-import { AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
+import { aiConfigured, AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
 import { summarizeDriveFile } from "../integrations/driveAi.js";
 import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
@@ -584,18 +584,21 @@ driveV2Router.post(
   "/drive-v2/accounts/:id/files/:fileId/summarize",
   ah(async (req, res) => {
     const uid = requireWrite(req);
+    // Fail fast before any Drive call when AI is off, so a misconfigured server doesn't do wasted work.
+    if (!aiConfigured()) throw new AppError("AI_OFF", "AI isn't configured on the server.", 503);
     const token = await auth(req, uid);
     const id = fileId(String(req.params.fileId));
     const node = await driveCall(req, getFile(token, id));
     if (node.isFolder || !driveHasTextSource(node.mimeType)) {
       throw badRequest("NO_TEXT", "AI can only read documents, sheets, slides, and text files.");
     }
-    // Only binary text files carry a real size; gate those so we never stream a huge file server-side.
+    // Only binary text files carry a real size; gate those up front (native-doc exports are byte-capped
+    // inside fetchFileTextServer instead, since their size is unknown until fetched).
     if (node.size != null && node.size > AI_TEXT_CAP) throw badRequest("TOO_LARGE", "This file is too large to read for AI.");
     const text = await driveCall(req, fetchFileTextServer(token, id, node.mimeType));
     if (!text || !text.trim()) throw badRequest("EMPTY", "This file has no readable text to summarize.");
     const result = await runAi(() => summarizeDriveFile(uid, { name: node.name, mimeType: node.mimeType, text }));
-    if (!result.summary && result.suggestedTags.length === 0) throw new AppError("AI_FAILED", "The AI couldn't summarize this file — try another.", 502);
+    if (!result.summary && result.suggestedTags.length === 0) throw new AppError("AI_FAILED", "The AI couldn't generate a summary right now — please try again.", 502);
     res.json(result);
   }),
 );

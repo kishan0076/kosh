@@ -47,17 +47,42 @@ export function estimateCostUsd(inputChars: number, outTokens: number): number {
   return (inTokens / 1e6) * IN_PER_M + (outTokens / 1e6) * OUT_PER_M;
 }
 
-/** Atomically reserve estimated spend against the user's daily cap BEFORE the API call.
- *  Returns false (and charges nothing) when already at/over cap. Pre-charging — rather than
- *  recording after the call — closes the check-then-act race between concurrent AI jobs. */
+// Serialize a user's spend read-modify-writes in-process so concurrent AI jobs don't lose updates
+// (the store has no atomic conditional-increment). A promise chain per user is enough for a single
+// API instance; a multi-instance deployment would additionally need a DB-level conditional $inc.
+const budgetLocks = new Map<string, Promise<unknown>>();
+function withUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = budgetLocks.get(userId) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // run regardless of the previous holder's outcome
+  budgetLocks.set(userId, next.then(() => {}, () => {})); // never let a rejection poison the chain
+  return next;
+}
+
+/** Reserve estimated spend against the user's daily cap BEFORE the API call. Returns false (and charges
+ *  nothing) when already at/over cap. Pre-charging — rather than recording after — plus per-user
+ *  serialization closes the check-then-act race between concurrent AI jobs. */
 export async function reserveBudget(userId: string, estCost: number): Promise<boolean> {
-  const store = getStore();
-  const user = await store.users.findById(userId);
-  if (!user) return false;
-  const base = user.aiSpendDate === today() ? user.aiSpendToday : 0;
-  if (base >= (user.aiSpendCap ?? config.anthropic.dailyCapUsd)) return false;
-  await store.users.updateById(userId, { aiSpendToday: Math.round((base + estCost) * 10000) / 10000, aiSpendDate: today() });
-  return true;
+  return withUserLock(userId, async () => {
+    const store = getStore();
+    const user = await store.users.findById(userId);
+    if (!user) return false;
+    const base = user.aiSpendDate === today() ? user.aiSpendToday : 0;
+    if (base >= (user.aiSpendCap ?? config.anthropic.dailyCapUsd)) return false;
+    await store.users.updateById(userId, { aiSpendToday: Math.round((base + estCost) * 10000) / 10000, aiSpendDate: today() });
+    return true;
+  });
+}
+
+/** Return a reservation to the user's daily budget when the call produced nothing (e.g. model error).
+ *  Only refunds spend recorded TODAY, floored at 0, and serialized with reserveBudget. */
+export async function refundBudget(userId: string, estCost: number): Promise<void> {
+  await withUserLock(userId, async () => {
+    const store = getStore();
+    const user = await store.users.findById(userId);
+    if (!user || user.aiSpendDate !== today()) return;
+    const refunded = Math.max(0, Math.round((user.aiSpendToday - estCost) * 10000) / 10000);
+    await store.users.updateById(userId, { aiSpendToday: refunded });
+  });
 }
 
 /** Gate an interactive AI call: throw if unconfigured or over the daily cap, else reserve the estimate. */
@@ -87,16 +112,37 @@ export async function completeText(input: { system: string; prompt: string; maxT
   return null;
 }
 
-/** Extract the first `{…}` JSON object from model text (models often wrap it in prose). */
+/** Extract the FIRST balanced `{…}` JSON object from model text (string-aware, so trailing prose or
+ *  a stray `}` inside the reply doesn't break it). Returns null if none parses. */
 export function extractJson<T>(text: string | null): T | null {
   if (!text) return null;
-  const match = text.match(/\{[\s\S]*\}/);
-  if (!match) return null;
-  try {
-    return JSON.parse(match[0]) as T;
-  } catch {
-    return null;
+  const start = text.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+    } else if (ch === '"') {
+      inStr = true;
+    } else if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1)) as T;
+        } catch {
+          return null;
+        }
+      }
+    }
   }
+  return null;
 }
 
 /** Budget-aware summary for a user. Skips (returns null) when unconfigured or the daily cap is reached. */

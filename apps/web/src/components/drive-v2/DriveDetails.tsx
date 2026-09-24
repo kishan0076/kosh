@@ -365,9 +365,9 @@ function AiFileSection({ node, onSaveNote, onAddTags }: { node: DriveNode; onSav
     try {
       const res = await driveV2Api.summarizeFile(accountId, node.id);
       setSummary(res.summary);
-      // Only surface suggestions the file doesn't already carry.
+      // Only surface suggestions the file doesn't already carry, normalized + de-duplicated.
       const have = new Set(parseTags(node));
-      setSuggested(res.suggestedTags.map(normalizeTag).filter((t) => t && !have.has(t)));
+      setSuggested([...new Set(res.suggestedTags.map(normalizeTag))].filter((t) => t && !have.has(t)));
       setRan(true);
       setSavedNote(false);
     } catch (err) {
@@ -379,9 +379,12 @@ function AiFileSection({ node, onSaveNote, onAddTags }: { node: DriveNode; onSav
 
   function saveNote() {
     if (!summary) return;
-    onSaveNote(summary);
+    // Never clobber notes the user already wrote — append under a separator (and don't double-append).
+    const existing = node.description?.trim() ?? "";
+    if (existing.includes(summary)) { setSavedNote(true); return; }
+    onSaveNote(existing ? `${existing}\n\n${summary}` : summary);
     setSavedNote(true);
-    toast({ message: "Summary saved to notes", tone: "ok" });
+    toast({ message: existing ? "Summary added to notes" : "Summary saved to notes", tone: "ok" });
   }
 
   function addTag(tag: string) {
@@ -416,7 +419,7 @@ function AiFileSection({ node, onSaveNote, onAddTags }: { node: DriveNode; onSav
               <Markdown className="text-[12.5px]">{summary}</Markdown>
               <div className="mt-2 flex justify-end">
                 <Button variant="ghost" size="sm" onClick={saveNote} disabled={savedNote}>
-                  {savedNote ? <><Check size={13} /> Saved to notes</> : <><Pencil size={13} /> Save to notes</>}
+                  {savedNote ? <><Check size={13} /> Saved to notes</> : <><Pencil size={13} /> {node.description?.trim() ? "Add to notes" : "Save to notes"}</>}
                 </Button>
               </div>
             </div>
