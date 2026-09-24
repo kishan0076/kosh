@@ -187,6 +187,11 @@ export interface DrivePermission {
   expirationTime?: string; // RFC3339; when this grant auto-revokes (My-Drive user/group grants only)
 }
 
+export interface DriveFileAi {
+  summary: string;
+  suggestedTags: string[];
+}
+
 export interface DriveCommentAuthor {
   displayName?: string;
   photoLink?: string;
@@ -302,6 +307,9 @@ export const driveV2Api = {
     v2req<{ permission: DrivePermission }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "PATCH", body: JSON.stringify(patch) }),
   removePermission: (accountId: string, fileId: string, permId: string) =>
     v2req<{ ok: boolean }>(`${base(accountId)}/files/${fileId}/permissions/${permId}`, { method: "DELETE" }),
+
+  summarizeFile: (accountId: string, fileId: string) =>
+    v2req<DriveFileAi>(`${base(accountId)}/files/${fileId}/summarize`, { method: "POST" }),
 
   listComments: (accountId: string, fileId: string) => v2req<{ comments: DriveComment[] }>(`${base(accountId)}/files/${fileId}/comments`),
   addComment: (accountId: string, fileId: string, content: string) =>

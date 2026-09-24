@@ -1,7 +1,9 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
-import { canGrantExpiry, EXPIRY_ROLES } from "@kosh/shared";
+import { canGrantExpiry, driveHasTextSource, EXPIRY_ROLES } from "@kosh/shared";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
+import { AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
+import { summarizeDriveFile } from "../integrations/driveAi.js";
 import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
 import { decryptSecret } from "../auth/crypto.js";
@@ -17,6 +19,7 @@ import {
   deletePermission,
   deleteRevision,
   emptyTrash,
+  fetchFileTextServer,
   folderPath,
   getFile,
   getStartPageToken,
@@ -122,6 +125,19 @@ const subId = (v: string, what: string): string => {
   if (!SUB_ID.test(v)) throw badRequest("BAD_ID", `Invalid ${what} id.`);
   return v;
 };
+
+/** Run an AI call, mapping the budget-cap primitives' errors to clean HTTP statuses. */
+async function runAi<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e instanceof AiNotConfiguredError) throw new AppError("AI_OFF", e.message, 503);
+    if (e instanceof AiBudgetError) throw new AppError("AI_CAP", e.message, 429);
+    throw e;
+  }
+}
+
+const AI_TEXT_CAP = 2_000_000; // don't read a huge binary text file server-side (native-doc exports are bounded)
 
 /** Optional `?driveId=` — scopes a read to a Shared Drive (validated like a file id). */
 const driveIdOf = (req: Request): string | undefined => {
@@ -559,5 +575,27 @@ driveV2Router.post(
     res.status(201).json({
       reply: await driveCall(req, createReply(token, fileId(String(req.params.fileId)), subId(String(req.params.commentId), "comment"), input)),
     });
+  }),
+);
+
+/* ── AI: per-file summary + tag suggestions ── */
+
+driveV2Router.post(
+  "/drive-v2/accounts/:id/files/:fileId/summarize",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const token = await auth(req, uid);
+    const id = fileId(String(req.params.fileId));
+    const node = await driveCall(req, getFile(token, id));
+    if (node.isFolder || !driveHasTextSource(node.mimeType)) {
+      throw badRequest("NO_TEXT", "AI can only read documents, sheets, slides, and text files.");
+    }
+    // Only binary text files carry a real size; gate those so we never stream a huge file server-side.
+    if (node.size != null && node.size > AI_TEXT_CAP) throw badRequest("TOO_LARGE", "This file is too large to read for AI.");
+    const text = await driveCall(req, fetchFileTextServer(token, id, node.mimeType));
+    if (!text || !text.trim()) throw badRequest("EMPTY", "This file has no readable text to summarize.");
+    const result = await runAi(() => summarizeDriveFile(uid, { name: node.name, mimeType: node.mimeType, text }));
+    if (!result.summary && result.suggestedTags.length === 0) throw new AppError("AI_FAILED", "The AI couldn't summarize this file — try another.", 502);
+    res.json(result);
   }),
 );

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Pencil, Plus, RotateCcw, RotateCw, Share2, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
-import { formatBytes, normalizeTag, parseTags, isNativeGoogleDoc } from "@kosh/shared";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Pencil, Plus, RotateCcw, RotateCw, Share2, Sparkles, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
+import { formatBytes, normalizeTag, parseTags, isNativeGoogleDoc, driveHasTextSource } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { NodeIcon, tagChipClass } from "./items";
@@ -101,6 +101,13 @@ export function DriveDetails({
         <TagsEditor key={`tags-${node.id}`} node={node} onSetTags={(tags) => onSetTags(node, tags)} />
 
         <NotesEditor key={node.id} node={node} onSave={(desc) => onUpdateMeta(node, { description: desc })} />
+
+        <AiFileSection
+          key={`ai-${node.id}`}
+          node={node}
+          onSaveNote={(text) => onUpdateMeta(node, { description: text })}
+          onAddTags={(tags) => onSetTags(node, [...parseTags(node), ...tags])}
+        />
 
         {!node.isFolder && <CommentsSection key={`comments-${node.id}`} node={node} />}
 
@@ -330,6 +337,113 @@ function CommentsSection({ node }: { node: DriveNode }) {
             );
           })}
         </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * AI summary + tag suggestions for a single file. Self-contained (calls driveV2Api directly, like
+ * CommentsSection). Hidden unless the server has AI configured and the file has a readable text form.
+ * Renders the summary through <Markdown> (never raw HTML) and offers to save it to notes / apply tags.
+ */
+function AiFileSection({ node, onSaveNote, onAddTags }: { node: DriveNode; onSaveNote: (text: string) => void; onAddTags: (tags: string[]) => void }) {
+  const accountId = useDriveV2((s) => s.accountId)!;
+  const aiEnabled = useDriveV2((s) => s.aiEnabled);
+  const toast = useUi((s) => s.toast);
+  const [summary, setSummary] = useState("");
+  const [suggested, setSuggested] = useState<string[]>([]);
+  const [ran, setRan] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [savedNote, setSavedNote] = useState(false);
+
+  if (!aiEnabled || node.isFolder || !driveHasTextSource(node.mimeType)) return null;
+
+  async function run() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await driveV2Api.summarizeFile(accountId, node.id);
+      setSummary(res.summary);
+      // Only surface suggestions the file doesn't already carry.
+      const have = new Set(parseTags(node));
+      setSuggested(res.suggestedTags.map(normalizeTag).filter((t) => t && !have.has(t)));
+      setRan(true);
+      setSavedNote(false);
+    } catch (err) {
+      toast({ message: err instanceof Error ? err.message : "Couldn't generate a summary", tone: "danger" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function saveNote() {
+    if (!summary) return;
+    onSaveNote(summary);
+    setSavedNote(true);
+    toast({ message: "Summary saved to notes", tone: "ok" });
+  }
+
+  function addTag(tag: string) {
+    onAddTags([tag]);
+    setSuggested((s) => s.filter((t) => t !== tag));
+  }
+  function addAll() {
+    if (!suggested.length) return;
+    onAddTags(suggested);
+    setSuggested([]);
+  }
+
+  return (
+    <div className="border-t border-border px-4 py-3">
+      <div className="mb-1.5 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint"><Sparkles size={12} /> AI</span>
+        {ran && !busy && (
+          <button onClick={() => void run()} className="text-[11.5px] text-primary hover:underline">Regenerate</button>
+        )}
+      </div>
+
+      {!ran ? (
+        <Button variant="outline" size="sm" onClick={() => void run()} disabled={busy}>
+          {busy ? <Spinner size={14} /> : <Sparkles size={14} />} Summarize &amp; suggest tags
+        </Button>
+      ) : busy ? (
+        <div className="grid place-items-center py-4"><Spinner size={18} className="text-muted" /></div>
+      ) : (
+        <div className="space-y-2.5">
+          {summary ? (
+            <div className="rounded-[var(--radius-control)] border border-primary/20 bg-primary-soft/40 p-2.5">
+              <Markdown className="text-[12.5px]">{summary}</Markdown>
+              <div className="mt-2 flex justify-end">
+                <Button variant="ghost" size="sm" onClick={saveNote} disabled={savedNote}>
+                  {savedNote ? <><Check size={13} /> Saved to notes</> : <><Pencil size={13} /> Save to notes</>}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-[12.5px] text-faint">No summary was produced.</p>
+          )}
+
+          {suggested.length > 0 && (
+            <div>
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[11px] text-muted">Suggested tags</span>
+                <button onClick={addAll} className="text-[11.5px] text-primary hover:underline">Add all</button>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {suggested.map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => addTag(t)}
+                    className="inline-flex items-center gap-1 rounded-[var(--radius-chip)] border border-dashed border-border-strong px-1.5 py-0.5 text-[11px] font-medium text-muted transition-colors hover:border-primary hover:text-primary"
+                  >
+                    <Plus size={10} /> {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
