@@ -1233,16 +1233,24 @@ function UploadTray() {
   const [open, setOpen] = useState(true);
   const active = uploads.filter((u) => u.status === "uploading");
   const done = uploads.filter((u) => u.status === "done").length;
+  const failed = uploads.filter((u) => u.status === "error").length;
+  const total = uploads.length;
   // Aggregate progress across everything in the tray (uploaded bytes / total bytes).
   const totalBytes = uploads.reduce((a, u) => a + u.size, 0);
   const doneBytes = uploads.reduce((a, u) => a + (u.status === "done" ? u.size : u.uploaded), 0);
   const aggPct = totalBytes ? Math.round((doneBytes / totalBytes) * 100) : 0;
+  // Header: a real count, not a truncated "…". Show in-flight files, plus batch progress when there's
+  // more than one file, and any failures once finished.
+  const heading =
+    active.length > 0
+      ? `Uploading ${active.length} file${active.length === 1 ? "" : "s"}${total > active.length ? ` · ${done}/${total} done` : ""}`
+      : `${done} upload${done === 1 ? "" : "s"} complete${failed ? ` · ${failed} failed` : ""}`;
 
   return (
     <div className="fixed bottom-4 right-4 z-40 w-80 overflow-hidden rounded-[var(--radius-card)] border border-border bg-elevated shadow-[var(--shadow-pop)]">
       <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
         {active.length > 0 ? <Spinner size={14} className="text-primary" /> : <Check size={15} className="text-ok" />}
-        <span className="flex-1 text-left">{active.length > 0 ? `Uploading ${active.length}…` : `${done} upload${done === 1 ? "" : "s"} complete`}</span>
+        <span className="flex-1 truncate text-left" title={heading}>{heading}</span>
         <ChevronRight size={15} className={cn("text-muted transition-transform", open && "rotate-90")} />
       </button>
       {active.length > 0 && (
