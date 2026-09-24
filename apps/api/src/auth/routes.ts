@@ -8,6 +8,7 @@ import { getOrCreateUser, newEmailToken, publicUser } from "./users.js";
 import { requireUser, requireWrite } from "./middleware.js";
 import { encryptSecret } from "./crypto.js";
 import { isProviderId } from "../integrations/aiProviders.js";
+import { githubGrantPatch } from "../integrations/githubToken.js";
 import { SESSION_COOKIE, signSession } from "./jwt.js";
 import { generateApiKey } from "./apikey.js";
 
@@ -80,14 +81,22 @@ authRouter.get(
       headers: { Accept: "application/json", "Content-Type": "application/json" },
       body: JSON.stringify({ client_id: config.github.clientId, client_secret: config.github.clientSecret, code }),
     });
-    const tokenJson = (await tokenRes.json()) as { access_token?: string };
+    const tokenJson = (await tokenRes.json()) as { access_token?: string; scope?: string; refresh_token?: string; expires_in?: number; refresh_token_expires_in?: number };
     const accessToken = tokenJson.access_token;
     if (!accessToken) throw unauthorized("OAuth exchange failed.");
     const meRes = await fetch("https://api.github.com/user", { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/vnd.github+json" } });
     const gh = (await meRes.json()) as { id: number; login: string; name?: string; avatar_url?: string };
     if (!allowed(gh.login)) throw forbidden(`${gh.login} is not on the allowlist.`);
     const user = await getOrCreateUser({ githubId: String(gh.id), login: gh.login, name: gh.name, avatarUrl: gh.avatar_url });
-    await getStore().users.updateById(user.id, { githubToken: encryptSecret(accessToken) });
+    // Persist the refresh token + expiries too (when the app issues expiring tokens) so the login token
+    // auto-renews just like the "Connect GitHub" one.
+    await getStore().users.updateById(user.id, githubGrantPatch({
+      accessToken,
+      scopes: (tokenJson.scope ?? "").split(/[,\s]+/).map((s) => s.trim()).filter(Boolean),
+      refreshToken: tokenJson.refresh_token,
+      expiresIn: typeof tokenJson.expires_in === "number" ? tokenJson.expires_in : undefined,
+      refreshTokenExpiresIn: typeof tokenJson.refresh_token_expires_in === "number" ? tokenJson.refresh_token_expires_in : undefined,
+    }));
     const token = await signSession(user.id);
     res.cookie(SESSION_COOKIE, token, cookieOpts());
     res.redirect(config.appUrl);

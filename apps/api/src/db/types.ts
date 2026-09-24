@@ -12,6 +12,9 @@ export interface ServerUser extends Omit<User, "aiKeys"> {
   githubScopes?: string; // space-joined OAuth scopes the stored token carries
   githubTokenSource?: "oauth" | "pat"; // how the token was obtained (Connect button vs. pasted PAT)
   githubConnectedAt?: string;
+  githubRefreshToken?: string; // encrypted; present only for expiring-token apps (used to auto-renew)
+  githubTokenExpiresAt?: string; // ISO — when the access token expires (absent = non-expiring token)
+  githubRefreshTokenExpiresAt?: string; // ISO — when the refresh token itself lapses (~6 months)
   aiSpendDate?: string;
   aiProvider?: string; // selected AI provider id (default from config.ai.defaultProvider)
   aiModel?: string; // optional model override for the selected provider

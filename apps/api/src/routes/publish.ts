@@ -5,10 +5,11 @@ import { PUBLISH_LIMITS, isValidRepoName, normalizeUrl, scanSecrets } from "@kos
 import { getStore, type ServerItem } from "../db/index.js";
 import { AppError, ah, badRequest, unauthorized } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
-import { decryptSecret, encryptSecret } from "../auth/crypto.js";
+import { encryptSecret } from "../auth/crypto.js";
 import { toClientItem } from "../modules/ingest.js";
 import { publish as publishEvent } from "../events.js";
 import { GithubAuthError, RepoNameTakenError, createRepoWithFiles, deleteRepoWithToken, validateGithubToken } from "../integrations/github.js";
+import { tryGithubToken } from "../integrations/githubToken.js";
 
 const sha1 = (s: string) => createHash("sha1").update(s).digest("hex");
 
@@ -77,9 +78,8 @@ publishRouter.post(
       }
     }
 
-    // Resolve a write-capable token: explicit override → the user's stored token → server token.
-    const user = await getStore().users.findById(uid);
-    const token = body.token ?? decryptSecret(user?.githubToken) ?? undefined;
+    // Resolve a write-capable token: explicit override → the user's stored token (auto-refreshed).
+    const token = body.token ?? (await tryGithubToken(uid)) ?? undefined;
     if (!token) {
       throw badRequest("NO_GITHUB_TOKEN", "Connect GitHub (or paste a token) with repo access before publishing.");
     }

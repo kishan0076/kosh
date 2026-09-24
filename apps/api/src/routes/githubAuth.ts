@@ -2,7 +2,6 @@ import { Router, type Request } from "express";
 import { getStore } from "../db/index.js";
 import { ah, badRequest } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
-import { encryptSecret } from "../auth/crypto.js";
 import { signState, verifyState } from "../auth/jwt.js";
 import { config } from "../config.js";
 import {
@@ -13,6 +12,7 @@ import {
   githubConnectScopes,
   githubOAuthConfigured,
 } from "../integrations/github.js";
+import { githubGrantPatch } from "../integrations/githubToken.js";
 
 /**
  * "Connect GitHub" — a one-click OAuth flow that replaces pasting a Personal Access Token. The
@@ -78,11 +78,10 @@ githubAuthRouter.get(
       const identity = await getGithubIdentity(grant.accessToken);
 
       await getStore().users.updateById(uid, {
-        githubToken: encryptSecret(grant.accessToken),
+        ...githubGrantPatch(grant), // token + (when the app issues them) refresh token & expiries
         githubLogin: identity.login,
         githubName: identity.name ?? "",
         githubAvatarUrl: identity.avatarUrl ?? "",
-        githubScopes: grant.scopes.join(" "),
         githubTokenSource: "oauth",
         githubConnectedAt: nowIso(),
       });
@@ -107,6 +106,9 @@ githubAuthRouter.post(
       githubScopes: "",
       githubTokenSource: undefined,
       githubConnectedAt: "",
+      githubRefreshToken: undefined,
+      githubTokenExpiresAt: undefined,
+      githubRefreshTokenExpiresAt: undefined,
     });
     res.json({ connected: false });
   }),

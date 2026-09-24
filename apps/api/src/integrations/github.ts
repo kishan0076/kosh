@@ -36,9 +36,38 @@ export function githubAuthorizeUrl(state: string, redirectUri: string): string {
 export interface GithubTokenGrant {
   accessToken: string;
   scopes: string[];
+  /** Present only for apps with EXPIRING user tokens (GitHub Apps, or OAuth Apps with the opt-in). A
+   *  classic OAuth App with non-expiring tokens omits these — the access token then never expires. */
+  refreshToken?: string;
+  expiresIn?: number; // seconds until the access token expires
+  refreshTokenExpiresIn?: number; // seconds until the refresh token expires (~6 months)
 }
 
-/** Exchange an OAuth `code` for an access token. Throws GithubAuthError when GitHub declines. */
+type GithubTokenResponse = {
+  access_token?: string;
+  scope?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  refresh_token_expires_in?: number;
+  error?: string;
+  error_description?: string;
+};
+
+function toGrant(json: GithubTokenResponse, fallbackScope?: string): GithubTokenGrant {
+  if (!json.access_token) throw new GithubAuthError(json.error_description || json.error || "GitHub didn't return an access token.");
+  // A refresh response omits `scope`; carry the prior scopes forward so we never lose them on rotation.
+  const scopes = (json.scope ?? fallbackScope ?? "").split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+  return {
+    accessToken: json.access_token,
+    scopes,
+    refreshToken: json.refresh_token,
+    expiresIn: typeof json.expires_in === "number" ? json.expires_in : undefined,
+    refreshTokenExpiresIn: typeof json.refresh_token_expires_in === "number" ? json.refresh_token_expires_in : undefined,
+  };
+}
+
+/** Exchange an OAuth `code` for an access token (+ refresh token when the app issues expiring tokens).
+ *  Throws GithubAuthError when GitHub declines. */
 export async function exchangeGithubCode(code: string, redirectUri: string): Promise<GithubTokenGrant> {
   const res = await fetch("https://github.com/login/oauth/access_token", {
     method: "POST",
@@ -50,10 +79,23 @@ export async function exchangeGithubCode(code: string, redirectUri: string): Pro
       redirect_uri: redirectUri,
     }),
   });
-  const json = (await res.json().catch(() => ({}))) as { access_token?: string; scope?: string; error?: string; error_description?: string };
-  if (!json.access_token) throw new GithubAuthError(json.error_description || json.error || "GitHub didn't return an access token.");
-  const scopes = (json.scope ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  return { accessToken: json.access_token, scopes };
+  return toGrant((await res.json().catch(() => ({}))) as GithubTokenResponse);
+}
+
+/** Exchange a refresh token for a freshly-rotated grant (only for expiring-token apps). GitHub rotates
+ *  the refresh token too, so the caller must persist BOTH new values. Throws GithubAuthError on refusal. */
+export async function refreshGithubToken(refreshToken: string, priorScopes?: string): Promise<GithubTokenGrant> {
+  const res = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: config.github.clientId,
+      client_secret: config.github.clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  return toGrant((await res.json().catch(() => ({}))) as GithubTokenResponse, priorScopes);
 }
 
 export interface GithubIdentity {

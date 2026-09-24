@@ -96,6 +96,22 @@ token to the full set above.
 Tokens are stored **encrypted at rest** (`ENCRYPTION_KEY`) on the user record and are never
 returned to the browser.
 
+### Token expiry & auto-refresh
+
+Whether a connection expires is decided by your **OAuth app's settings**, not by Kosh:
+
+- **Classic OAuth App with "Expiring user authorization tokens" OFF** → the access token **never
+  expires** on its own (it only dies if revoked). No refresh token is issued or needed.
+- **GitHub App, or OAuth App with expiring tokens ON** → the access token lives ~8 hours and GitHub
+  also returns a **refresh token** (~6-month, auto-rotating life).
+
+Kosh handles **both** automatically. On connect (and on login) it stores the refresh token and expiry
+(encrypted) when GitHub provides them; before each GitHub call it checks the stored expiry and, if the
+access token has lapsed, silently exchanges the refresh token for a fresh one (rotating and re-storing
+both). So the connection stays alive on its own — you'll only be asked to **Reconnect** if the token was
+revoked or the refresh token itself has lapsed (~6 months unused). If you want connections that simply
+never expire, disable "Expiring user authorization tokens" on the OAuth App.
+
 ## 4. Personal Access Token fallback
 
 If you don't want to run an OAuth App, users can paste a token instead
