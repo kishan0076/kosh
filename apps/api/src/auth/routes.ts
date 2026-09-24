@@ -204,7 +204,9 @@ authRouter.put(
     const uid = requireWrite(req);
     const provider = String(req.params.provider);
     if (!isProviderId(provider)) throw badRequest("BAD_PROVIDER", "Unknown AI provider.");
-    const { key } = z.object({ key: z.string().trim().min(1).max(400) }).parse(req.body);
+    // Reject control chars (CR/LF/NUL/DEL): the key becomes an `Authorization: Bearer …` header, and
+    // this stops header-injection at the edge (undici would also throw, but fail fast with a clear error).
+    const { key } = z.object({ key: z.string().trim().min(1).max(400).regex(/^[^\u0000-\u001F\u007F]+$/, "Key contains invalid characters.") }).parse(req.body);
     const store = getStore();
     const user = await store.users.findById(uid);
     if (!user) throw unauthorized();

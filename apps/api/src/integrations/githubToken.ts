@@ -39,11 +39,14 @@ export function githubGrantPatch(grant: GithubTokenGrant): Partial<ServerUser> {
   return patch;
 }
 
-/** True once an ISO expiry is within SKEW of now. No expiry recorded → treat as a non-expiring token. */
+/** True once an ISO expiry is within SKEW of now. No expiry recorded → non-expiring token (not expired).
+ *  A present-but-unparseable value fails CLOSED (treated as expired) so corruption forces a refresh/
+ *  reconnect rather than silently trusting a possibly-dead token. */
 function expired(iso: string | undefined): boolean {
   if (!iso) return false;
   const t = Date.parse(iso);
-  return Number.isFinite(t) && t - SKEW_MS <= Date.now();
+  if (!Number.isFinite(t)) return true; // corrupt expiry → fail closed
+  return t - SKEW_MS <= Date.now();
 }
 
 /** A currently-valid GitHub access token for the user, refreshed first if it has expired and a live

@@ -100,15 +100,21 @@ export async function resolveProvider(userId?: string): Promise<AiProviderCtx | 
   const userKey = user ? decryptSecret(user.aiKeys?.[def.id]) : undefined;
   const key = userKey || serverKey(def.id);
   if (def.needsKey && !key) return null;
+  const byok = !!userKey; // the user's own key → their spend, not the shared server budget
+  // A user's model override is honored ONLY when the call spends their OWN resource — their BYOK key,
+  // or a keyless local provider (Ollama). When falling back to the operator's shared SERVER key we force
+  // the provider's default model, so the registry's per-provider pricing stays accurate and the spend
+  // cap can't be bypassed by selecting a pricier model than the row is priced for.
+  const ownResource = byok || !def.needsKey;
   return {
     id: def.id,
     transport: def.transport,
     apiKey: key || "ollama",
     baseURL: baseUrlFor(def),
-    model: modelFor(def, user ?? null),
+    model: modelFor(def, ownResource ? (user ?? null) : null),
     inPerM: def.inPerM,
     outPerM: def.outPerM,
-    byok: !!userKey, // the user's own key → their spend, not the shared server budget
+    byok,
   };
 }
 
@@ -147,7 +153,8 @@ export async function completeWith(ctx: AiProviderCtx, input: { system: string; 
         if (content) return content;
       }
     } catch (err) {
-      logger.warn({ err, provider: ctx.id }, "ai completion failed");
+      // Log only the message, never the raw error object (avoids incidentally capturing request context).
+      logger.warn({ err: err instanceof Error ? err.message : String(err), provider: ctx.id }, "ai completion failed");
     }
   }
   return null;
