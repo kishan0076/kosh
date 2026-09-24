@@ -9,7 +9,7 @@ import { requireUser, requireWrite } from "./middleware.js";
 import { encryptSecret } from "./crypto.js";
 import { isProviderId } from "../integrations/aiProviders.js";
 import { githubGrantPatch } from "../integrations/githubToken.js";
-import { SESSION_COOKIE, signSession } from "./jwt.js";
+import { SESSION_COOKIE, signSession, signState, verifyState } from "./jwt.js";
 import { generateApiKey } from "./apikey.js";
 
 export const authRouter: Router = Router();
@@ -38,23 +38,29 @@ authRouter.post(
   "/auth/dev-login",
   ah(async (req, res) => {
     if (!config.devLogin) throw forbidden("Dev login is disabled.");
-    const { login, name } = z.object({ login: z.string().min(1).max(64), name: z.string().max(120).optional() }).parse(req.body);
+    const { login, name, client } = z
+      .object({ login: z.string().min(1).max(64), name: z.string().max(120).optional(), client: z.enum(["web", "mobile"]).optional() })
+      .parse(req.body);
     if (!allowed(login)) throw forbidden(`${login} is not on the allowlist.`);
     const user = await getOrCreateUser({ login, name });
     const token = await signSession(user.id);
     res.cookie(SESSION_COOKIE, token, cookieOpts());
-    res.json({ user: publicUser(user) });
+    // The native app can't rely on the cookie — hand it the session token to send as a Bearer header.
+    res.json(client === "mobile" ? { user: publicUser(user), token } : { user: publicUser(user) });
   }),
 );
 
 /** GitHub OAuth (only active when a client id/secret are configured). */
-authRouter.get("/auth/github", (_req, res) => {
+authRouter.get("/auth/github", (req, res) => {
   if (!config.github.clientId || !config.github.clientSecret) {
     res.status(501).json({ error: { code: "OAUTH_DISABLED", message: "GitHub OAuth is not configured. Use dev login." } });
     return;
   }
   const redirect = `${config.apiUrl}/api/auth/github/callback`;
-  const state = randomBytes(16).toString("hex");
+  // `?client=mobile` marks a login started from the native app (in the system browser); the callback then
+  // returns to the app via its deep link instead of the web URL. The suffix rides inside the CSRF state.
+  const client = req.query.client === "mobile" ? "mobile" : "web";
+  const state = `${randomBytes(16).toString("hex")}.${client}`;
   res.cookie(LOGIN_STATE_COOKIE, state, loginStateCookieOpts());
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", config.github.clientId);
@@ -99,6 +105,13 @@ authRouter.get(
     }));
     const token = await signSession(user.id);
     res.cookie(SESSION_COOKIE, token, cookieOpts());
+    if (state.endsWith(".mobile")) {
+      // Native app: never put the 30-day session in a URL. Hand back a 2-minute, single-use exchange
+      // code via the app's deep link; the app swaps it for the session token over POST.
+      const code = await signState(user.id, MOBILE_EXCHANGE_PURPOSE, undefined, { client: "mobile", ttl: "2m" });
+      res.redirect(`${config.mobileScheme}://auth?code=${encodeURIComponent(code)}`);
+      return;
+    }
     res.redirect(config.appUrl);
   }),
 );
@@ -107,6 +120,32 @@ authRouter.post("/auth/logout", (_req, res) => {
   res.clearCookie(SESSION_COOKIE, { path: "/" });
   res.json({ ok: true });
 });
+
+/* ── Native (mobile) auth ───────────────────────────────────────
+ * The OAuth login runs in the system browser and lands back in the app via kosh://auth?code=…; the app
+ * exchanges that one-time code here for the Bearer session token it stores. Codes are stateless JWTs
+ * (2-minute TTL) plus an in-memory single-use ledger so a leaked/replayed URL can't mint a second session. */
+const MOBILE_EXCHANGE_PURPOSE = "mobile-exchange";
+const usedExchangeCodes = new Map<string, number>(); // code -> expiry (ms)
+function markExchangeUsed(code: string): boolean {
+  const now = Date.now();
+  for (const [k, exp] of usedExchangeCodes) if (exp < now) usedExchangeCodes.delete(k); // prune
+  if (usedExchangeCodes.has(code)) return false;
+  usedExchangeCodes.set(code, now + 3 * 60 * 1000);
+  return true;
+}
+
+authRouter.post(
+  "/auth/mobile/exchange",
+  ah(async (req, res) => {
+    const { code } = z.object({ code: z.string().min(10).max(2000) }).parse(req.body);
+    const verified = await verifyState(code, MOBILE_EXCHANGE_PURPOSE);
+    if (!verified || !markExchangeUsed(code)) throw unauthorized("This sign-in link has expired — try again.");
+    const user = await getStore().users.findById(verified.uid);
+    if (!user) throw unauthorized();
+    res.json({ token: await signSession(user.id), user: publicUser(user) });
+  }),
+);
 
 authRouter.get(
   "/me",

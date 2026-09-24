@@ -29,7 +29,8 @@ import { ago } from "@/lib/time";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { useDrive, type DriveItemStatus, type DriveQueueItem } from "@/data/drive";
-import { driveApi, type DriveAccount } from "@/data/driveApi";
+import { type DriveAccount } from "@/data/driveApi";
+import { startConnect } from "@/lib/connect";
 import { Button, Progress, Spinner } from "@/components/ui";
 import { Menu, MenuLabel, MenuSeparator, useMenuClose } from "@/components/overlays";
 
@@ -140,9 +141,7 @@ function ConnectGate() {
         <span className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary"><UploadCloud size={26} /></span>
         <h1 className="text-lg font-semibold">Connect your Google account</h1>
         <p className="mx-auto mt-1.5 max-w-sm text-[13px] text-muted">Securely sign in with Google to upload files and folders to your Drive. Kosh only stores an encrypted token — never your password.</p>
-        <a href={driveApi.connectUrl()} className="mt-5 inline-block">
-          <Button variant="primary"><GoogleGlyph /> Sign in with Google</Button>
-        </a>
+        <Button variant="primary" className="mt-5" onClick={() => { void startConnect("google", "drive"); }}><GoogleGlyph /> Sign in with Google</Button>
       </div>
     </div>
   );
@@ -233,9 +232,9 @@ function AccountPicker() {
         <AccountRow key={a.id} account={a} active={a.id === accountId} onSelect={() => void selectAccount(a.id)} onRemove={() => remove(a.id, a.email)} />
       ))}
       <MenuSeparator />
-      <a href={driveApi.connectUrl()} className="flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium text-primary transition-colors hover:bg-surface-2">
+      <button onClick={() => { void startConnect("google", "drive"); }} className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] font-medium text-primary transition-colors hover:bg-surface-2">
         <Plus size={15} /> Add another account
-      </a>
+      </button>
     </Menu>
   );
 }

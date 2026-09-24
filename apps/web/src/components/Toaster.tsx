@@ -21,7 +21,7 @@ export function Toaster() {
   const dismiss = useUi((s) => s.dismissToast);
 
   return (
-    <div className="pointer-events-none fixed bottom-4 left-1/2 z-[70] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 flex-col gap-2 sm:left-auto sm:right-4 sm:translate-x-0">
+    <div className="pointer-events-none fixed bottom-4 left-1/2 z-[70] mb-safe flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 flex-col gap-2 sm:left-auto sm:right-4 sm:translate-x-0">
       <AnimatePresence>
         {toasts.map((t) => {
           const Icon = TONE_ICON[t.tone ?? "default"];

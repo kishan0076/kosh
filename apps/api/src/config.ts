@@ -14,6 +14,19 @@ export const config = {
 
   appUrl: env.APP_URL ?? "http://localhost:5173",
   apiUrl: env.API_URL ?? `http://localhost:${env.PORT ?? 8787}`,
+  // Every browser origin allowed to call the API with credentials: the web app, plus the native mobile
+  // app's WebView origins (Capacitor serves the bundle from capacitor://localhost on iOS and
+  // https://localhost on Android). APP_ORIGINS adds more (comma-separated), e.g. a preview deployment.
+  appOrigins: Array.from(
+    new Set([
+      env.APP_URL ?? "http://localhost:5173",
+      "capacitor://localhost",
+      "https://localhost",
+      ...(env.APP_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    ]),
+  ),
+  // Custom URL scheme the mobile app registers; OAuth flows started from the app return here.
+  mobileScheme: env.MOBILE_SCHEME || "kosh",
 
   // storage: mongo when a URI is set, else the in-memory/JSON adapter (runs anywhere)
   mongoUri: env.MONGODB_URI || null,

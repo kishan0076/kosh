@@ -35,7 +35,7 @@ interface NavItem {
 }
 
 export function Sidebar({
-  collapsed,
+  collapsed: collapsedPref,
   onToggleCollapse,
   mobileOpen,
   onCloseMobile,
@@ -45,6 +45,9 @@ export function Sidebar({
   mobileOpen: boolean;
   onCloseMobile: () => void;
 }) {
+  // The desktop "collapsed" preference must never leak into the phone drawer: an icon-only 76px drawer
+  // with hover-tooltips and no expand control is unusable on touch. The drawer is always full width.
+  const collapsed = collapsedPref && !mobileOpen;
   const items = useData((s) => s.items);
   const collections = useData((s) => s.collections);
   const user = useData((s) => s.user);
@@ -77,7 +80,7 @@ export function Sidebar({
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-border bg-surface transition-[width,transform] duration-300 lg:static lg:z-auto lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-border bg-surface pt-safe pb-safe transition-[width,transform] duration-300 lg:static lg:z-auto lg:translate-x-0",
           collapsed ? "w-[76px]" : "w-[248px]",
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}

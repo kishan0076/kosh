@@ -43,7 +43,7 @@ kosh/
 ├─ infra/
 │  └─ email-worker/        Cloudflare email worker → POST /api/email/inbound
 ├─ docs/              The build plan + the design system reference
-├─ .github/workflows/ CI: typecheck · test · build on every PR and on main
+├─ .github/workflows/ CI: typecheck · test · build on every PR and on main · Android APK build
 └─ turbo.json · package.json (npm workspaces) · tsconfig.base.json · CLAUDE.md
 ```
 
@@ -98,6 +98,19 @@ secrets) lives at the repo root; copy [`.env.example`](.env.example) if you need
 In front-end-only mode everything is seeded on first run — use the avatar menu → **Reset demo data** to
 restore the sample vault.
 
+### Mobile app (Android / iOS)
+
+The same web bundle ships as a native app via **Capacitor** — same API, same data, one codebase. The
+Android APK builds in GitHub Actions (**Actions → Android APK**, set the `MOBILE_API_URL` variable first);
+iOS builds from the committed Xcode project. Sign-in and Connect flows run in the system browser and return
+by deep link; sessions use a Bearer token instead of the cookie. See [`docs/MOBILE.md`](docs/MOBILE.md) for
+the responsiveness audit, the architecture, and step-by-step build/release instructions.
+
+```bash
+npm run build:mobile -w @kosh/web   # vite build + cap sync
+npm run cap:android -w @kosh/web    # open in Android Studio     (or: npm run cap:ios)
+```
+
 ---
 
 ## What you can do in the app
@@ -113,7 +126,7 @@ restore the sample vault.
 | **Prompts** | Prompt cards with `{{variable}}` parsing and a fill-and-copy dialog that bumps usage. |
 | **Inbox** | Keyboard-first triage (`U`/`T`/`D`/`X`/`S`, `←`/`→`) to burn down new captures to inbox-zero. |
 | **Collections · Trash · Settings** | Group items; soft-delete with undo + restore/purge; profile, appearance, storage/budget meters, **every way-in** (CLI · MCP · Telegram bot · bookmarklet · Android PWA share · iOS Shortcut · email-in), API keys, tag maintenance (rename · delete · **merge**), export. |
-| **Ways in** | Save from anywhere into the same vault: the web app, the ⌘K palette, a **PWA share target** (`/share`), a bookmarklet, the **Telegram bot**, **email-in** (forward a newsletter → its links land in the Inbox), the **CLI**, and **MCP**. |
+| **Ways in** | Save from anywhere into the same vault: the web app, the **native Android / iOS app**, the ⌘K palette, a **PWA share target** (`/share`), a bookmarklet, the **Telegram bot**, **email-in** (forward a newsletter → its links land in the Inbox), the **CLI**, and **MCP**. |
 
 The **link/skill is always saved first** — enrichment (stars, README, AI summary) never blocks a save,
 exactly as the plan specifies.

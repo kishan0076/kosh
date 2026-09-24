@@ -3,6 +3,25 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* ─────────────────────────────────────────────────────────────
+   Safe areas — notches, the iOS home indicator and Android
+   gesture bars. index.html sets viewport-fit=cover, so the page
+   extends under them; these pad the shell chrome back out.
+   Zero on desktop browsers, so they're safe everywhere.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+}
+@utility pt-safe { padding-top: var(--safe-top); }
+@utility pb-safe { padding-bottom: var(--safe-bottom); }
+@utility px-safe { padding-left: var(--safe-left); padding-right: var(--safe-right); }
+@utility mb-safe { margin-bottom: var(--safe-bottom); }
+/* The topbar keeps its 64px content height and grows by the notch inset above it. */
+@utility h-topbar-safe { height: calc(4rem + var(--safe-top)); }
+
+/* ─────────────────────────────────────────────────────────────
    Design tokens — "a vault with a light inside"
    Clean, spacious dashboard polish (Shopeers-inspired) with a
    distinctive Kosh identity: indigo primary + a warm gold treasure
@@ -281,9 +300,13 @@
     transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.18s ease, border-color 0.18s ease;
     box-shadow: var(--edge-highlight);
   }
-  .card-hover:hover {
-    box-shadow: var(--shadow), var(--edge-highlight);
-    transform: translateY(-2px);
+  /* Lift only on devices that really hover — on touch screens a tap would otherwise leave the
+     card stuck in its raised state until something else is tapped. */
+  @media (hover: hover) {
+    .card-hover:hover {
+      box-shadow: var(--shadow), var(--edge-highlight);
+      transform: translateY(-2px);
+    }
   }
   .raised {
     box-shadow: var(--edge-highlight);

@@ -1,0 +1,72 @@
+# Android APK build. Wraps the SAME web build (apps/web → dist/) in the Capacitor Android shell and
+# produces an installable debug APK as a workflow artifact — no local Android Studio needed.
+#
+# Set the repository variable MOBILE_API_URL (Settings → Secrets and variables → Actions → Variables)
+# to your deployed API base, e.g. https://api.your-host.com/api. The APK is built against it.
+# Optional: MOBILE_DEV_LOGIN=1 for a test build that can sign in through the API's dev-login.
+#
+# For a signed release APK/AAB, add a keystore as secrets and swap `assembleDebug` for
+# `bundleRelease` / `assembleRelease` (see docs/MOBILE.md §5).
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/shared/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    # Job-wide so both `vite build` (bakes the API base into the bundle) and `cap sync` (decides whether
+    # a plain-http API needs the dev-only cleartext allowance) see the same value.
+    env:
+      VITE_API_URL: ${{ vars.MOBILE_API_URL || 'http://10.0.2.2:8787/api' }}
+      # MOBILE_DEV_LOGIN=1 shows the "Dev sign-in" button in the APK (only works against an API that has
+      # DEV_LOGIN=1 itself — i.e. never a production API). Leave unset for release builds.
+      VITE_DEV_LOGIN: ${{ vars.MOBILE_DEV_LOGIN || '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build web bundle for mobile
+        working-directory: apps/web
+        run: npx vite build
+
+      - name: Sync web bundle into the Android project
+        working-directory: apps/web
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: apps/web/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: kosh-debug-apk
+          path: apps/web/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

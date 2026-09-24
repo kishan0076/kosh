@@ -8,9 +8,23 @@
     "build": "vite build",
     "preview": "vite preview --host",
     "typecheck": "tsc --noEmit",
-    "lint": "echo \"(lint configured at repo level)\""
+    "lint": "echo \"(lint configured at repo level)\"",
+    "build:mobile": "vite build && cap sync",
+    "cap:sync": "cap sync",
+    "cap:android": "cap open android",
+    "cap:ios": "cap open ios",
+    "cap:run:android": "cap run android",
+    "cap:run:ios": "cap run ios"
   },
   "dependencies": {
+    "@capacitor/android": "^7.6.9",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/browser": "^7.0.5",
+    "@capacitor/core": "^7.6.9",
+    "@capacitor/filesystem": "^7.1.8",
+    "@capacitor/ios": "^7.6.9",
+    "@capacitor/preferences": "^7.0.4",
+    "@capacitor/share": "^7.0.4",
     "@kosh/shared": "*",
     "@tanstack/react-virtual": "^3.14.13",
     "clsx": "^2.1.1",
@@ -27,6 +41,7 @@
     "zustand": "^5.0.3"
   },
   "devDependencies": {
+    "@capacitor/cli": "^7.6.9",
     "@tailwindcss/vite": "^4.0.6",
     "@types/node": "^22.13.0",
     "@types/react": "^19.0.8",

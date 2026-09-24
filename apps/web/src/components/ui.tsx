@@ -58,14 +58,15 @@ const FIELD_BASE =
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, ...props }, ref) => (
-    <input ref={ref} className={cn(FIELD_BASE, "h-9 px-3 text-[13.5px]", className)} {...props} />
+    // 16px on phones: iOS Safari zooms the page into any focused input smaller than that.
+    <input ref={ref} className={cn(FIELD_BASE, "h-9 px-3 text-base sm:text-[13.5px]", className)} {...props} />
   ),
 );
 Input.displayName = "Input";
 
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(
   ({ className, ...props }, ref) => (
-    <textarea ref={ref} className={cn(FIELD_BASE, "min-h-[80px] px-3 py-2 text-[13.5px] leading-relaxed", className)} {...props} />
+    <textarea ref={ref} className={cn(FIELD_BASE, "min-h-[80px] px-3 py-2 text-base leading-relaxed sm:text-[13.5px]", className)} {...props} />
   ),
 );
 Textarea.displayName = "Textarea";

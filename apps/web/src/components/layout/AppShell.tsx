@@ -10,10 +10,12 @@ import { VerdictDialog } from "../detail/VerdictDialog";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { HelpSheet } from "../HelpSheet";
 import { Toaster } from "../Toaster";
+import { LoginScreen } from "../LoginScreen";
 import { Button, Spinner } from "../ui";
 import { useUi } from "@/data/ui";
 import { useData } from "@/data/store";
-import { backendEnabled } from "@/data/api";
+import { api, backendEnabled } from "@/data/api";
+import { closeExternal, onDeepLink } from "@/lib/native";
 
 const COLLAPSE_KEY = "kosh.sidebar.collapsed";
 
@@ -34,10 +36,44 @@ export function AppShell() {
   const hydrated = useData((s) => s.hydrated);
   const backendError = useData((s) => s.backendError);
   const retryBackend = useData((s) => s.retryBackend);
+  const needsLogin = useData((s) => s.needsLogin);
+  const completeLogin = useData((s) => s.completeLogin);
+  const toast = useUi((s) => s.toast);
 
   useEffect(() => {
     void initBackend();
   }, [initBackend]);
+
+  // Native app: OAuth flows run in the system browser and come back as kosh:// deep links.
+  //   kosh://auth?code=…            → exchange the one-time code for a session token, then hydrate
+  //   kosh://connected?provider=…   → a Connect (GitHub / Google) flow finished; refresh the user
+  useEffect(
+    () =>
+      onDeepLink((url) => {
+        void closeExternal();
+        const host = url.host || url.pathname.replace(/^\/+/, "");
+        if (host === "auth") {
+          const code = url.searchParams.get("code");
+          if (!code) return;
+          api
+            .mobileExchange(code)
+            .then(({ token }) => completeLogin(token))
+            .catch((err: unknown) => toast({ message: "Sign-in didn't complete", description: err instanceof Error ? err.message : undefined, tone: "danger" }));
+        } else if (host === "connected") {
+          const err = url.searchParams.get("github_error") ?? url.searchParams.get("error");
+          if (err) {
+            toast({ message: "Connection failed", description: err, tone: "danger" });
+            return;
+          }
+          const who = url.searchParams.get("github_connected") ?? url.searchParams.get("connected");
+          void api.me().then((me) => useData.setState({ user: me.user })).catch(() => {});
+          toast({ message: `Connected${who ? ` as ${who}` : ""}`, tone: "ok" });
+        }
+      }),
+    [completeLogin, toast],
+  );
+
+  if (needsLogin) return <LoginScreen />;
 
   const toggleCollapse = () => {
     setCollapsed((c) => {
@@ -92,7 +128,7 @@ export function AppShell() {
             <Button variant="outline" size="sm" onClick={retryBackend}>Retry</Button>
           </div>
         )}
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <main className="min-h-0 flex-1 overflow-y-auto pb-safe">
           {/* Fluid content — fills the width with a small responsive side gutter (16–20px), no fixed max width. */}
           <div className="w-full px-4 py-6 sm:px-5">
             {/* A page crash shows an in-place recovery card (keeping the shell) instead of white-screening;

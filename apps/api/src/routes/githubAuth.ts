@@ -53,6 +53,14 @@ githubAuthRouter.get(
     const uid = requireUser(req);
     requireConfigured();
     const from = returnPathOf(req.query.from);
+    if (req.query.client === "mobile") {
+      // Native app: it can't navigate its WebView through GitHub, so it asks (over its authenticated
+      // Bearer channel) for the authorize URL, opens it in the system browser, and the callback returns
+      // via the kosh:// deep link. The state carries client=mobile so the callback knows to do that.
+      const state = await signState(uid, OAUTH_PURPOSE, from, { client: "mobile" });
+      res.json({ url: githubAuthorizeUrl(state, config.github.connectRedirectUri) });
+      return;
+    }
     const state = await signState(uid, OAUTH_PURPOSE, from);
     res.redirect(githubAuthorizeUrl(state, config.github.connectRedirectUri));
   }),
@@ -63,15 +71,26 @@ githubAuthRouter.get(
   "/github/auth/callback",
   ah(async (req: Request, res) => {
     let returnPath = "publish"; // resolved from the signed state once verified
-    const back = (params: Record<string, string>) => res.redirect(`${config.appUrl}/${returnPath}?${new URLSearchParams(params)}`);
+    let mobile = false; // a flow started by the native app returns to it via the deep link
+    const back = (params: Record<string, string>) =>
+      res.redirect(
+        mobile
+          ? `${config.mobileScheme}://connected?${new URLSearchParams({ provider: "github", ...params })}`
+          : `${config.appUrl}/${returnPath}?${new URLSearchParams(params)}`,
+      );
     try {
       const { code, state, error } = req.query as { code?: string; state?: string; error?: string };
       if (error) return back({ github_error: error });
       if (!code || !state) return back({ github_error: "missing_code" });
 
-      const uid = req.userId ?? null; // session cookie rides this top-level GET (sameSite=lax)
       const verified = await verifyState(state, OAUTH_PURPOSE);
-      if (!uid || !verified || verified.uid !== uid) return back({ github_error: "state_mismatch" });
+      if (!verified) return back({ github_error: "state_mismatch" });
+      mobile = verified.client === "mobile";
+      // Web: the session cookie riding this top-level GET must match the user the state was minted for
+      // (CSRF). Mobile: the flow ran in the system browser (no app cookie there); the state was minted
+      // over the app's authenticated Bearer channel and is short-lived, so its bound uid is the identity.
+      const uid = mobile ? verified.uid : (req.userId ?? null);
+      if (!uid || verified.uid !== uid) return back({ github_error: "state_mismatch" });
       returnPath = returnPathOf(verified.from);
 
       const grant = await exchangeGithubCode(code, config.github.connectRedirectUri);

@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
-import { driveApi } from "@/data/driveApi";
+import { startConnect } from "@/lib/connect";
 import { useDriveV2, type DriveView } from "@/data/driveV2";
 import { Avatar, Progress } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Tooltip } from "@/components/overlays";
@@ -153,7 +153,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
             <span className="truncate">{a.email}</span>
           </MenuItem>
         ))}
-        <MenuItem icon={Plus} onClick={() => { window.location.href = driveApi.connectUrl("drive-v2"); }}>Connect account</MenuItem>
+        <MenuItem icon={Plus} onClick={() => { void startConnect("google", "drive-v2"); }}>Connect account</MenuItem>
         {spaces.length > 0 && (
           <>
             <MenuSeparator />
@@ -210,7 +210,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
                   <Bookmark size={16} className="shrink-0" />
                   <span className="min-w-0 flex-1 truncate text-left">{c.name}</span>
                 </button>
-                <button onClick={() => useDriveV2.getState().removeCollection(c.id)} className="shrink-0 rounded p-1 text-faint opacity-0 transition-opacity hover:text-danger group-hover/col:opacity-100" aria-label={`Remove collection ${c.name}`}><X size={13} /></button>
+                <button onClick={() => useDriveV2.getState().removeCollection(c.id)} className="shrink-0 rounded p-1 text-faint opacity-0 transition-opacity hover:text-danger group-hover/col:opacity-100 [@media(pointer:coarse)]:opacity-100" aria-label={`Remove collection ${c.name}`}><X size={13} /></button>
               </div>
             ))}
             {view === "search" && searchQuery.trim() && !collections.some((c) => c.query === searchQuery.trim()) && (

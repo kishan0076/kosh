@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Kosh</string>
+    <string name="title_activity_main">Kosh</string>
+    <string name="package_name">com.kosh.app</string>
+    <string name="custom_url_scheme">com.kosh.app</string>
+</resources>

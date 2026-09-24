@@ -39,7 +39,7 @@ export function ContextMenu({ x, y, actions, onClose }: { x: number; y: number; 
         role="menu"
         style={{ left: pos.x, top: pos.y }}
         onClick={(e) => e.stopPropagation()}
-        className="fixed min-w-52 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-elevated p-1 shadow-[var(--shadow-pop)]"
+        className="fixed min-w-52 max-h-[calc(100dvh-1rem)] overflow-y-auto rounded-[var(--radius-panel)] border border-border bg-elevated p-1 shadow-[var(--shadow-pop)]"
       >
         {actions.map((a, i) => (
           <div key={i}>

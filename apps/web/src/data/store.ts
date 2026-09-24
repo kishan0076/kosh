@@ -20,7 +20,8 @@ import {
   type User,
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
-import { api, backendEnabled, publishRepoWithProgress, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
+import { api, ApiError, backendEnabled, publishRepoWithProgress, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
+import { isNative, loadSessionToken, setSessionToken } from "@/lib/native";
 import { useUi } from "./ui";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
 
@@ -87,9 +88,14 @@ interface DataState {
   backend: boolean;
   /** Set when backend mode is configured but the API couldn't be reached — drives the offline banner. */
   backendError: string | null;
+  /** Native app only: there's no session, show the sign-in screen (the web signs in via GitHub redirect). */
+  needsLogin: boolean;
 
   initBackend: () => Promise<void>;
   retryBackend: () => void;
+  /** Native app: store the Bearer session token handed back by the login flow, then hydrate. */
+  completeLogin: (token: string) => Promise<void>;
+  signOut: () => Promise<void>;
   upsertItem: (item: Item) => void;
   upsertSkill: (skill: Skill) => void;
 
@@ -176,14 +182,26 @@ export const useData = create<DataState>()(
       hydrated: !backendEnabled,
       backend: backendEnabled,
       backendError: null,
+      needsLogin: false,
 
       initBackend: async () => {
         if (!backendEnabled || initInFlight) return;
         initInFlight = true;
         try {
+          await loadSessionToken(); // native: prime the Bearer token before the first request
           try {
             await withTimeout(api.me());
-          } catch {
+          } catch (err) {
+            if (isNative) {
+              // A phone never auto-signs-in as a dev user. No/expired token → the sign-in screen;
+              // anything else (API unreachable) → the offline banner via the outer catch.
+              if (err instanceof ApiError && err.status === 401) {
+                await setSessionToken(null);
+                set({ hydrated: true, needsLogin: true, backendError: null });
+                return;
+              }
+              throw err;
+            }
             await withTimeout(api.devLogin("darshan", "Darshan"));
           }
           const [me, items, trash, skills, collections] = await withTimeout(
@@ -210,6 +228,25 @@ export const useData = create<DataState>()(
       retryBackend: () => {
         set({ backendError: null });
         void get().initBackend();
+      },
+      completeLogin: async (token) => {
+        await setSessionToken(token);
+        set({ needsLogin: false, hydrated: false, backendError: null });
+        await get().initBackend();
+      },
+      signOut: async () => {
+        try {
+          await api.logout();
+        } catch {
+          /* best-effort */
+        }
+        await setSessionToken(null);
+        if (sseUnsub) {
+          sseUnsub();
+          sseUnsub = null;
+        }
+        set({ user: emptyUser(), items: [], skills: [], collections: [], needsLogin: isNative, hydrated: true, backendError: null });
+        if (!isNative) window.location.reload(); // web: the cookie is gone — reload into the fresh (auto-login/dev) state
       },
 
       upsertItem: (item) =>

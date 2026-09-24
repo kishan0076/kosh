@@ -28,6 +28,7 @@ import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { allTags } from "@/data/selectors";
 import { api, API_BASE, type ApiKeyPublic } from "@/data/api";
+import { startConnect } from "@/lib/connect";
 import { uid } from "@/lib/ids";
 import { ago } from "@/lib/time";
 import { PageHeader, SectionCard } from "@/components/common";
@@ -356,7 +357,7 @@ export function Settings() {
                     <div className="text-[13.5px] font-medium">Connect with one click</div>
                     <div className="text-[12px] text-muted">Approve on GitHub and land right back here — nothing to paste.</div>
                   </div>
-                  <Button variant="primary" onClick={() => { window.location.href = api.githubConnectUrl("settings"); }}>
+                  <Button variant="primary" onClick={() => { void startConnect("github", "settings"); }}>
                     <Github size={15} /> Connect GitHub
                   </Button>
                 </div>
@@ -451,7 +452,7 @@ export function Settings() {
                         },
                       })
                     }
-                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground group-hover:opacity-100"
+                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground group-hover:opacity-100 [@media(pointer:coarse)]:p-1.5 [@media(pointer:coarse)]:opacity-100"
                     aria-label="Rename tag"
                   >
                     <RefreshCw size={12} />
@@ -465,7 +466,7 @@ export function Settings() {
                         onConfirm: () => { deleteTag(t.tag); toast({ message: `Removed #${t.tag}`, tone: "warn" }); },
                       })
                     }
-                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-danger-soft hover:text-danger group-hover:opacity-100"
+                    className="rounded-full p-0.5 text-faint opacity-0 transition-opacity hover:bg-danger-soft hover:text-danger group-hover:opacity-100 [@media(pointer:coarse)]:p-1.5 [@media(pointer:coarse)]:opacity-100"
                     aria-label="Delete tag"
                   >
                     <Trash2 size={12} />

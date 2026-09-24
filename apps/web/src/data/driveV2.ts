@@ -2,6 +2,8 @@ import { create } from "zustand";
 import { uid } from "@/lib/ids";
 import { API_BASE, ApiError } from "./api";
 import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
+import { startConnect } from "@/lib/connect";
+import { isNative } from "@/lib/native";
 import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
 import { useUi, type Toast } from "./ui";
 import { parseDriveSearch, dedupeDriveActivity, parseTags, normalizeTag, serializeTags, TAG_PROP_KEY, isNativeGoogleDoc, driveExportFormats } from "@kosh/shared";
@@ -374,7 +376,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       message: "Google access expired",
       description: "Reconnect your account to keep using Drive.",
       tone: "danger",
-      action: { label: "Reconnect", onClick: () => { window.location.href = driveApi.connectUrl("drive-v2"); } },
+      action: { label: "Reconnect", onClick: () => { void startConnect("google", "drive-v2"); } },
       duration: 8000,
     });
   }
@@ -667,6 +669,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   /** Open the SSE push channel for the current account; SSE delivers changes, the poller idles. */
   function openEventSource(): void {
     if (typeof EventSource === "undefined") return; // SSR / unsupported
+    // Native app: EventSource can't carry the Bearer session, so the stream would 401 into the give-up
+    // budget for nothing — go straight to the poller (see docs/MOBILE.md §6 for the ticket follow-up).
+    if (isNative) return;
     closeEventSource(); // always drop any prior stream first — e.g. switching to a no-scope account
     const { accountId, pushSync, scopeOk } = get();
     if (!pushSync || !accountId || !scopeOk) return;

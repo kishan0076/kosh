@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { Bell, FolderLock, LogOut, Menu as MenuIcon, Plus, RefreshCw, Search, SlidersHorizontal, User } from "lucide-react";
 import { useData } from "@/data/store";
+import { backendEnabled } from "@/data/api";
 import { watchedChanges } from "@/data/selectors";
 import { useUi } from "@/data/ui";
 import { Avatar, Button, Kbd } from "../ui";
@@ -11,6 +12,7 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const user = useData((s) => s.user);
   const items = useData((s) => s.items);
   const resetVault = useData((s) => s.resetVault);
+  const signOut = useData((s) => s.signOut);
   const setPalette = useUi((s) => s.setPalette);
   const toast = useUi((s) => s.toast);
   const openConfirm = useUi((s) => s.openConfirm);
@@ -20,7 +22,7 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const changeCount = changes.reduce((a, i) => a + (i.github?.watch?.newSince ?? 0), 0);
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur-md sm:px-6">
+    <header className="sticky top-0 z-30 flex h-topbar-safe items-center gap-3 border-b border-border bg-background/85 px-4 pt-safe backdrop-blur-md sm:px-6">
       <Button variant="ghost" size="icon" onClick={onOpenMobileNav} className="lg:hidden" aria-label="Open menu">
         <MenuIcon size={20} />
       </Button>
@@ -41,7 +43,8 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
         </span>
       </button>
 
-      <div className="flex-1" />
+      {/* On phones the spacer would halve the search pill (both are flex-1) — let search take the row. */}
+      <div className="hidden flex-1 sm:block" />
 
       <div className="flex items-center gap-1.5 sm:gap-2">
         <Button variant="primary" size="sm" className="hidden sm:inline-flex" onClick={() => navigate("/add")}>
@@ -123,7 +126,9 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           >
             Reset demo data
           </MenuItem>
-          <MenuItem icon={LogOut} danger onClick={() => toast({ message: "This is a demo — no real sign-out", tone: "warn" })}>
+          {/* Backend mode ends the real session (cookie on the web, Bearer token in the native app);
+              demo mode has nothing to sign out of. */}
+          <MenuItem icon={LogOut} danger onClick={() => (backendEnabled ? void signOut() : toast({ message: "This is a demo — no real sign-out", tone: "warn" }))}>
             Sign out
           </MenuItem>
         </Menu>

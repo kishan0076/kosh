@@ -49,17 +49,21 @@ export function Menu({
     };
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     // Close on an OUTSIDE scroll/resize (the anchor moved), but NOT when scrolling inside the menu
-    // itself — otherwise a long, scrollable list would dismiss the moment you scroll it.
+    // itself — otherwise a long, scrollable list would dismiss the moment you scroll it. A resize that
+    // only changes the HEIGHT is the on-screen keyboard appearing (Android fires `resize` for it) — keep
+    // the menu open then; only a width change (rotation, window resize) really moves the anchor.
+    const startWidth = window.innerWidth;
     const onScroll = (e: Event) => {
       if (e.type === "scroll" && menuRef.current && e.target instanceof Node && menuRef.current.contains(e.target)) return;
+      if (e.type === "resize" && window.innerWidth === startWidth) return;
       close();
     };
-    document.addEventListener("mousedown", onDown);
+    document.addEventListener("pointerdown", onDown); // pointerdown covers mouse, touch and pen
     document.addEventListener("keydown", onKey);
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onScroll);
     return () => {
-      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("pointerdown", onDown);
       document.removeEventListener("keydown", onKey);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onScroll);

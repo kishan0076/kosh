@@ -267,7 +267,7 @@ function FileRowImpl({ node, index, colIndex, selected, busy, renaming, focusabl
         <button
           onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
           tabIndex={innerTab}
-          className={cn("shrink-0 rounded p-0.5 transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
+          className={cn("shrink-0 rounded p-0.5 transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100")}
           aria-label={node.starred ? "Unstar" : "Star"}
         >
           <Star size={13} className={cn(node.starred && "fill-gold")} />
@@ -354,7 +354,7 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
           <button
             onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
             tabIndex={innerTab}
-            className={cn("grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur transition-opacity hover:bg-surface", node.starred ? "opacity-100" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
+            className={cn("grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur transition-opacity hover:bg-surface", node.starred ? "opacity-100" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100")}
             aria-label={node.starred ? "Unstar" : "Star"}
           >
             <Star size={14} className={cn(node.starred ? "fill-gold text-gold" : "text-muted")} />
@@ -430,9 +430,9 @@ export function DriveContentSkeleton({ layout }: { layout: "grid" | "list" }) {
   return (
     <div className="space-y-0.5">
       {Array.from({ length: 12 }).map((_, i) => (
-        <div key={i} className="grid grid-cols-[minmax(0,1fr)_150px_96px_128px_36px] items-center gap-3 px-2.5 py-2">
+        <div key={i} className="grid grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 px-2.5 py-2 md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]">
           <div className="flex items-center gap-2.5"><div className="shimmer h-8 w-8 rounded-[8px]" /><div className="shimmer h-3.5 w-1/3 rounded" /></div>
-          <div className="shimmer h-3 w-20 rounded" /><div className="shimmer h-3 w-12 justify-self-end rounded" /><div className="shimmer h-3 w-16 rounded" /><div />
+          <div className="shimmer hidden h-3 w-20 rounded md:block" /><div className="shimmer h-3 w-12 justify-self-end rounded" /><div className="shimmer hidden h-3 w-16 rounded md:block" /><div />
         </div>
       ))}
     </div>

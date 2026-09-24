@@ -148,9 +148,9 @@ export function InsightsPanel({ onClose }: { onClose: () => void }) {
         <button onClick={onClose} className="ml-auto grid h-8 w-8 place-items-center rounded-md text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Close insights"><X size={16} /></button>
       </div>
 
-      <div className="flex gap-1 border-b border-border px-3 py-2">
+      <div className="flex gap-1 overflow-x-auto border-b border-border px-3 py-2">
         {TABS.map((t) => (
-          <button key={t.k} onClick={() => setTab(t.k)} className={cn("inline-flex items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium", tab === t.k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2")}>
+          <button key={t.k} onClick={() => setTab(t.k)} className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium", tab === t.k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2")}>
             <t.icon size={14} /> {t.label}
           </button>
         ))}

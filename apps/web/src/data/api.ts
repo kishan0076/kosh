@@ -1,4 +1,5 @@
 import type { Collection, Item, Skill, User } from "@kosh/shared";
+import { getSessionTokenSync, isNative } from "@/lib/native";
 
 /** Base URL of the Kosh API, e.g. "http://localhost:8788/api". Empty → mock mode. */
 export const API_BASE: string = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -13,10 +14,14 @@ export class ApiError extends Error {
 }
 
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // Web: the httpOnly session cookie rides along (credentials: include). Native app: the stored session
+  // token goes in the Authorization header instead (the API accepts either).
+  const token = getSessionTokenSync();
+  const { headers: initHeaders, ...rest } = init;
   const res = await fetch(`${API_BASE}${path}`, {
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
-    ...init,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...((initHeaders as Record<string, string>) ?? {}) },
+    ...rest,
   });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
@@ -168,8 +173,17 @@ export async function uploadObjects(inputs: UploadInput[]): Promise<UploadedRef[
 }
 
 export const api = {
-  devLogin: (login: string, name?: string) => req<{ user: User }>("/auth/dev-login", { method: "POST", body: JSON.stringify({ login, name }) }),
+  devLogin: (login: string, name?: string, client?: "mobile") =>
+    req<{ user: User; token?: string }>("/auth/dev-login", { method: "POST", body: JSON.stringify({ login, name, client }) }),
   me: () => req<{ user: User }>("/me"),
+  logout: () => req<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  // Native app auth: the GitHub login runs in the system browser and returns a one-time code via the
+  // kosh://auth deep link; exchange it here for the Bearer session token the app stores.
+  githubLoginUrl: (client: "web" | "mobile" = "web") => `${API_BASE}/auth/github${client === "mobile" ? "?client=mobile" : ""}`,
+  mobileExchange: (code: string) => req<{ token: string; user: User }>("/auth/mobile/exchange", { method: "POST", body: JSON.stringify({ code }) }),
+  // Native "Connect GitHub": fetch the authorize URL over the authenticated channel, open it in the
+  // system browser; the callback returns via kosh://connected?provider=github.
+  githubConnectStart: (from = "settings") => req<{ url: string }>(`/github/auth?client=mobile&from=${encodeURIComponent(from)}`),
 
   listItems: () => req<{ items: Item[]; total: number }>("/items?limit=500"),
   search: (q: string, limit = 25) => req<{ results: { item: Item; score: number }[]; total: number }>(`/search?q=${encodeURIComponent(q)}&limit=${limit}`),
@@ -238,6 +252,9 @@ export const api = {
   deleteTag: (name: string) => req(`/tags/${encodeURIComponent(name)}`, { method: "DELETE" }),
 
   events: (onEvent: (e: { kind: string; item?: Item }) => void): (() => void) => {
+    // EventSource can't send the Bearer header the native app authenticates with, so live item events
+    // are web-only for now; the native app refetches on focus/navigation instead (see docs/MOBILE.md).
+    if (isNative) return () => {};
     const es = new EventSource(`${API_BASE}/events`, { withCredentials: true });
     es.onmessage = (ev) => {
       try {

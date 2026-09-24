@@ -69,6 +69,8 @@ export const driveApi = {
   /** A full-page redirect to this URL starts the Google consent flow. `from` ("drive" | "drive-v2")
    *  records which module to return to after consent (defaults to V1 server-side). */
   connectUrl: (from?: string) => `${API_BASE}/drive/auth${from ? `?from=${encodeURIComponent(from)}` : ""}`,
+  /** Native app: fetch the consent URL over the authenticated channel (to open in the system browser). */
+  connectStart: (from?: string) => dreq<{ url: string }>(`/drive/auth?client=mobile${from ? `&from=${encodeURIComponent(from)}` : ""}`),
   config: () => dreq<{ configured: boolean; scope: string; fullAccess: boolean; pushSync?: boolean; ai?: boolean }>("/drive/config"),
   listAccounts: () => dreq<{ accounts: DriveAccount[]; configured: boolean }>("/drive/accounts"),
   deleteAccount: (id: string) => dreq<{ ok: boolean }>(`/drive/accounts/${id}`, { method: "DELETE" }),

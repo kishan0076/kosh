@@ -24,7 +24,7 @@ export function createApp(): Express {
   );
   app.use(
     cors({
-      origin: [config.appUrl],
+      origin: config.appOrigins, // web app + native mobile WebView origins (see config.appOrigins)
       credentials: true,
       allowedHeaders: ["Content-Type", "Authorization"],
       maxAge: 7200, // cache preflights so writes don't re-OPTIONS on every call (Chromium caps this at 7200s)

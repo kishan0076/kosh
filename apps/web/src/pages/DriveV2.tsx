@@ -39,7 +39,7 @@ import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, useBodyScrollLock } from "@/components/overlays";
-import { driveApi } from "@/data/driveApi";
+import { startConnect } from "@/lib/connect";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -110,7 +110,7 @@ function ScopeGate({ reason }: { reason: "not-configured" | "no-account" | "reco
       icon={Plug}
       title={copy.title}
       body={copy.body}
-      action={copy.cta ? <a href={driveApi.connectUrl("drive-v2")}><Button variant="primary"><Plug size={15} /> {copy.cta}</Button></a> : undefined}
+      action={copy.cta ? <Button variant="primary" onClick={() => { void startConnect("google", "drive-v2"); }}><Plug size={15} /> {copy.cta}</Button> : undefined}
     />
   );
 }
@@ -877,7 +877,7 @@ function BulkProgress() {
   if (!op) return null;
   const pct = op.indeterminate ? 100 : op.total > 0 ? Math.round((op.done / op.total) * 100) : 0;
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4" aria-live="polite">
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-50 mb-safe flex justify-center px-4" aria-live="polite">
       <div className="pointer-events-auto w-full max-w-sm rounded-[var(--radius-card)] border border-border bg-elevated px-4 py-3 shadow-[var(--shadow-pop)]">
         <div className="mb-1.5 flex items-center justify-between text-[12.5px]">
           <span className="inline-flex items-center gap-1.5 font-medium"><Spinner size={13} className="text-primary" /> {op.label}…</span>
@@ -1192,7 +1192,8 @@ function VirtualGrid({ scrollRef, visible, rowProps, focusIdx, focusNonce, onCol
   useEffect(() => {
     const el = gridRef.current;
     if (!el) return;
-    const compute = () => { const w = el.clientWidth; const min = 176, gap = 16; const c = Math.max(1, Math.floor((w + gap) / (min + gap))); setCols(c); onCols(c); };
+    // Narrower minimum on phones so 360–430px screens get two columns instead of a single tall card.
+    const compute = () => { const w = el.clientWidth; const min = w < 640 ? 140 : 176, gap = 16; const c = Math.max(1, Math.floor((w + gap) / (min + gap))); setCols(c); onCols(c); };
     compute();
     const ro = new ResizeObserver(compute);
     ro.observe(el);
@@ -1247,7 +1248,7 @@ function UploadTray() {
       : `${done} upload${done === 1 ? "" : "s"} complete${failed ? ` · ${failed} failed` : ""}`;
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 w-80 overflow-hidden rounded-[var(--radius-card)] border border-border bg-elevated shadow-[var(--shadow-pop)]">
+    <div className="fixed bottom-4 right-4 z-40 mb-safe w-[calc(100vw-2rem)] max-w-80 overflow-hidden rounded-[var(--radius-card)] border border-border bg-elevated shadow-[var(--shadow-pop)]">
       <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
         {active.length > 0 ? <Spinner size={14} className="text-primary" /> : <Check size={15} className="text-ok" />}
         <span className="flex-1 truncate text-left" title={heading}>{heading}</span>

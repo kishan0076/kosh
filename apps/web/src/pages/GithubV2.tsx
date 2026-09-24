@@ -41,6 +41,7 @@ import { ago } from "@/lib/time";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { api, ApiError } from "@/data/api";
+import { startConnect } from "@/lib/connect";
 import { githubV2Api, type BranchLite, type CommitLite, type IssueLite, type PullLite, type ReleaseLite, type RepoDetail, type RepoSummary, type WorkflowRunLite } from "@/data/githubV2Api";
 import { useGithubV2, visibleRepos, ghToast, type RepoFilter } from "@/data/githubV2";
 import { GitHubMark } from "@/lib/icons";
@@ -126,7 +127,7 @@ function ConnectGate() {
       body={oauth ? "Approve on GitHub and land right back here to manage all your repositories — create, edit, delete, push and more." : "Connect a GitHub token (with the repo scope) in Settings to manage your repositories here."}
       action={
         oauth ? (
-          <Button variant="primary" size="lg" onClick={() => { window.location.href = api.githubConnectUrl("github"); }}>
+          <Button variant="primary" size="lg" onClick={() => { void startConnect("github", "github"); }}>
             <GitHubMark size={16} /> Connect GitHub
           </Button>
         ) : (
@@ -250,8 +251,9 @@ function SelectionBar({ repos, onAction, onClear }: { repos: RepoSummary[]; onAc
   // otherwise the server would reject the ones the user can't manage.
   const admin = repos.every((r) => r.canAdmin);
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
-      <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-full border border-border bg-elevated px-3 py-2 shadow-[var(--shadow-pop)]">
+    <div className="pointer-events-none fixed inset-x-0 bottom-4 z-40 mb-safe flex justify-center px-4">
+      {/* rounded-2xl below sm: the buttons wrap onto two lines on phones, where a pill shape looks broken */}
+      <div className="pointer-events-auto flex flex-wrap items-center gap-2 rounded-2xl border border-border bg-elevated px-3 py-2 shadow-[var(--shadow-pop)] sm:rounded-full">
         <span className="px-1 text-[13px] font-semibold">{repos.length} selected</span>
         <span className="h-4 w-px bg-border" />
         {admin ? (
