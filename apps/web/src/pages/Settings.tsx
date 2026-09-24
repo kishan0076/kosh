@@ -27,7 +27,7 @@ import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { allTags } from "@/data/selectors";
-import { api, type ApiKeyPublic } from "@/data/api";
+import { api, API_BASE, type ApiKeyPublic } from "@/data/api";
 import { uid } from "@/lib/ids";
 import { ago } from "@/lib/time";
 import { PageHeader, SectionCard } from "@/components/common";
@@ -215,7 +215,12 @@ export function Settings() {
       },
     });
 
-  const bookmarklet = `javascript:(()=>{fetch("https://api.kosh.app/api/items",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer ksh_xxx"},body:JSON.stringify({url:location.href,note:String(getSelection())||undefined,source:"bookmarklet"})}).then(r=>alert(r.ok?"Saved to Kosh":"Kosh: failed "+r.status))})();`;
+  // Live endpoints for the "Ways in" snippets — derived from the app's configured API base (VITE_API_URL)
+  // so they point at THIS deployment, not a hardcoded host. Falls back to the public host in mock mode.
+  const apiBase = API_BASE || "https://api.kosh.app/api";
+  const mcpCmd = `claude mcp add --transport http kosh ${apiBase}/mcp -H "Authorization: Bearer ksh_…"`;
+  const iphoneCmd = `Shortcuts → new → Receive URLs & Text from Share Sheet → Get Contents of URL: POST ${apiBase}/items, body {"url": Input}, header Authorization: Bearer ksh_…`;
+  const bookmarklet = `javascript:(()=>{fetch("${apiBase}/items",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer ksh_…"},body:JSON.stringify({url:location.href,note:String(getSelection())||undefined,source:"bookmarklet"})}).then(r=>alert(r.ok?"Saved to Kosh":"Kosh: failed "+r.status))})();`;
 
   return (
     <div>
@@ -257,17 +262,11 @@ export function Settings() {
         <SectionCard title="Ways in" subtitle="Every entry point saves to the same vault" className="lg:col-span-2">
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <Snippet icon={Terminal} title="CLI" cmd="npx kosh add pdf-tools" onCopy={copy} />
-            <Snippet icon={Blocks} title="MCP (Claude Code)" cmd='claude mcp add --transport http kosh https://api.kosh.app/mcp -H "Authorization: Bearer ksh_xxx"' onCopy={copy} />
+            <Snippet icon={Blocks} title="MCP (Claude Code)" cmd={mcpCmd} onCopy={copy} />
             <Snippet icon={MessageCircle} title="Telegram bot" cmd="/start to link · send a link, .md/.zip, or text" onCopy={copy} plain />
             <Snippet icon={Bookmark} title="Bookmarklet" cmd={bookmarklet} onCopy={copy} truncate />
             <Snippet icon={Smartphone} title="Android — share sheet" cmd="Install Kosh to your home screen, then Share → Kosh from any app" onCopy={copy} plain />
-            <Snippet
-              icon={Share2}
-              title="iPhone Shortcut"
-              cmd='Shortcuts → new → Receive URLs & Text from Share Sheet → Get Contents of URL: POST {API}/items, body {"url": Input}, header Authorization: Bearer ksh_…'
-              onCopy={copy}
-              plain
-            />
+            <Snippet icon={Share2} title="iPhone Shortcut" cmd={iphoneCmd} onCopy={copy} plain />
             <Snippet icon={Mail} title="Email-in" cmd={`Forward newsletters to inbox+${user.emailToken ?? "<your-token>"}@yourdomain.com — links land in your Inbox`} onCopy={copy} plain />
           </div>
         </SectionCard>
