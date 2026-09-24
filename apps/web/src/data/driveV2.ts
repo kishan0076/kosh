@@ -104,6 +104,7 @@ interface DriveV2State {
   searchStarredOnly: boolean;
   aiSearchNote: string | null; // the AI's interpretation of the last natural-language search (chip under the toolbar)
   aiSearchBusy: boolean; // an AI natural-language search request is in flight
+  aiSearchQuery: string | null; // the DSL the AI produced — searched instead of searchQuery, which keeps the NL for display
   filterTag: string | null; // client-side tag filter over the loaded view (like filterKind); not persisted
   collections: SmartCollection[]; // named saved searches (persisted to localStorage)
 
@@ -378,7 +379,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   }
 
   async function load(force = false): Promise<void> {
-    const { accountId, view, path, searchQuery, searchStarredOnly, spaceId } = get();
+    const { accountId, view, path, searchQuery, aiSearchQuery, searchStarredOnly, spaceId } = get();
     if (!accountId || !get().scopeOk) return;
     const folderId = currentFolderId(path, spaceId);
     const driveId = spaceId ?? undefined;
@@ -414,7 +415,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       else if (view === "trash") result = await driveV2Api.trash(accountId, { driveId });
       else if (view === "shared") result = await driveV2Api.sharedWithMe(accountId);
       else {
-        const p = parseSearch(searchQuery, selectedAccount()?.email);
+        // aiSearchQuery (the AI-produced DSL) drives the actual search when present; searchQuery keeps the
+        // plain-English text for the box + header.
+        const p = parseSearch(aiSearchQuery ?? searchQuery, selectedAccount()?.email);
         if (searchStarredOnly) p.starred = true;
         p.driveId = driveId;
         result = await driveV2Api.search(accountId, p);
@@ -764,6 +767,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     searchStarredOnly: false,
     aiSearchNote: null,
     aiSearchBusy: false,
+    aiSearchQuery: null,
     filterTag: null,
     collections: loadCollections(),
     selection: new Set(),
@@ -890,7 +894,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (sameView && !fromOverlay && !timeSensitive) return;
       // path is preserved across views so returning to My Drive restores the last folder.
       set({ view: v, selection: new Set(), detailsId: null, detailsNode: null });
-      if (v !== "search") set({ searchQuery: "" });
+      if (v !== "search") set({ searchQuery: "", aiSearchQuery: null, aiSearchNote: null });
       void load(fromOverlay || timeSensitive);
     },
 
@@ -941,7 +945,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
     load,
     loadMore: async () => {
-      const { accountId, view, path, nextPageToken, searchQuery, searchStarredOnly, loadingMore, spaceId } = get();
+      const { accountId, view, path, nextPageToken, searchQuery, aiSearchQuery, searchStarredOnly, loadingMore, spaceId } = get();
       if (!accountId || !nextPageToken || loadingMore) return;
       set({ loadingMore: true });
       const seq = loadSeq;
@@ -955,7 +959,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         else if (view === "trash") result = await driveV2Api.trash(accountId, { pageToken: nextPageToken, driveId });
         else if (view === "shared") result = await driveV2Api.sharedWithMe(accountId, { pageToken: nextPageToken });
         else {
-          const p = parseSearch(searchQuery, selectedAccount()?.email);
+          const p = parseSearch(aiSearchQuery ?? searchQuery, selectedAccount()?.email);
           if (searchStarredOnly) p.starred = true;
           p.pageToken = nextPageToken;
           p.driveId = driveId;
@@ -1045,8 +1049,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     setFilterTag: (tag) => set({ filterTag: tag }),
 
     runSearch: (text) => {
-      // Clear any prior AI interpretation — aiSearch re-sets it after calling this.
-      set({ searchQuery: text, view: "search", aiSearchNote: null });
+      // A manual/literal search clears any AI interpretation + DSL override.
+      set({ searchQuery: text, view: "search", aiSearchNote: null, aiSearchQuery: null });
       void load(true);
     },
     aiSearch: async (nl) => {
@@ -1055,10 +1059,18 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (!accountId || !q || get().aiSearchBusy) return;
       set({ aiSearchBusy: true });
       try {
-        const { query, explanation } = await driveV2Api.aiSearch(accountId, q);
-        // Run the interpreted operator query (falling back to the raw words), then surface how it was read.
-        get().runSearch(query || q);
-        set({ aiSearchNote: explanation || null });
+        // Pass the user's LOCAL date so relative asks ("today", "last week") resolve in their timezone.
+        const today = new Date();
+        const localDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+        const { query, explanation } = await driveV2Api.aiSearch(accountId, q, localDate);
+        if (!query.trim()) {
+          pushToast({ message: "AI couldn't turn that into a search — try rephrasing.", tone: "warn" });
+          return;
+        }
+        // Keep the plain-English text in the box (searchQuery) but search by the AI's DSL (aiSearchQuery),
+        // so the note always matches what actually ran and the original request stays editable.
+        set({ searchQuery: q, aiSearchQuery: query, aiSearchNote: explanation || null, view: "search" });
+        void load(true);
       } catch (err) {
         pushToast({ message: err instanceof Error ? err.message : "AI search failed", tone: "danger" });
       } finally {
@@ -1070,7 +1082,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (get().view === "search") void load(true);
     },
     clearSearch: () => {
-      set({ searchQuery: "", view: "myDrive", aiSearchNote: null });
+      set({ searchQuery: "", view: "myDrive", aiSearchNote: null, aiSearchQuery: null });
       void load();
     },
 

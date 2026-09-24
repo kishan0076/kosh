@@ -43,9 +43,10 @@ Reply with ONLY a single-line JSON object and no other prose: {"query": string, 
 Keep free-text keywords minimal and specific. Omit any operator you are unsure about. Never invent other operators.
 "explanation" is one short human sentence describing how you interpreted the request.`;
 
-/** Translate a natural-language request into the Drive operator DSL that parseDriveSearch understands. */
-export async function nlToDriveQuery(userId: string, nl: string): Promise<{ query: string; explanation: string }> {
-  const todayStr = new Date().toISOString().slice(0, 10);
+/** Translate a natural-language request into the Drive operator DSL that parseDriveSearch understands.
+ *  `today` is the caller's LOCAL date (YYYY-MM-DD) so relative asks resolve in the user's timezone. */
+export async function nlToDriveQuery(userId: string, nl: string, today?: string): Promise<{ query: string; explanation: string }> {
+  const todayStr = today && /^\d{4}-\d{2}-\d{2}$/.test(today) ? today : new Date().toISOString().slice(0, 10);
   const prompt = `Today is ${todayStr}.\nRequest: ${nl.slice(0, 500)}`;
   const estCost = estimateCostUsd(SEARCH_SYSTEM.length + prompt.length, 200);
   await ensureAiBudget(userId, estCost);

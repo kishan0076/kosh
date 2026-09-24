@@ -729,7 +729,7 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder={aiEnabled ? "Search Drive, or ask AI…" : "Search Drive… (⌘K)"}
+          placeholder={aiEnabled ? "Search or ask AI… (⌘K)" : "Search Drive… (⌘K)"}
           className="min-w-0 flex-1 bg-transparent text-[13px] outline-none"
         />
         {aiEnabled && q.trim() && (

@@ -611,7 +611,9 @@ driveV2Router.post(
     const uid = requireWrite(req);
     if (!aiConfigured()) throw new AppError("AI_OFF", "AI isn't configured on the server.", 503);
     // Pure LLM step (no Drive call) — the client runs the returned query through the normal search path.
-    const { query } = z.object({ query: z.string().trim().min(1).max(500) }).parse(req.body);
-    res.json(await runAi(() => nlToDriveQuery(uid, query)));
+    const { query, today } = z
+      .object({ query: z.string().trim().min(1).max(500), today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() })
+      .parse(req.body);
+    res.json(await runAi(() => nlToDriveQuery(uid, query, today)));
   }),
 );
