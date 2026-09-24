@@ -10,6 +10,26 @@ function getClient(): Anthropic | null {
   return client;
 }
 
+/** Whether the server has an Anthropic key — mirrors googleConfigured()/githubOAuthConfigured(). */
+export function aiConfigured(): boolean {
+  return !!config.anthropic.apiKey;
+}
+
+/** Interactive AI is off (no key). Routes map this to a NOT_CONFIGURED response. */
+export class AiNotConfiguredError extends Error {
+  constructor() {
+    super("AI isn't configured on the server.");
+    this.name = "AiNotConfiguredError";
+  }
+}
+/** The user's daily AI spend cap is reached. Routes map this to a 429. */
+export class AiBudgetError extends Error {
+  constructor() {
+    super("You've reached today's AI limit — try again tomorrow.");
+    this.name = "AiBudgetError";
+  }
+}
+
 export interface AiEnrichment {
   summary: string;
   suggestedTags: string[];
@@ -21,10 +41,16 @@ const IN_PER_M = 1;
 const OUT_PER_M = 5;
 const today = () => new Date().toISOString().slice(0, 10);
 
+/** Rough USD estimate for a call (~4 chars/token in + a fixed output-token budget). */
+export function estimateCostUsd(inputChars: number, outTokens: number): number {
+  const inTokens = Math.ceil(inputChars / 4);
+  return (inTokens / 1e6) * IN_PER_M + (outTokens / 1e6) * OUT_PER_M;
+}
+
 /** Atomically reserve estimated spend against the user's daily cap BEFORE the API call.
  *  Returns false (and charges nothing) when already at/over cap. Pre-charging — rather than
- *  recording after the call — closes the check-then-act race between concurrent enrichment jobs. */
-async function reserveBudget(userId: string, estCost: number): Promise<boolean> {
+ *  recording after the call — closes the check-then-act race between concurrent AI jobs. */
+export async function reserveBudget(userId: string, estCost: number): Promise<boolean> {
   const store = getStore();
   const user = await store.users.findById(userId);
   if (!user) return false;
@@ -34,11 +60,49 @@ async function reserveBudget(userId: string, estCost: number): Promise<boolean> 
   return true;
 }
 
-/** Budget-aware summary for a user. Skips (returns null) when the daily cap is reached. */
+/** Gate an interactive AI call: throw if unconfigured or over the daily cap, else reserve the estimate. */
+export async function ensureAiBudget(userId: string, estCost: number): Promise<void> {
+  if (!aiConfigured()) throw new AiNotConfiguredError();
+  if (!(await reserveBudget(userId, estCost))) throw new AiBudgetError();
+}
+
+/** Low-level, uncapped model call. Returns the first text block, or null (no key / all retries failed). */
+export async function completeText(input: { system: string; prompt: string; maxTokens?: number }): Promise<string | null> {
+  const c = getClient();
+  if (!c) return null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await c.messages.create({
+        model: config.anthropic.model,
+        max_tokens: input.maxTokens ?? 400,
+        system: input.system,
+        messages: [{ role: "user", content: input.prompt }],
+      });
+      const text = res.content.find((b) => b.type === "text");
+      if (text && "text" in text) return text.text;
+    } catch (err) {
+      logger.warn({ err }, "claude completion failed");
+    }
+  }
+  return null;
+}
+
+/** Extract the first `{…}` JSON object from model text (models often wrap it in prose). */
+export function extractJson<T>(text: string | null): T | null {
+  if (!text) return null;
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** Budget-aware summary for a user. Skips (returns null) when unconfigured or the daily cap is reached. */
 export async function summarizeForUser(userId: string, input: { title?: string; url?: string; text: string; existingTags?: string[] }): Promise<AiEnrichment | null> {
   if (!config.anthropic.apiKey) return null;
-  const inputTokens = Math.ceil((SYSTEM.length + input.text.length + (input.title?.length ?? 0)) / 4);
-  const estCost = (inputTokens / 1e6) * IN_PER_M + (400 / 1e6) * OUT_PER_M;
+  const estCost = estimateCostUsd(SYSTEM.length + input.text.length + (input.title?.length ?? 0), 400);
   if (!(await reserveBudget(userId, estCost))) {
     logger.info({ userId }, "ai daily spend cap reached — skipping summary");
     return null;
@@ -52,8 +116,6 @@ Reply with ONLY a compact JSON object: {"summary": string (<=2 sentences), "sugg
 
 /** Summarize + tag a link with Haiku. No-ops (returns null) without an API key. */
 export async function summarize(input: { title?: string; url?: string; text: string; existingTags?: string[] }): Promise<AiEnrichment | null> {
-  const c = getClient();
-  if (!c) return null;
   const prompt = [
     input.title ? `Title: ${input.title}` : "",
     input.url ? `URL: ${input.url}` : "",
@@ -65,29 +127,11 @@ export async function summarize(input: { title?: string; url?: string; text: str
     .filter(Boolean)
     .join("\n");
 
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await c.messages.create({
-        model: config.anthropic.model,
-        max_tokens: 400,
-        system: SYSTEM,
-        messages: [{ role: "user", content: prompt }],
-      });
-      const text = res.content.find((b) => b.type === "text");
-      if (text && "text" in text) {
-        const match = text.text.match(/\{[\s\S]*\}/);
-        if (match) {
-          const parsed = JSON.parse(match[0]) as Partial<AiEnrichment>;
-          return {
-            summary: String(parsed.summary ?? "").trim(),
-            suggestedTags: Array.isArray(parsed.suggestedTags) ? parsed.suggestedTags.map(String).slice(0, 5) : [],
-            category: String(parsed.category ?? "").trim(),
-          };
-        }
-      }
-    } catch (err) {
-      logger.warn({ err }, "claude summarize failed");
-    }
-  }
-  return null;
+  const parsed = extractJson<Partial<AiEnrichment>>(await completeText({ system: SYSTEM, prompt, maxTokens: 400 }));
+  if (!parsed) return null;
+  return {
+    summary: String(parsed.summary ?? "").trim(),
+    suggestedTags: Array.isArray(parsed.suggestedTags) ? parsed.suggestedTags.map(String).slice(0, 5) : [],
+    category: String(parsed.category ?? "").trim(),
+  };
 }

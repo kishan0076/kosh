@@ -1,3 +1,4 @@
+import { driveTextSource } from "@kosh/shared";
 import { GoogleAuthError, GoogleTransientError } from "./googleDrive.js";
 
 /** The caller lacks permission on this specific item (reconnecting won't help). */
@@ -674,6 +675,27 @@ export async function createReply(accessToken: string, fileId: string, commentId
   if (input.action) body.action = input.action;
   const res = await driveFetch(accessToken, u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }, "Couldn't post the reply");
   return (await res.json()) as DriveReply;
+}
+
+/** Read a Drive file's plain text for the AI features (summaries / auto-tagging), server-side.
+ *  Exports native Google docs to text, reads text-y binaries via alt=media, returns null for types
+ *  with no cheap text form. The caller must gate binary reads on `size` first (this reads the whole
+ *  body); the returned text is sliced to `maxChars` and the model truncates further. */
+export async function fetchFileTextServer(accessToken: string, fileId: string, mimeType: string, maxChars = 20000): Promise<string | null> {
+  const src = driveTextSource(mimeType);
+  if (!src) return null;
+  let url: URL;
+  if (src.mode === "export") {
+    url = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}/export`);
+    url.searchParams.set("mimeType", src.exportMime);
+  } else {
+    url = new URL(`${DRIVE_API}/files/${encodeURIComponent(fileId)}`);
+    url.searchParams.set("alt", "media");
+    url.searchParams.set("supportsAllDrives", "true");
+  }
+  const res = await driveFetch(accessToken, url, {}, "Couldn't read the file for AI");
+  const text = await res.text();
+  return text.slice(0, maxChars);
 }
 
 /** Resolve the ancestor chain (breadcrumb) for a folder id, walking `parents` up to root. */

@@ -200,6 +200,26 @@ export function driveExportFormats(mimeType?: string): DriveExportFormat[] {
   return (mimeType && DRIVE_EXPORT_FORMATS[mimeType]) || [];
 }
 
+/** How to obtain plain text from a Drive file for AI (summaries / auto-tagging):
+ *  - `export` a native Google doc to a text mime (Doc/Slides -> text/plain, Sheet -> text/csv),
+ *  - read a text-y binary directly via alt=media,
+ *  - or `null` for a type with no cheap text form (PDF/image/office/zip/drawing/folder). */
+export function driveTextSource(mimeType?: string): { mode: "export"; exportMime: string } | { mode: "media" } | null {
+  if (!mimeType) return null;
+  if (isNativeGoogleDoc(mimeType)) {
+    if (mimeType === "application/vnd.google-apps.spreadsheet") return { mode: "export", exportMime: "text/csv" };
+    if (mimeType === "application/vnd.google-apps.document" || mimeType === "application/vnd.google-apps.presentation") return { mode: "export", exportMime: "text/plain" };
+    return null; // drawing / form / etc. — no meaningful text export
+  }
+  if (mimeType.startsWith("text/") || mimeType === "application/json" || mimeType === "application/xml" || mimeType === "application/xhtml+xml") return { mode: "media" };
+  return null; // binary (pdf/image/office/archive) — feeding bytes to the model is pointless
+}
+
+/** Whether a Drive file can yield plain text for the AI features (summarize / auto-tag). */
+export function driveHasTextSource(mimeType?: string): boolean {
+  return driveTextSource(mimeType) !== null;
+}
+
 /* ── sharing: access expiry eligibility ── */
 
 /** The only roles Drive will attach an access-expiry to (never owner/organizer/fileOrganizer). */

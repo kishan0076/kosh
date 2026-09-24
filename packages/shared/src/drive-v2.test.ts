@@ -10,6 +10,8 @@ import {
   tagColorIndex,
   isNativeGoogleDoc,
   driveExportFormats,
+  driveTextSource,
+  driveHasTextSource,
   canGrantExpiry,
   EXPIRY_ROLES,
   TAG_PROP_KEY,
@@ -252,5 +254,32 @@ describe("canGrantExpiry", () => {
   });
   it("EXPIRY_ROLES holds exactly the three assignable roles", () => {
     expect([...EXPIRY_ROLES].sort()).toEqual(["commenter", "reader", "writer"]);
+  });
+});
+
+describe("driveTextSource", () => {
+  it("exports native Google docs to a text mime", () => {
+    expect(driveTextSource("application/vnd.google-apps.document")).toEqual({ mode: "export", exportMime: "text/plain" });
+    expect(driveTextSource("application/vnd.google-apps.presentation")).toEqual({ mode: "export", exportMime: "text/plain" });
+    expect(driveTextSource("application/vnd.google-apps.spreadsheet")).toEqual({ mode: "export", exportMime: "text/csv" });
+  });
+  it("reads text-y binaries directly via media", () => {
+    expect(driveTextSource("text/plain")).toEqual({ mode: "media" });
+    expect(driveTextSource("text/markdown")).toEqual({ mode: "media" });
+    expect(driveTextSource("application/json")).toEqual({ mode: "media" });
+    expect(driveTextSource("application/xml")).toEqual({ mode: "media" });
+  });
+  it("returns null for types with no cheap text form", () => {
+    expect(driveTextSource("application/pdf")).toBeNull();
+    expect(driveTextSource("image/png")).toBeNull();
+    expect(driveTextSource("application/vnd.google-apps.folder")).toBeNull();
+    expect(driveTextSource("application/vnd.google-apps.drawing")).toBeNull();
+    expect(driveTextSource(undefined)).toBeNull();
+  });
+  it("driveHasTextSource mirrors driveTextSource nullability", () => {
+    expect(driveHasTextSource("application/vnd.google-apps.document")).toBe(true);
+    expect(driveHasTextSource("text/csv")).toBe(true);
+    expect(driveHasTextSource("application/pdf")).toBe(false);
+    expect(driveHasTextSource(undefined)).toBe(false);
   });
 });

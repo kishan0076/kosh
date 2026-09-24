@@ -81,6 +81,7 @@ interface DriveV2State {
   configured: boolean;
   fullAccess: boolean;
   pushSync: boolean; // server supports changes.watch push (SSE); else the poller is the only sync
+  aiEnabled: boolean; // server has an Anthropic key — gates the Drive AI features (summaries, search, cleanup)
   rootFolderId: string | null; // the account's REAL My Drive root id (Drive never returns the "root" alias)
 
   accounts: DriveAccount[];
@@ -741,6 +742,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     configured: false,
     fullAccess: false,
     pushSync: false,
+    aiEnabled: false,
     rootFolderId: null,
     accounts: [],
     accountId: null,
@@ -809,7 +811,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       set({ status: "loading", error: null });
       try {
         const [cfg, acc] = await Promise.all([driveApi.config(), driveApi.listAccounts()]);
-        set({ configured: cfg.configured, fullAccess: cfg.fullAccess, pushSync: !!cfg.pushSync, accounts: acc.accounts, status: "ready" });
+        set({ configured: cfg.configured, fullAccess: cfg.fullAccess, pushSync: !!cfg.pushSync, aiEnabled: !!cfg.ai, accounts: acc.accounts, status: "ready" });
         const first = acc.accounts[0];
         if (first) {
           set({ accountId: first.id });
