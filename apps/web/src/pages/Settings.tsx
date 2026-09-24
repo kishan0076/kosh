@@ -405,6 +405,13 @@ export function Settings() {
           }
         >
           <div className="flex max-h-64 flex-wrap gap-2 overflow-y-auto">
+            {tags.length === 0 && (
+              <p className="w-full rounded-[var(--radius-control)] border border-dashed border-border px-3 py-4 text-center text-[13px] text-muted">
+                No tags yet. Tags live on your items — open something in your{" "}
+                <button onClick={() => navigate("/library")} className="font-medium text-primary underline-offset-2 hover:underline">Library</button>{" "}
+                and type in its <span className="font-medium text-foreground">Tags</span> field. Tags you add there show up here to rename, merge or remove.
+              </p>
+            )}
             {tags.map((t) => {
               const isPicked = picked.includes(t.tag);
               if (mergeMode) {
