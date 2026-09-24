@@ -52,14 +52,23 @@ Settings" message) — Kosh never calls a paid endpoint with an empty/garbage ke
 | **Google Gemini** | ✅ Yes | ❌ No | `gemini-2.5-flash-lite` | free | ~1,000–1,500 req/day, 15 RPM. [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | **Groq** | ✅ Yes | ❌ No | `llama-3.1-8b-instant` | free | ~1,000 req/day, extremely fast (LPU). [console.groq.com/keys](https://console.groq.com/keys) |
 | **Cerebras** | ✅ Yes | ⚠️ Now yes | `llama-3.3-70b` | free | ~1M tokens/day, very fast. Card required since mid-2026. [cloud.cerebras.ai](https://cloud.cerebras.ai) |
+| **SambaNova** | ✅ Yes | ❌ No | `Meta-Llama-3.3-70B-Instruct` | free | Permanent free tier of real models, very fast; low RPM + per-model daily caps. [cloud.sambanova.ai](https://cloud.sambanova.ai) |
+| **Together AI** | ✅ `-Free` models | ❌ No | `meta-llama/Llama-3.3-70B-Instruct-Turbo-Free` | free | Free `-Free`-suffixed endpoints (~60 RPM); a small deposit may be needed to unlock them. [together.ai](https://api.together.xyz/settings/api-keys) |
+| **Z.ai (GLM)** | ✅ Yes | ❌ No | `glm-4.5-flash` | free | Permanently free "flash" models; ~1 concurrent request. Use `api.z.ai` (not bigmodel.cn). [z.ai](https://z.ai) |
 | **OpenRouter** | ✅ `:free` models | ❌ No | `meta-llama/llama-3.3-70b-instruct:free` | free\* | One key → hundreds of models; `:free` variants cost nothing. [openrouter.ai/keys](https://openrouter.ai/keys) |
 | **Mistral** | ✅ Yes | ❌ No | `ministral-3b-latest` | free | Free-tier inputs **may be used for training** — don't send sensitive text. [console.mistral.ai](https://console.mistral.ai) |
 | **DeepSeek** | ❌ Paid | ✅ Yes | `deepseek-chat` | ~$0.30 / $0.60 | Very cheap, strong quality. [platform.deepseek.com](https://platform.deepseek.com) |
+| **DeepInfra** | ❌ Paid | ❌ To start | `…Meta-Llama-3.1-8B-Instruct-Turbo` | ~$0.02 / $0.04 | Among the cheapest anywhere; ~$5 one-time trial then PAYG. [deepinfra.com](https://deepinfra.com) |
+| **Fireworks AI** | ❌ Paid | ❌ To start | `accounts/fireworks/models/llama-v3p1-8b-instruct` | ~$0.10 / $0.20 | Fast; model ids **must be fully qualified**; ~$1 trial then PAYG. [fireworks.ai](https://fireworks.ai) |
+| **NVIDIA NIM** | ⚠️ Trial credits | ❌ No | `meta/llama-3.1-8b-instruct` | ~$0.10 / $0.20 | Free starter credits, 80+ hosted models; credits are finite. [build.nvidia.com](https://build.nvidia.com) |
+| **Hugging Face router** | ⚠️ Tiny credit | ❌ No | `openai/gpt-oss-20b:cheapest` | ~$0.05 / $0.20 | Aggregator — one key fans out to Groq/Cerebras/Together/etc.; only ~$0.10/mo free credit. [huggingface.co](https://huggingface.co/settings/tokens) |
 | **OpenAI** | ❌ Paid | ✅ Yes | `gpt-4o-mini` | ~$0.15 / $0.60 | Ubiquitous, reliable. [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
 | **Anthropic (Claude)** | ❌ Paid | ✅ Yes | `claude-haiku-4-5` | ~$1 / $5 | Highest quality for the summarization/JSON tasks here. [console.anthropic.com](https://console.anthropic.com) |
 | **Ollama** | ✅ Local | ❌ No key | `llama3.2` | free | Runs **entirely on your machine** — fully private, no data leaves. Set `OLLAMA_BASE_URL`. |
 
 \* OpenRouter `:free` models are rate-limited but cost $0; paid models on OpenRouter bill per its own pricing.
+
+> **Not included (and why):** **GitHub Models** was retired 30 Jul 2026 (no live endpoint). **Cloudflare Workers AI** has a real free tier and is OpenAI-compatible, but its base URL embeds a per-account id (`…/accounts/{id}/ai/v1`), which the flat registry can't express — it'd need a templated base URL + an account-id field.
 
 > Free-tier rate limits and pricing move often. Kosh only stores a sensible **default model** per provider —
 > override it in Settings to track the latest. The `free` flag prices a provider at `$0` for the daily cap; it is
@@ -120,9 +129,16 @@ ANTHROPIC_MODEL=claude-haiku-4-5   # optional model override for the anthropic d
 GEMINI_API_KEY=
 GROQ_API_KEY=
 CEREBRAS_API_KEY=
+SAMBANOVA_API_KEY=
+TOGETHER_API_KEY=
+ZAI_API_KEY=
 OPENROUTER_API_KEY=
 MISTRAL_API_KEY=
 DEEPSEEK_API_KEY=
+DEEPINFRA_API_KEY=
+FIREWORKS_API_KEY=
+NVIDIA_API_KEY=
+HUGGINGFACE_API_KEY=
 OPENAI_API_KEY=
 # OLLAMA_BASE_URL=http://localhost:11434/v1   # local, keyless
 ```
