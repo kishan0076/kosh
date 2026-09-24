@@ -234,11 +234,18 @@ The GitHub Repository Manager (create a repo + upload a folder) needs a token wi
 
 ### 5.7 Optional integrations
 
-#### `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` / `AI_DAILY_CAP_USD`
-- **What:** enable AI auto-tags/summaries. `ANTHROPIC_MODEL` defaults to
-  `claude-haiku-4-5`; spend is capped by `AI_DAILY_CAP_USD` (default `2`).
+#### `AI_DEFAULT_PROVIDER` / provider keys / `AI_DAILY_CAP_USD`
+- **What:** enable AI auto-tags/summaries, Drive file summaries, natural-language search and the
+  cleanup wizard. Kosh supports **multiple providers** — `AI_DEFAULT_PROVIDER` (default `gemini`,
+  a free tier with no credit card) picks which one new users start on; each user can switch and add
+  their own key in **Settings → AI provider**. Provide the matching server key as a fallback:
+  `GEMINI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`,
+  `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_MODEL`, default
+  `claude-haiku-4-5`). Paid-provider spend is capped by `AI_DAILY_CAP_USD` (default `2`); free tiers
+  and local Ollama never count. Full matrix and setup: **docs/AI_PROVIDERS.md**.
 - **Required:** no.
-- **How to get:** see Section 6.5.
+- **How to get:** Gemini (default) — [aistudio.google.com/apikey](https://aistudio.google.com/apikey),
+  no card. Anthropic — see Section 6.5.
 
 #### `TELEGRAM_BOT_TOKEN` / `TELEGRAM_WEBHOOK_SECRET`
 - **What:** save items via a Telegram bot.

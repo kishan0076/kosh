@@ -67,12 +67,12 @@ Settings" message) — Kosh never calls a paid endpoint with an empty/garbage ke
 
 ### Recommended picks
 
-- **Best free, no card, good quality:** Google **Gemini** (`gemini-2.5-flash-lite`).
+- **Best free, no card, good quality:** Google **Gemini** (`gemini-2.5-flash-lite`) — **the default**.
 - **Best free + fastest:** **Groq** or **Cerebras**.
 - **Most flexible:** **OpenRouter** (one key, many models, `:free` options).
 - **Fully private:** **Ollama** (local, nothing leaves your machine).
 - **Cheapest paid with great quality:** **DeepSeek**.
-- **Highest quality:** **Anthropic Claude Haiku** (the original default).
+- **Highest quality:** **Anthropic Claude Haiku**.
 
 ---
 
@@ -109,8 +109,9 @@ never subtract from a new day's fresh spend). Free-tier and local providers pric
 ## 5. Configuration (env)
 
 ```bash
-# The provider new users start on (any id from the table above)
-AI_DEFAULT_PROVIDER=anthropic
+# The provider new users start on (any id from the table above). Defaults to gemini
+# (free tier, no credit card) — provide GEMINI_API_KEY, or switch this to a provider whose key you set.
+AI_DEFAULT_PROVIDER=gemini
 AI_DAILY_CAP_USD=2                 # per-user USD/day cap for PAID providers
 
 # Optional SERVER FALLBACK keys (used when a user hasn't added their own):

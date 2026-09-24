@@ -71,7 +71,7 @@ export const config = {
   // Most providers are OpenAI-compatible (one adapter); Anthropic uses its native SDK. See aiProviders.ts.
   ai: {
     dailyCapUsd: Number(env.AI_DAILY_CAP_USD ?? 2),
-    defaultProvider: env.AI_DEFAULT_PROVIDER || "anthropic",
+    defaultProvider: env.AI_DEFAULT_PROVIDER || "gemini", // free tier, no card — cheapest to start with
     anthropicModel: env.ANTHROPIC_MODEL || null, // optional override of the anthropic default model
     ollamaBaseUrl: env.OLLAMA_BASE_URL || "http://localhost:11434/v1", // local, keyless
     keys: {
