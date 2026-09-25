@@ -1512,12 +1512,15 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       // Cache of created folder ids keyed by the joined relative path ("" = the drop target itself), so a
       // deep tree creates each folder exactly once and every file lands under the right parent.
       const dirIds = new Map<string, string>([["", rootId]]);
+      const failedDirs = new Set<string>(); // paths whose creation already failed — never retried (no API hammering)
       let folderError = false;
+      let skipped = 0; // files dropped because their folder couldn't be created
       const ensureDir = async (dirs: string[]): Promise<string | null> => {
         let key = "";
         let parentId = rootId;
         for (const seg of dirs) {
           const nextKey = key ? `${key}/${seg}` : seg;
+          if (failedDirs.has(nextKey)) return null; // a prior attempt at this path failed — don't re-try it
           let id = dirIds.get(nextKey);
           if (!id) {
             try {
@@ -1525,7 +1528,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
               id = created.file.id;
               dirIds.set(nextKey, id);
             } catch (err) {
-              // Surface the first failure only (avoid a toast storm), then skip anything under this path.
+              // Remember the failure so descendants skip instantly instead of re-hammering the API, and
+              // surface the underlying reason once (a per-file summary follows at the end).
+              failedDirs.add(nextKey);
               if (!folderError) { folderError = true; toastErr(err instanceof Error ? err.message : `Couldn't create folder "${seg}"`); }
               return null;
             }
@@ -1539,9 +1544,11 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       // item is an empty folder to preserve — ensureDir already created it, nothing more to do.
       for (const item of items) {
         const parentId = await ensureDir(item.dirs);
-        if (parentId == null) continue;
+        if (parentId == null) { if (item.file) skipped++; continue; }
         if (item.file) await uploadOneFile(accountId, item.file, parentId);
       }
+      // Silent partial loss is the worst outcome — if a folder failed, say how many files it took down.
+      if (skipped) pushToast({ message: `${skipped} file${skipped === 1 ? "" : "s"} weren't uploaded — a folder couldn't be created.`, tone: "warn" });
       invalidateFolderViews();
       void get().loadQuota();
       if (get().view === "myDrive") void load(true);

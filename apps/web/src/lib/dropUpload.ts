@@ -39,9 +39,11 @@ export function captureDropEntries(dt: DataTransfer): FileSystemEntry[] | null {
   return sawApi ? entries : null; // API absent entirely → let the caller use dataTransfer.files
 }
 
-/** Read a directory to completion — `readEntries` returns at most ~100 children per call, so loop. */
+/** Read a directory to completion — `readEntries` returns at most ~100 children per call, so loop. A
+ *  mid-stream error KEEPS the batches already read (resolve, don't reject): losing the tail of a big
+ *  folder is far better than silently discarding the 100+ files that were read successfully. */
 function readAllChildren(dir: FileSystemDirectoryEntry): Promise<FileSystemEntry[]> {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const reader = dir.createReader();
     const acc: FileSystemEntry[] = [];
     const pump = () =>
@@ -49,7 +51,7 @@ function readAllChildren(dir: FileSystemDirectoryEntry): Promise<FileSystemEntry
         if (!batch.length) { resolve(acc); return; }
         acc.push(...batch);
         pump();
-      }, reject);
+      }, () => resolve(acc)); // keep what we already read rather than dropping the whole folder
     pump();
   });
 }
