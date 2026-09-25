@@ -64,17 +64,36 @@ export function hasFullDrive(scope: string | undefined): boolean {
   return !!scope && scope.split(" ").includes(FULL_DRIVE_SCOPE);
 }
 
-/** The one sanctioned raw-hex spot: Google Drive's own folder-color palette (maps to folderColorRgb). */
+/**
+ * Google Drive's full folder-color palette — the exact `folderColorRgb` values Drive itself offers (its
+ * `about.folderColorPalette`), so "change folder color" exposes every option, not a handful. The one
+ * sanctioned raw-hex spot in the app (per CLAUDE.md); Drive snaps any value to its nearest supported swatch.
+ */
 export const FOLDER_COLORS: { name: string; hex: string }[] = [
-  { name: "Slate", hex: "#5f6368" },
-  { name: "Red", hex: "#e34e3b" },
-  { name: "Orange", hex: "#f2a73b" },
-  { name: "Yellow", hex: "#f7cb4d" },
-  { name: "Green", hex: "#41b375" },
-  { name: "Teal", hex: "#26a69a" },
-  { name: "Blue", hex: "#4a86e8" },
-  { name: "Purple", hex: "#a479e0" },
-  { name: "Pink", hex: "#e079b4" },
+  { name: "Chocolate", hex: "#ac725e" },
+  { name: "Brick red", hex: "#d06b64" },
+  { name: "Cardinal", hex: "#f83a22" },
+  { name: "Wild strawberry", hex: "#fa573c" },
+  { name: "Mars orange", hex: "#ff7537" },
+  { name: "Yellow cab", hex: "#ffad46" },
+  { name: "Spearmint", hex: "#42d692" },
+  { name: "Vern fern", hex: "#16a765" },
+  { name: "Asparagus", hex: "#7bd148" },
+  { name: "Slime green", hex: "#b3dc6c" },
+  { name: "Desert sand", hex: "#fbe983" },
+  { name: "Macaroni", hex: "#fad165" },
+  { name: "Sea foam", hex: "#92e1c0" },
+  { name: "Pool", hex: "#9fe1e7" },
+  { name: "Denim", hex: "#9fc6e7" },
+  { name: "Rainy sky", hex: "#4986e7" },
+  { name: "Blue velvet", hex: "#9a9cff" },
+  { name: "Wisteria", hex: "#b99aff" },
+  { name: "Grey", hex: "#c2c2c2" },
+  { name: "Pumice", hex: "#cabdbf" },
+  { name: "Dusty rose", hex: "#cca6ac" },
+  { name: "Wild orchid", hex: "#f691b2" },
+  { name: "Orchid", hex: "#cd74e6" },
+  { name: "Plum", hex: "#a47ae2" },
 ];
 
 export interface DriveNode {

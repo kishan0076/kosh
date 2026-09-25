@@ -92,6 +92,26 @@ describe("sortDriveNodes", () => {
     expect(sortDriveNodes(nodes, "modified", "asc").map((n) => n.name)).toEqual(["c", "b", "a"]);
   });
 
+  it("sorts by created (upload) time — newest first when descending", () => {
+    const nodes = [
+      node({ name: "old", createdTime: "2024-01-01T00:00:00Z" }),
+      node({ name: "new", createdTime: "2024-03-01T00:00:00Z" }),
+      node({ name: "mid", createdTime: "2024-02-01T00:00:00Z" }),
+      node({ name: "none" }), // missing createdTime sorts first ascending / last descending
+    ];
+    expect(sortDriveNodes(nodes, "created", "asc").map((n) => n.name)).toEqual(["none", "old", "mid", "new"]);
+    expect(sortDriveNodes(nodes, "created", "desc").map((n) => n.name)).toEqual(["new", "mid", "old", "none"]);
+  });
+
+  it("keeps folders first when sorting by created time", () => {
+    const nodes = [
+      node({ name: "file-new", createdTime: "2024-03-01T00:00:00Z" }),
+      node({ name: "folder-old", isFolder: true, createdTime: "2024-01-01T00:00:00Z" }),
+    ];
+    // folders always precede files even though the file is newer.
+    expect(sortDriveNodes(nodes, "created", "desc").map((n) => n.name)).toEqual(["folder-old", "file-new"]);
+  });
+
   it("sorts by kind, tiebreaking on name with natural/numeric order", () => {
     const nodes = [
       node({ name: "b.pdf", mimeType: "application/pdf" }),

@@ -8,6 +8,7 @@ import {
   ChevronsLeft,
   Clock,
   FolderPlus,
+  FolderUp,
   HardDrive,
   PanelLeftClose,
   Plus,
@@ -65,7 +66,7 @@ const MANAGE: NavDef[] = [
   { v: "cleanup", label: "AI Cleanup", icon: Wand2 }, // opens a modal; shown only when AI is configured
 ];
 
-export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNavigate }: { onNewFolder: () => void; onUpload: () => void; variant?: "sidebar" | "drawer"; onNavigate?: () => void }) {
+export function DriveRail({ onNewFolder, onUpload, onUploadFolder, variant = "sidebar", onNavigate }: { onNewFolder: () => void; onUpload: () => void; onUploadFolder?: () => void; variant?: "sidebar" | "drawer"; onNavigate?: () => void }) {
   const accounts = useDriveV2((s) => s.accounts);
   const accountId = useDriveV2((s) => s.accountId);
   const view = useDriveV2((s) => s.view);
@@ -179,6 +180,7 @@ export function DriveRail({ onNewFolder, onUpload, variant = "sidebar", onNaviga
           >
             <MenuItem icon={FolderPlus} onClick={onNewFolder}>New folder</MenuItem>
             <MenuItem icon={Upload} onClick={onUpload}>Upload files</MenuItem>
+            {onUploadFolder && <MenuItem icon={FolderUp} onClick={onUploadFolder}>Upload folder</MenuItem>}
           </Menu>
         )}
       </div>

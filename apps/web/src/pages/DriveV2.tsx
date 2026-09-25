@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type InputHTMLAttributes, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowUpDown,
@@ -24,6 +24,7 @@ import {
   Rows2,
   Rows3,
   Menu as MenuIcon,
+  Palette,
   Pencil,
   Plug,
   RefreshCw,
@@ -52,7 +53,7 @@ import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileR
 import { PageHeader } from "@/components/drive-v2/PageHeader";
 import { DriveRail } from "@/components/drive-v2/DriveRail";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
-import { CreateFolderModal, DeleteConfirmModal, EmptyTrashModal, MoveToModal } from "@/components/drive-v2/modals";
+import { ChangeFolderColorModal, CreateFolderModal, DeleteConfirmModal, EmptyTrashModal, MoveToModal } from "@/components/drive-v2/modals";
 import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
@@ -62,11 +63,16 @@ import { CleanupModal } from "@/components/drive-v2/CleanupModal";
 import { DriveDetails, PreviewOverlay } from "@/components/drive-v2/DriveDetails";
 import { CommandPalette } from "@/components/drive-v2/CommandPalette";
 import { hasDriveDrag, hasExternalFiles, setDragIds } from "@/components/drive-v2/dnd";
+import { captureDropEntries, fileListToUploadItems, walkDropEntries } from "@/lib/dropUpload";
 import { drivePaneKey, useDriveV2UrlSync } from "@/data/driveV2Url";
 import { Collapse, FadeSwap } from "@/components/motion";
 import { AnimatePresence, motion } from "motion/react";
 import { DUR, EASE, slideUp } from "@/lib/motion";
 import { ago } from "@/lib/time";
+
+// `webkitdirectory` turns a file <input> into a folder picker; it isn't in React's input types, so it's
+// declared here once and spread onto the hidden folder input. `directory` is the (unprefixed) alias.
+const DIRECTORY_INPUT_PROPS = { webkitdirectory: "", directory: "" } as unknown as InputHTMLAttributes<HTMLInputElement>;
 
 export function DriveV2() {
   const backend = useData((s) => s.backend);
@@ -220,6 +226,24 @@ function Shell() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // External drop: read a folder tree (files + subfolders) via the entry API and upload it preserving
+  // structure; fall back to a flat file upload when the browser has no entry API. Entries + the file
+  // snapshot are captured synchronously (the drop event clears dataTransfer once it returns) before the
+  // async tree walk.
+  const onDropTransfer = useCallback((dt: DataTransfer) => {
+    const entries = captureDropEntries(dt);
+    const files = Array.from(dt.files);
+    void (async () => {
+      if (entries && entries.length) {
+        const items = await walkDropEntries(entries);
+        if (items.length) void store.getState().uploadDropped(items);
+      } else if (files.length) {
+        void store.getState().uploadFiles(files);
+      }
+    })();
+  }, [store]);
 
   // Track the lg breakpoint so the inspector renders ONCE — docked as a third column on desktop, an
   // overlay drawer on narrow — instead of mounting two copies (one hidden per breakpoint).
@@ -385,6 +409,19 @@ function Shell() {
   return (
     <div data-drive-shell className="w-full lg:h-[calc(100dvh-7rem)] lg:overflow-hidden" onKeyDown={onKeyDown}>
       <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => { void store.getState().uploadFiles(Array.from(e.target.files ?? [])); if (fileInputRef.current) fileInputRef.current.value = ""; }} />
+      {/* Folder picker (webkitdirectory): files come back with webkitRelativePath, so structure is preserved. */}
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        hidden
+        {...DIRECTORY_INPUT_PROPS}
+        onChange={(e) => {
+          const items = fileListToUploadItems(e.target.files ?? []);
+          if (items.length) void store.getState().uploadDropped(items);
+          if (folderInputRef.current) folderInputRef.current.value = "";
+        }}
+      />
       {/* `grid-cols-1` pins the phone track to minmax(0,1fr): without it the implicit `auto` track sizes
           to the widest unbreakable child (a long e-mail in the mobile bar) and the whole page scrolls sideways. */}
       <div className={cn("grid grid-cols-1 gap-4 lg:h-full lg:min-h-0 lg:gap-6", dockInspector ? "lg:grid-cols-[auto_minmax(0,1fr)_360px]" : "lg:grid-cols-[auto_minmax(0,1fr)]")}>
@@ -396,6 +433,7 @@ function Shell() {
           <DriveRail
             onNewFolder={() => store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId })}
             onUpload={() => fileInputRef.current?.click()}
+            onUploadFolder={() => folderInputRef.current?.click()}
           />
         </div>
         <FadeSwap k={paneKey} className="min-w-0 lg:h-full lg:min-h-0">
@@ -430,7 +468,7 @@ function Shell() {
               refreshing={refreshing}
               listError={listError}
               onUpload={() => fileInputRef.current?.click()}
-              onDropFiles={(files) => void store.getState().uploadFiles(files)}
+              onDropTransfer={onDropTransfer}
             />
             {nextPageToken && !listLoading && (
               <div className="p-3 text-center">
@@ -456,6 +494,7 @@ function Shell() {
         onClose={() => setMobileNavOpen(false)}
         onNewFolder={() => { setMobileNavOpen(false); store.getState().openDialog({ kind: "newFolder", parentId: currentFolderId }); }}
         onUpload={() => { setMobileNavOpen(false); fileInputRef.current?.click(); }}
+        onUploadFolder={() => { setMobileNavOpen(false); folderInputRef.current?.click(); }}
       />
 
       {/* Inspector on narrow screens — a right drawer on tablets, a bottom sheet on phones, both with a
@@ -521,6 +560,7 @@ function Shell() {
       {dialog?.kind === "share" && <ShareModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "rename-bulk" && <BulkRenameModal ids={dialog.ids} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "revisions" && <RevisionsModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
+      {dialog?.kind === "folderColor" && <ChangeFolderColorModal node={dialog.node} onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "empty-trash" && <EmptyTrashModal onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "cleanup" && <CleanupModal onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} list={visible} onClose={() => store.getState().setPreview(null)} />}
@@ -553,7 +593,7 @@ function MobileDriveBar({ onOpenNav, onOpenPalette }: { onOpenNav: () => void; o
   );
 }
 
-function MobileRailDrawer({ open, onClose, onNewFolder, onUpload }: { open: boolean; onClose: () => void; onNewFolder: () => void; onUpload: () => void }) {
+function MobileRailDrawer({ open, onClose, onNewFolder, onUpload, onUploadFolder }: { open: boolean; onClose: () => void; onNewFolder: () => void; onUpload: () => void; onUploadFolder?: () => void }) {
   useBodyScrollLock(open);
   useEffect(() => {
     if (!open) return;
@@ -583,7 +623,7 @@ function MobileRailDrawer({ open, onClose, onNewFolder, onUpload }: { open: bool
             transition={{ duration: DUR.slow, ease: EASE.emphasized }}
             className="fixed inset-y-0 left-0 z-40 w-[84vw] max-w-[300px] p-2 pb-[calc(0.5rem+var(--safe-bottom))] pt-[calc(0.5rem+var(--safe-top))] lg:hidden"
           >
-            <DriveRail variant="drawer" onNavigate={onClose} onNewFolder={onNewFolder} onUpload={onUpload} />
+            <DriveRail variant="drawer" onNavigate={onClose} onNewFolder={onNewFolder} onUpload={onUpload} onUploadFolder={onUploadFolder} />
             {/* An explicit close control (the scrim alone is not discoverable); sits on the drawer's edge. */}
             <Button variant="secondary" size="icon" onClick={onClose} aria-label="Close menu" className="absolute -right-12 top-[calc(0.75rem+var(--safe-top))] shadow-[var(--shadow-pop)]">
               <X size={18} />
@@ -624,6 +664,8 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
       }
     }
     if (node.capabilities?.canRename !== false) a.push({ label: "Rename", icon: Pencil, shortcut: "F2", onClick: () => ctx.setRenamingId(node.id) });
+    // Change folder color after creation — the full Google Drive palette, applied in place.
+    if (node.isFolder && node.capabilities?.canEdit !== false) a.push({ label: "Change color…", icon: Palette, onClick: () => s.openDialog({ kind: "folderColor", node }) });
     if (node.capabilities?.canShare !== false) a.push({ label: "Share…", icon: Share2, onClick: () => s.openDialog({ kind: "share", node }) });
     if (node.isFolder) a.push({ label: "Make a copy", icon: Copy, onClick: () => void s.copyFolder(node.id) });
     else {
@@ -636,6 +678,13 @@ function buildMenuActions(node: DriveNode, ids: string[], view: DriveView, ctx: 
   a.push({ label: "Move to…", icon: CornerUpRight, onClick: () => s.openDialog({ kind: "move", ids }) });
   a.push({ label: many ? `Move ${ids.length} to trash` : "Move to trash", icon: Trash2, danger: true, separatorBefore: true, onClick: () => s.openDialog({ kind: "delete", ids, permanent: false }) });
   return a;
+}
+
+/** Human direction label for the active sort — reads naturally per key (Newest/Largest/A→Z). */
+function sortDirLabel(key: SortKey, dir: "asc" | "desc"): string {
+  if (key === "created" || key === "modified") return dir === "desc" ? "Newest" : "Oldest";
+  if (key === "size") return dir === "desc" ? "Largest" : "Smallest";
+  return dir === "asc" ? "A→Z" : "Z→A";
 }
 
 /* ── live-sync status pill ── */
@@ -733,9 +782,11 @@ function MoreToLoadNotice() {
   const nextPageToken = useDriveV2((s) => s.nextPageToken);
   const loadingAll = useDriveV2((s) => s.loadingAll);
   const listLoading = useDriveV2((s) => s.listLoading);
-  // A name sort is the browse default; sorting by size/modified/type implies "across everything",
-  // where an incomplete ordering is actively wrong (e.g. "largest" showing only page 1's largest).
-  const sortMatters = sortKey === "size" || sortKey === "modified" || sortKey === "kind";
+  // Sorting by a value (size/modified/created/type) implies "across everything", where an incomplete
+  // ordering is actively wrong (e.g. "largest" or "newest" showing only page 1's). A name sort is the
+  // one that reads fine page-by-page. (My Drive is fetched already server-ordered, so page 1 does hold
+  // the true top items there — but recent/starred/search etc. are not, so still offer "Load all".)
+  const sortMatters = sortKey === "size" || sortKey === "modified" || sortKey === "kind" || sortKey === "created";
   if (!nextPageToken || listLoading || (!filterKind && !sortMatters)) return null;
   const msg = filterKind
     ? "This filter only covers the items loaded so far — matches on later pages aren't shown yet."
@@ -776,7 +827,7 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
     return () => window.clearTimeout(t);
   }, [q, view]);
 
-  const SORTS: { k: SortKey; label: string }[] = [{ k: "name", label: "Name" }, { k: "modified", label: "Last modified" }, { k: "size", label: "Size" }, { k: "kind", label: "Type" }];
+  const SORTS: { k: SortKey; label: string }[] = [{ k: "created", label: "Recently uploaded" }, { k: "modified", label: "Last modified" }, { k: "name", label: "Name" }, { k: "size", label: "Size" }, { k: "kind", label: "Type" }];
   const FILTERS: { k: FilterKind | null; label: string }[] = [
     { k: null, label: "All items" }, { k: "folder", label: "Folders" }, { k: "doc", label: "Documents" }, { k: "image", label: "Images" }, { k: "video", label: "Videos" }, { k: "pdf", label: "PDFs" }, { k: "audio", label: "Audio" }, { k: "archive", label: "Archives" },
   ];
@@ -840,7 +891,7 @@ function DriveToolbar({ orderedIds }: { orderedIds: string[] }) {
         <MenuLabel>Sort by</MenuLabel>
         {SORTS.map((s) => (
           <MenuItem key={s.k} icon={prefs.sortKey === s.k ? Check : undefined} onClick={() => useDriveV2.getState().setSort(s.k)}>
-            {s.label}{prefs.sortKey === s.k ? ` (${prefs.sortDir === "asc" ? "A→Z" : "Z→A"})` : ""}
+            {s.label}{prefs.sortKey === s.k ? ` (${sortDirLabel(s.k, prefs.sortDir)})` : ""}
           </MenuItem>
         ))}
       </Menu>
@@ -1096,7 +1147,7 @@ function useMarqueeSelect(scrollRef: RefObject<HTMLDivElement | null>) {
 
 /* ── content area (grid/list + states + drop) ── */
 function DriveContentArea({
-  view, visible, layout, selection, busyIds, renamingId, handlers, orderedIds, listLoading, refreshing, listError, onUpload, onDropFiles,
+  view, visible, layout, selection, busyIds, renamingId, handlers, orderedIds, listLoading, refreshing, listError, onUpload, onDropTransfer,
 }: {
   view: DriveView;
   visible: DriveNode[];
@@ -1110,7 +1161,7 @@ function DriveContentArea({
   refreshing: boolean;
   listError: string | null;
   onUpload: () => void;
-  onDropFiles: (files: File[]) => void;
+  onDropTransfer: (dt: DataTransfer) => void;
 }) {
   const [drag, setDrag] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1208,7 +1259,7 @@ function DriveContentArea({
       onKeyDown={onGridKeyDown}
       onDragOver={canDrop ? (e) => { if (hasExternalFiles(e) && !hasDriveDrag(e)) { e.preventDefault(); setDrag(true); } } : undefined}
       onDragLeave={canDrop ? (e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDrag(false); } : undefined}
-      onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); const files = Array.from(e.dataTransfer.files); if (files.length) onDropFiles(files); } : undefined}
+      onDrop={canDrop ? (e) => { if (!hasExternalFiles(e) || hasDriveDrag(e)) return; e.preventDefault(); setDrag(false); onDropTransfer(e.dataTransfer); } : undefined}
       // `overflow-x-clip` (not hidden) below lg: it clips without turning the div into a scroll box.
       className={cn("relative min-h-[360px] overflow-x-clip rounded-[var(--radius-card)] lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:overflow-x-hidden", drag && "outline-2 -outline-offset-2 outline-dashed outline-primary")}
     >

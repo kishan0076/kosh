@@ -15,6 +15,75 @@ const BODY = "min-h-0 flex-1 overflow-y-auto";
 
 const INVALID = /[/\u0000-\u001f]/; // no slash, no control chars
 
+/**
+ * The Google Drive folder-color palette rendered as selectable swatches. `value` is the chosen hex
+ * (null = the default, no explicit color). Shared by the create-folder modal, the change-color modal,
+ * and the details inspector so the picker looks and behaves identically everywhere.
+ * Each swatch is a 24px dot inside a 32px (40px on touch) hit box — the dots keep their spacing.
+ */
+export function FolderColorSwatches({ value, onPick, includeDefault = false }: { value: string | null; onPick: (hex: string | null) => void; includeDefault?: boolean }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {includeDefault && (
+        <button onClick={() => onPick(null)} className="pressable grid h-8 w-8 place-items-center [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10" aria-label="Default color" aria-pressed={value === null}>
+          <span className={cn("grid h-6 w-6 place-items-center rounded-full border", value === null ? "border-foreground" : "border-border")}>
+            <Folder size={13} className="text-muted" />
+          </span>
+        </button>
+      )}
+      {FOLDER_COLORS.map((c) => (
+        <button
+          key={c.hex}
+          onClick={() => onPick(c.hex)}
+          aria-label={c.name}
+          title={c.name}
+          aria-pressed={value === c.hex}
+          className="pressable grid h-8 w-8 place-items-center [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+        >
+          <span
+            // The one sanctioned raw-hex spot: Google Drive's own folder-color palette.
+            style={{ backgroundColor: c.hex }}
+            className={cn("grid h-6 w-6 place-items-center rounded-full ring-offset-2 ring-offset-surface-2 transition-shadow", value === c.hex && "ring-2 ring-foreground")}
+          >
+            {value === c.hex && <Check size={13} className="text-white" />}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ── Change folder color (post-creation) ── */
+export function ChangeFolderColorModal({ node, onClose }: { node: DriveNode; onClose: () => void }) {
+  const updateMeta = useDriveV2((s) => s.updateMeta);
+  const current = node.folderColorRgb ?? null;
+  // Click-to-apply (like Google Drive's color menu): pick a swatch → optimistic update → close.
+  const pick = (hex: string | null) => {
+    if (hex && hex !== current) void updateMeta(node.id, { folderColorRgb: hex });
+    onClose();
+  };
+  return (
+    <Modal open onClose={onClose} className="max-w-sm" labelledBy="fc-color-title">
+      <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft">
+          <Folder size={20} style={{ color: current || undefined }} className={cn(!current && "text-primary")} />
+        </span>
+        <div className="min-w-0">
+          <h2 id="fc-color-title" className="text-[15px] font-semibold">Folder color</h2>
+          <p className="truncate text-[12px] text-muted">{node.name}</p>
+        </div>
+      </div>
+      <div className={cn(BODY, "px-5 py-4")}>
+        <FolderColorSwatches value={current} onPick={pick} />
+        <p className="mt-3 text-[11.5px] text-faint">Pick a color to apply it right away.</p>
+      </div>
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3.5">
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ── Create folder ── */
 export function CreateFolderModal({ parentId, onClose }: { parentId: string; onClose: () => void }) {
   const accountId = useDriveV2((s) => s.accountId);
@@ -91,31 +160,7 @@ export function CreateFolderModal({ parentId, onClose }: { parentId: string; onC
           <div className="space-y-3 rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
             <div>
               <span className="mb-1.5 block text-[12px] font-medium text-muted">Color</span>
-              {/* Each swatch is a 24px dot inside a 32px (40px on touch) hit box — the dots keep their spacing. */}
-              <div className="flex flex-wrap gap-1">
-                <button onClick={() => setColor(null)} className="pressable grid h-8 w-8 place-items-center [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10" aria-label="Default color" aria-pressed={color === null}>
-                  <span className={cn("grid h-6 w-6 place-items-center rounded-full border", color === null ? "border-foreground" : "border-border")}>
-                    <Folder size={13} className="text-muted" />
-                  </span>
-                </button>
-                {FOLDER_COLORS.map((c) => (
-                  <button
-                    key={c.hex}
-                    onClick={() => setColor(c.hex)}
-                    aria-label={c.name}
-                    aria-pressed={color === c.hex}
-                    className="pressable grid h-8 w-8 place-items-center [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
-                  >
-                    <span
-                      // The one sanctioned raw-hex spot: Google Drive's own folder-color palette.
-                      style={{ backgroundColor: c.hex }}
-                      className={cn("grid h-6 w-6 place-items-center rounded-full ring-offset-2 ring-offset-surface-2 transition-shadow", color === c.hex && "ring-2 ring-foreground")}
-                    >
-                      {color === c.hex && <Check size={13} className="text-white" />}
-                    </span>
-                  </button>
-                ))}
-              </div>
+              <FolderColorSwatches value={color} onPick={setColor} includeDefault />
             </div>
             <div>
               <label htmlFor="cf-desc" className="mb-1.5 block text-[12px] font-medium text-muted">Description <span className="text-faint">(optional)</span></label>

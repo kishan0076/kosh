@@ -7,7 +7,8 @@
 export const DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 
 export type DriveKind = "folder" | "doc" | "sheet" | "slide" | "image" | "video" | "audio" | "pdf" | "archive" | "other";
-export type DriveSortKey = "name" | "modified" | "size" | "kind";
+// "created" orders by upload/creation time (Drive's createdTime) — the "recently uploaded" sort.
+export type DriveSortKey = "name" | "modified" | "size" | "kind" | "created";
 export type DriveSortDir = "asc" | "desc";
 
 /** Classify a node into a coarse kind from its mime type (folders first). */
@@ -30,6 +31,7 @@ export interface SortableNode {
   isFolder: boolean;
   mimeType?: string;
   modifiedTime?: string;
+  createdTime?: string;
   size?: number;
 }
 
@@ -47,6 +49,9 @@ export function sortDriveNodes<T extends SortableNode>(nodes: T[], key: DriveSor
     let c = 0;
     if (key === "name") c = nameCollator.compare(a.name, b.name);
     else if (key === "modified") c = (a.modifiedTime ?? "").localeCompare(b.modifiedTime ?? "");
+    // "created" = upload time. RFC3339 timestamps sort lexicographically; a missing time sorts first
+    // ascending (so newest-first — the default — surfaces real uploads above metadata-less placeholders).
+    else if (key === "created") c = (a.createdTime ?? "").localeCompare(b.createdTime ?? "");
     else if (key === "size") c = (a.size ?? 0) - (b.size ?? 0);
     // Kind sort tiebreaks by name using the SAME natural/numeric collator as the name sort, so within a
     // kind "file2" precedes "file10" (consistent with every other name ordering in the app).

@@ -9,6 +9,7 @@ import { useUi, type Toast } from "./ui";
 import { parseDriveSearch, dedupeDriveActivity, parseTags, normalizeTag, serializeTags, TAG_PROP_KEY, isNativeGoogleDoc, driveExportFormats } from "@kosh/shared";
 import { saveBlob } from "@/lib/download";
 import { makeZip, uniqueName, type ZipEntry } from "@/lib/zip";
+import type { UploadItem } from "@/lib/dropUpload";
 
 /** Push a toast without a React hook (store actions run outside components). */
 function pushToast(t: Omit<Toast, "id">): void {
@@ -21,7 +22,7 @@ function toastErr(message: string): void {
 export type DriveView = "myDrive" | "recent" | "starred" | "trash" | "shared" | "search";
 export type Layout = "grid" | "list";
 export type Density = "comfortable" | "compact";
-export type SortKey = "name" | "modified" | "size" | "kind";
+export type SortKey = "name" | "modified" | "size" | "kind" | "created";
 export type SortDir = "asc" | "desc";
 export type FilterKind = "folder" | "doc" | "image" | "video" | "pdf" | "audio" | "archive";
 
@@ -39,6 +40,7 @@ export type Dialog =
   | { kind: "share"; node: DriveNode }
   | { kind: "rename-bulk"; ids: string[] }
   | { kind: "revisions"; node: DriveNode }
+  | { kind: "folderColor"; node: DriveNode }
   | { kind: "empty-trash" }
   | { kind: "cleanup" }
   | null;
@@ -207,6 +209,9 @@ interface DriveV2State {
   /** Drop cached folder views so the next navigation refetches (used after out-of-band mutations). */
   invalidateViews: () => void;
   uploadFiles: (files: File[]) => Promise<void>;
+  /** Upload a dropped/picked folder tree — recreates the folder structure in Drive, then uploads each
+   *  file into its correct parent (preserving subfolders and empty folders). */
+  uploadDropped: (items: UploadItem[]) => Promise<void>;
   downloadRevision: (fileId: string, revId: string, filename: string) => Promise<void>;
   /** Download a file to disk: binary via alt=media, native Google docs auto-exported to their default format. */
   downloadNode: (id: string) => Promise<void>;
@@ -253,18 +258,34 @@ const MAX_SSE_FAILURES = 4; // SSE errors without a STABLE open → give up, fal
 const SSE_STABLE_MS = 30_000; // a stream open at least this long counts as healthy (resets the budget)
 
 const PREFS_KEY = "kosh.driveV2.prefs";
-const DEFAULT_PREFS: ViewPrefs = { layout: "grid", density: "comfortable", sortKey: "name", sortDir: "asc", filterKind: null };
+// Default to "recently uploaded first" (createdTime desc) — the same as Google Drive surfacing new items
+// at the top, so a fresh upload is visible without scrolling.
+const DEFAULT_PREFS: ViewPrefs = { layout: "grid", density: "comfortable", sortKey: "created", sortDir: "desc", filterKind: null };
+// Bump when a new default sort should be applied ONCE to existing users. Stored alongside the prefs (not
+// part of ViewPrefs) so a returning user is moved onto the new default a single time, then their own
+// later choice is respected.
+const PREFS_SORT_VERSION = 2;
 function loadPrefs(): ViewPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    return raw ? { ...DEFAULT_PREFS, ...JSON.parse(raw) } : DEFAULT_PREFS;
+    if (!raw) return DEFAULT_PREFS;
+    const { sortV: version = 0, ...saved } = JSON.parse(raw) as Partial<ViewPrefs> & { sortV?: number };
+    const prefs: ViewPrefs = { ...DEFAULT_PREFS, ...saved };
+    // One-time migration to the newest-first default: users whose prefs predate this marker are moved
+    // onto it once (and it's persisted), so the "latest uploaded on top" default reaches them too.
+    if (version < PREFS_SORT_VERSION) {
+      prefs.sortKey = DEFAULT_PREFS.sortKey;
+      prefs.sortDir = DEFAULT_PREFS.sortDir;
+      savePrefs(prefs);
+    }
+    return prefs;
   } catch {
     return DEFAULT_PREFS;
   }
 }
 function savePrefs(p: ViewPrefs) {
   try {
-    localStorage.setItem(PREFS_KEY, JSON.stringify(p));
+    localStorage.setItem(PREFS_KEY, JSON.stringify({ ...p, sortV: PREFS_SORT_VERSION }));
   } catch {
     /* private mode — ignore */
   }
@@ -321,6 +342,24 @@ function saveNotifyPref(on: boolean) {
 /** The folder currently browsed: the deepest breadcrumb, else the space root (Shared Drive id or "root"). */
 const currentFolderId = (path: { id: string }[], spaceId: string | null = null) => path.at(-1)?.id ?? spaceId ?? "root";
 
+/**
+ * Translate the client sort pref into a Drive API `orderBy` for the folder listing, so a big folder
+ * (>1 page) arrives already globally ordered — page 1 then really holds the newest/largest items, not
+ * just the newest of an alphabetical first page. The client still re-sorts loaded nodes (folders-first)
+ * on top of this, so the two orderings agree. "kind" has no Drive field → undefined (server default),
+ * and the client sort handles it over the loaded set.
+ */
+function driveOrderBy(key: SortKey, dir: SortDir): string | undefined {
+  const d = dir === "desc" ? " desc" : "";
+  switch (key) {
+    case "created": return `folder,createdTime${d}`;
+    case "modified": return `folder,modifiedTime${d}`;
+    case "size": return `folder,quotaBytesUsed${d}`; // folders report 0 bytes; the `folder` key keeps them first
+    case "name": return `folder,name_natural${d}`;
+    default: return undefined; // "kind": Drive has no matching field
+  }
+}
+
 /** Parse a search box query with operators (type: owner: before: after: is:starred) into API params. */
 export function parseSearch(query: string, ownerMe?: string): SearchParams {
   return parseDriveSearch(query, ownerMe); // shared, unit-tested (structurally identical to SearchParams)
@@ -332,6 +371,33 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const { accessToken, expiresIn } = await driveApi.mintToken(accountId);
     tokenCache = { accountId, token: accessToken, exp: Date.now() + expiresIn * 1000 };
     return accessToken;
+  }
+
+  /** Upload one file into `folderId`, tracking it as a tray task. Mints a fresh (cached) token per file so
+   *  a long multi-file / folder upload survives token expiry. Shared by uploadFiles + uploadDropped. */
+  async function uploadOneFile(accountId: string, file: File, folderId: string): Promise<void> {
+    const id = uid("up");
+    const control: ResumableControl = { paused: false, canceled: false };
+    uploadControls.set(id, control);
+    set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "uploading" }, ...s.uploads] }));
+    try {
+      const token = await ensureToken(accountId);
+      await resumableUpload({
+        accessToken: token,
+        file,
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        folderId,
+        control,
+        onProgress: (b) => set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: b } : u)) })),
+        getFreshToken: () => ensureToken(accountId),
+      });
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: u.size, status: "done" } : u)) }));
+    } catch (err) {
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "error", error: err instanceof Error ? err.message : "Upload failed" } : u)) }));
+    } finally {
+      uploadControls.delete(id);
+    }
   }
 
   function selectedAccount(): DriveAccount | undefined {
@@ -417,7 +483,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     set(sameContext ? { refreshing: true, listLoading: false, listError: null } : { listLoading: true, refreshing: false, listError: null });
     try {
       let result;
-      if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { driveId });
+      if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { driveId, orderBy: driveOrderBy(get().prefs.sortKey, get().prefs.sortDir) });
       else if (view === "recent") result = await driveV2Api.recent(accountId, { driveId });
       else if (view === "starred") result = await driveV2Api.starred(accountId, { driveId });
       else if (view === "trash") result = await driveV2Api.trash(accountId, { driveId });
@@ -1056,7 +1122,11 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     setDensity: (d) => set((s) => { const prefs = { ...s.prefs, density: d }; savePrefs(prefs); return { prefs }; }),
     setSort: (key) =>
       set((s) => {
-        const sortDir: SortDir = s.prefs.sortKey === key && s.prefs.sortDir === "asc" ? "desc" : "asc";
+        // Re-selecting the current key flips direction; picking a NEW key starts on the direction people
+        // expect — newest/largest first for date & size, A→Z for name & type (matching Google Drive).
+        const descFirst = key === "created" || key === "modified" || key === "size";
+        const sortDir: SortDir =
+          s.prefs.sortKey === key ? (s.prefs.sortDir === "asc" ? "desc" : "asc") : descFirst ? "desc" : "asc";
         const prefs = { ...s.prefs, sortKey: key, sortDir };
         savePrefs(prefs);
         return { prefs };
@@ -1423,28 +1493,54 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         toastErr("Couldn't start the upload — reconnect the account.");
         return;
       }
-      for (const file of files) {
-        const id = uid("up");
-        const control: ResumableControl = { paused: false, canceled: false };
-        uploadControls.set(id, control);
-        set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "uploading" }, ...s.uploads] }));
-        try {
-          await resumableUpload({
-            accessToken: token,
-            file,
-            name: file.name,
-            mimeType: file.type || "application/octet-stream",
-            folderId,
-            control,
-            onProgress: (b) => set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: b } : u)) })),
-            getFreshToken: () => ensureToken(accountId),
-          });
-          set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: u.size, status: "done" } : u)) }));
-        } catch (err) {
-          set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "error", error: err instanceof Error ? err.message : "Upload failed" } : u)) }));
-        } finally {
-          uploadControls.delete(id);
+      for (const file of files) await uploadOneFile(accountId, file, folderId);
+      invalidateFolderViews();
+      void get().loadQuota();
+      if (get().view === "myDrive") void load(true);
+    },
+
+    uploadDropped: async (items) => {
+      const accountId = get().accountId;
+      if (!accountId || !items.length) return;
+      // Pre-check auth once so a totally-unusable account shows the reconnect toast instead of N failed rows.
+      const token = await ensureToken(accountId).catch(() => null);
+      if (!token) {
+        toastErr("Couldn't start the upload — reconnect the account.");
+        return;
+      }
+      const rootId = currentFolderId(get().path, get().spaceId);
+      // Cache of created folder ids keyed by the joined relative path ("" = the drop target itself), so a
+      // deep tree creates each folder exactly once and every file lands under the right parent.
+      const dirIds = new Map<string, string>([["", rootId]]);
+      let folderError = false;
+      const ensureDir = async (dirs: string[]): Promise<string | null> => {
+        let key = "";
+        let parentId = rootId;
+        for (const seg of dirs) {
+          const nextKey = key ? `${key}/${seg}` : seg;
+          let id = dirIds.get(nextKey);
+          if (!id) {
+            try {
+              const created = await driveV2Api.createFolder(accountId, { name: seg, parentId });
+              id = created.file.id;
+              dirIds.set(nextKey, id);
+            } catch (err) {
+              // Surface the first failure only (avoid a toast storm), then skip anything under this path.
+              if (!folderError) { folderError = true; toastErr(err instanceof Error ? err.message : `Couldn't create folder "${seg}"`); }
+              return null;
+            }
+          }
+          key = nextKey;
+          parentId = id;
         }
+        return parentId;
+      };
+      // Ordered walk: ensureDir (cached) guarantees a parent exists before its children/files. A file-less
+      // item is an empty folder to preserve — ensureDir already created it, nothing more to do.
+      for (const item of items) {
+        const parentId = await ensureDir(item.dirs);
+        if (parentId == null) continue;
+        if (item.file) await uploadOneFile(accountId, item.file, parentId);
       }
       invalidateFolderViews();
       void get().loadQuota();

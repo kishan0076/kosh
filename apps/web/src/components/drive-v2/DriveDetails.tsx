@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, Share2, Sparkles, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Palette, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, Share2, Sparkles, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
 import { formatBytes, normalizeTag, parseTags, isNativeGoogleDoc, driveHasTextSource } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { NodeIcon, tagChipClass } from "./items";
+import { FolderColorSwatches } from "./modals";
 import { Button, Input, Skeleton, Spinner, Textarea } from "@/components/ui";
 import { SkeletonText } from "@/components/PageSkeleton";
 import { Markdown } from "@/components/markdown";
@@ -67,7 +68,7 @@ export function DriveDetails({
   onTrash: (node: DriveNode) => void;
   onPreview: (node: DriveNode) => void;
   onShare: (node: DriveNode) => void;
-  onUpdateMeta: (node: DriveNode, patch: { description?: string }) => void;
+  onUpdateMeta: (node: DriveNode, patch: { description?: string; folderColorRgb?: string }) => void;
   onSetTags: (node: DriveNode, tags: string[]) => void;
   onDownload: (node: DriveNode) => void;
 }) {
@@ -119,6 +120,10 @@ export function DriveDetails({
           {node.md5Checksum && <Fact label="Checksum" value={node.md5Checksum.slice(0, 12) + "…"} />}
         </div>
 
+        {node.isFolder && node.capabilities?.canEdit !== false && (
+          <FolderColorRow key={`color-${node.id}`} node={node} onPick={(hex) => onUpdateMeta(node, { folderColorRgb: hex })} />
+        )}
+
         <TagsEditor key={`tags-${node.id}`} node={node} onSetTags={(tags) => onSetTags(node, tags)} />
 
         <NotesEditor key={node.id} node={node} onSave={(desc) => onUpdateMeta(node, { description: desc })} />
@@ -139,6 +144,18 @@ export function DriveDetails({
           <p className="text-[12.5px] text-muted">{node.shared ? "Shared with others." : "Private to you."} {node.ownedByMe ? "You own this." : ""}</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Folder-only: change its color in place from the full Drive palette (persists to folderColorRgb). */
+function FolderColorRow({ node, onPick }: { node: DriveNode; onPick: (hex: string) => void }) {
+  const current = node.folderColorRgb ?? null;
+  return (
+    <div className="border-t border-border px-4 py-3">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint"><Palette size={12} /> Color</div>
+      {/* No "default" swatch here — the picker only sets a color (reset lives at creation time). */}
+      <FolderColorSwatches value={current} onPick={(hex) => { if (hex) onPick(hex); }} />
     </div>
   );
 }
