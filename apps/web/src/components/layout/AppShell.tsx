@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { WifiOff } from "lucide-react";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { Sidebar } from "./Sidebar";
@@ -141,9 +141,7 @@ export function AppShell() {
               /* A page crash shows an in-place recovery card (keeping the shell) instead of white-screening;
                  the resetKey clears it automatically once the user navigates elsewhere. */
               <ErrorBoundary resetKey={location.pathname + location.search}>
-                <PageTransition>
-                  <Outlet />
-                </PageTransition>
+                <PageTransition />
               </ErrorBoundary>
             )}
           </div>
