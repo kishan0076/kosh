@@ -14,6 +14,7 @@ import { refreshAccessToken } from "./googleDrive.js";
  * retries. Single-process, like the push hub.
  */
 const cache = new Map<string, { token: string; exp: number; fp: string }>();
+const inflight = new Map<string, Promise<string>>(); // account → in-progress refresh (single-flight)
 const SKEW_MS = 60_000; // refresh a minute early to avoid using a token that expires mid-request
 const fingerprint = (refreshToken: string) => createHash("sha256").update(refreshToken).digest("hex");
 
@@ -21,9 +22,21 @@ export async function accessTokenFor(accountId: string, refreshToken: string): P
   const fp = fingerprint(refreshToken);
   const hit = cache.get(accountId);
   if (hit && hit.fp === fp && hit.exp > Date.now() + SKEW_MS) return hit.token;
-  const { accessToken, expiresIn } = await refreshAccessToken(refreshToken);
-  cache.set(accountId, { token: accessToken, exp: Date.now() + expiresIn * 1000, fp });
-  return accessToken;
+  // Single-flight: when a token goes stale the client often fires several calls at once (and each may
+  // retry after a 401) — coalesce their refreshes into one round-trip instead of a refresh storm.
+  const pending = inflight.get(accountId);
+  if (pending) return pending;
+  const p = (async () => {
+    const { accessToken, expiresIn } = await refreshAccessToken(refreshToken);
+    cache.set(accountId, { token: accessToken, exp: Date.now() + expiresIn * 1000, fp });
+    return accessToken;
+  })();
+  inflight.set(accountId, p);
+  try {
+    return await p;
+  } finally {
+    inflight.delete(accountId); // never cache a failure — the next call retries
+  }
 }
 
 /** Drop a cached token (e.g. after a 401 from a Drive call) so the next request re-mints. */
