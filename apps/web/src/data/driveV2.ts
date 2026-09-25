@@ -371,11 +371,15 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
   function isReconnect(err: unknown): boolean {
     return err instanceof ApiError && err.code === "NEEDS_RECONNECT";
   }
-  function offerReconnect(): void {
-    set({ scopeOk: false }); // quiesces loads + sync and flips the page to the reconnect gate
+  /** Offer a one-click reconnect. `gate` flips the whole module to the reconnect screen (used when the
+   *  MAIN view can't load — the account is genuinely unusable). A SUB-action failure (e.g. search) passes
+   *  gate:false: it still surfaces the toast so the user can reconnect if they want, but does NOT tear down
+   *  a session they were browsing fine a moment ago — a single failing search must never lock the user out. */
+  function offerReconnect(gate = true): void {
+    if (gate) set({ scopeOk: false }); // quiesces loads + sync and flips the page to the reconnect gate
     useUi.getState().toast({
-      message: "Google access expired",
-      description: "Reconnect your account to keep using Drive.",
+      message: "Google access needs reconnecting",
+      description: gate ? "Reconnect your account to keep using Drive." : "Couldn't reach Google for that request — reconnect if it keeps happening.",
       tone: "danger",
       action: { label: "Reconnect", onClick: () => { void startConnect("google", "drive-v2"); } },
       duration: 8000,
@@ -432,7 +436,12 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (view === "myDrive") putFolderCache(key, { nodes: result.files, nextPageToken: result.nextPageToken, ts: Date.now() });
     } catch (err) {
       if (myseq !== loadSeq) return;
-      if (isReconnect(err)) { set({ listLoading: false, refreshing: false }); offerReconnect(); return; }
+      if (isReconnect(err)) {
+        // A failed SEARCH must not gate the whole module — the user was browsing fine, so show a search
+        // error + a reconnect offer instead of tearing down the session. Main-view failures still gate.
+        if (view === "search") { set({ listLoading: false, refreshing: false, listError: err instanceof Error && err.message ? err.message : "Couldn't run this search. Your Google session may need reconnecting." }); offerReconnect(false); return; }
+        set({ listLoading: false, refreshing: false }); offerReconnect(); return;
+      }
       const msg = err instanceof Error ? err.message : "Couldn't load your Drive.";
       // A background refresh that fails keeps the stale listing on screen (toast, don't blank the grid);
       // a first load with nothing shown falls through to the full error state.

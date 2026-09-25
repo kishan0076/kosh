@@ -72,7 +72,10 @@ const THROTTLE_REASONS = new Set([
  * - 429 / anything else → GoogleTransientError (retry).
  */
 function driveHttpError(status: number, ctx: string, reason?: string, message?: string, domain?: string): Error {
-  if (status === 401) return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
+  // Keep Google's own status/reason/message in the surfaced text — it's the only way to tell a stale-token
+  // 401 from a scope-403 from a bad query in the field, since we can't see the user's Google account here.
+  const detail = [reason, message].filter(Boolean).join(": ") || `HTTP ${status}`;
+  if (status === 401) return new GoogleAuthError(`${ctx} — Google rejected the access token (${detail}); re-mint and retry.`);
   if (status === 429) return new GoogleTransientError(`${ctx} — Drive is rate-limiting; retry shortly.`);
   if (status === 403) {
     // Throttling (per-user QPS / daily quota) is transient — surface as retriable, never "reconnect".
@@ -82,10 +85,12 @@ function driveHttpError(status: number, ctx: string, reason?: string, message?: 
     if (reason && PERMISSION_REASONS.has(reason)) {
       return new GoogleForbiddenError(`${ctx} — you don't have permission to do that${message ? `: ${message}` : "."}`);
     }
-    return new GoogleAuthError(`${ctx} — reconnect the Google account (V2 needs full Drive access).`);
+    // Any other 403 (e.g. insufficientScopes / ACCESS_TOKEN_SCOPE_INSUFFICIENT) needs a broader-scope
+    // reconnect. Carry the reason so "why does search reconnect" is answerable from the message alone.
+    return new GoogleAuthError(`${ctx} — Google denied this request (${detail}); reconnect the account with full Drive access.`);
   }
   if (status === 400) return new GoogleBadRequestError(`${ctx}${message ? `: ${message}` : "."}`);
-  return new GoogleTransientError(`${ctx} (${status}).`);
+  return new GoogleTransientError(`${ctx} (${detail}).`);
 }
 
 export interface DriveNode {
