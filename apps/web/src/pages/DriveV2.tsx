@@ -239,7 +239,8 @@ function Shell() {
   // Global ⌘K / Ctrl+K opens the command palette; "?" opens the shortcuts sheet.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setPaletteOpen((v) => !v); return; }
+      // stopPropagation so the global shell ⌘K handler (AppShell) doesn't ALSO fire and stack a second palette.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); e.stopPropagation(); setPaletteOpen((v) => !v); return; }
       // "?" (Shift+/) — but never while typing in a field or with a modifier held.
       if (e.key === "?" && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const t = e.target as HTMLElement | null;

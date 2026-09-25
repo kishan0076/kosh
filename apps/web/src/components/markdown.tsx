@@ -22,7 +22,10 @@ function OverflowScroller({ className, children }: { className?: string; childre
       ro.disconnect();
       el.removeEventListener("scroll", check);
     };
-  }, [children]);
+    // `children` is a fresh element every parent render; the ResizeObserver already tracks content/size
+    // changes, so keeping it out of deps avoids tearing down + rebinding the observer on every re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <div className="relative my-3">
       <div ref={ref} className={cn("max-w-full overflow-x-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]", className)}>

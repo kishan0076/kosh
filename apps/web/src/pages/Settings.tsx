@@ -142,7 +142,9 @@ export function Settings() {
     api
       .listApiKeys()
       .then(({ apiKeys }) => alive && setApiKeys(apiKeys))
-      .catch(() => {});
+      // On failure fall back to the empty state instead of an unrecoverable loading skeleton
+      // (apiKeys starts null in backend mode to show the skeleton until the fetch resolves).
+      .catch(() => alive && setApiKeys([]));
     return () => {
       alive = false;
     };

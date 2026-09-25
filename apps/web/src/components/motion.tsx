@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 import { DUR, EASE, fade, slideUp, staggerChild, staggerParent } from "@/lib/motion";
 
@@ -35,6 +35,9 @@ export function StaggerItem({ children, className }: { children: ReactNode; clas
 
 /** Height + fade collapse for expandable sections (accordions, inline detail). */
 export function Collapse({ open, children, className }: { open: boolean; children: ReactNode; className?: string }) {
+  // MotionConfig reducedMotion="user" only suppresses transform/layout, not height — snap the height tween
+  // ourselves so a reduced-motion user doesn't get the ~200ms grow on every toggle.
+  const reduce = useReducedMotion();
   return (
     <AnimatePresence initial={false}>
       {open && (
@@ -42,7 +45,7 @@ export function Collapse({ open, children, className }: { open: boolean; childre
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: "auto", opacity: 1 }}
           exit={{ height: 0, opacity: 0 }}
-          transition={{ duration: DUR.base, ease: EASE.standard }}
+          transition={{ duration: reduce ? 0 : DUR.base, ease: EASE.standard }}
           style={{ overflow: "hidden" }}
           className={className}
         >

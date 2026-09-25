@@ -27,7 +27,9 @@ export function useBottomStack(ref: RefObject<HTMLElement | null>) {
     const el = ref.current;
     if (!el) return;
     const root = document.documentElement;
-    const publish = () => root.style.setProperty("--bottom-stack", `${el.scrollHeight}px`);
+    // Publish 0 when the bar has no visible content (e.g. an empty upload/bulk stack that still has
+    // its own padding) so the Toaster isn't permanently lifted on pages that always mount the wrapper.
+    const publish = () => root.style.setProperty("--bottom-stack", el.firstElementChild ? `${el.scrollHeight}px` : "0px");
     publish();
     const ro = new ResizeObserver(publish);
     ro.observe(el);

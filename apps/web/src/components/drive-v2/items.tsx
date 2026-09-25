@@ -449,6 +449,8 @@ export function ListHeader() {
 /** Built on the `Skeleton` primitive, in the exact silhouette of FileCard/FileRow (two columns and a
  *  112px hero on phones, the two-line row below md) so the swap to real content doesn't shift layout. */
 export function DriveContentSkeleton({ layout }: { layout: "grid" | "list" }) {
+  // Match the virtualizer's row estimate (compact 40 / normal 48) so the skeleton→content swap doesn't jump.
+  const compact = useDriveV2((s) => s.prefs.density === "compact");
   if (layout === "grid") {
     return (
       <div role="status" aria-busy="true" aria-label="Loading" className="grid grid-cols-2 gap-4 py-2 sm:grid-cols-[repeat(auto-fill,minmax(176px,1fr))]">
@@ -466,7 +468,7 @@ export function DriveContentSkeleton({ layout }: { layout: "grid" | "list" }) {
     // pt matches the sticky ListHeader's height so rows land where the skeleton rows were.
     <div role="status" aria-busy="true" aria-label="Loading" className="space-y-0.5 pt-[34px]">
       {Array.from({ length: 12 }).map((_, i) => (
-        <div key={i} className="grid h-12 grid-cols-[minmax(0,1fr)_36px] items-center gap-3 px-2.5 md:h-11 md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]">
+        <div key={i} className={cn("grid grid-cols-[minmax(0,1fr)_36px] items-center gap-3 px-2.5 md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]", compact ? "h-10" : "h-12 md:h-11")}>
           <div className="flex items-center gap-2.5">
             <Skeleton className="h-8 w-8 rounded-[8px]" />
             <div className="flex flex-1 flex-col gap-1.5"><Skeleton className="h-3.5 w-1/3" /><Skeleton className="h-2.5 w-1/4 md:hidden" /></div>
