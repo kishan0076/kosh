@@ -17,6 +17,11 @@ import { useDriveV2, type DriveView } from "./driveV2";
 
 export const DRIVE_V2_BASE = "/drive-v2";
 
+/** True when a location lives inside the Drive V2 module (its base or a sub-route), not `/drive` etc. */
+function isDriveV2Path(pathname: string): boolean {
+  return pathname === DRIVE_V2_BASE || pathname.startsWith(`${DRIVE_V2_BASE}/`);
+}
+
 const VIEW_SLUG: Record<DriveView, string> = {
   myDrive: "my-drive",
   recent: "recent",
@@ -145,6 +150,10 @@ export function useDriveV2UrlSync(): void {
   // URL → store (deep-link, refresh, Back/forward). Declared FIRST so a cold deep-link is applied
   // before the outbound mirror could overwrite it.
   useEffect(() => {
+    // The Drive shell stays mounted through the route-exit transition (PageTransition's mode="wait").
+    // Ignore locations outside the module so navigating AWAY (to /skills, /library, …) isn't treated as
+    // a divergence and reconciled back to the Drive canonical URL — which would revert the navigation.
+    if (!isDriveV2Path(location.pathname)) return;
     const current = location.pathname + location.search;
     if (current === lastApplied.current) return; // our own push — already reflected in the store
     lastApplied.current = current;
@@ -166,6 +175,9 @@ export function useDriveV2UrlSync(): void {
   // store → URL. Suppressed while an inbound apply runs so the two directions never ping-pong.
   useEffect(() => {
     if (applying.current) return;
+    // Don't mirror the (always-Drive) store URL onto the address bar once the user has navigated out of
+    // the module but the shell is still unmounting — that would yank them back to /drive-v2.
+    if (!isDriveV2Path(location.pathname)) return;
     const current = location.pathname + location.search;
     if (desiredUrl === current) return;
     lastApplied.current = desiredUrl;
