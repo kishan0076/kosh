@@ -8,7 +8,7 @@ import { addSkillVersion, createSkillVersion, toClientSkill, type IncomingFile }
 import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
-import { decryptSecret } from "../auth/crypto.js";
+import { tryGithubToken } from "../integrations/githubToken.js";
 
 export const skillsRouter: Router = Router();
 const nowIso = () => new Date().toISOString();
@@ -105,8 +105,7 @@ skillsRouter.post(
     );
     if (!item?.github) throw notFound(`Save ${owner}/${repo} in Kosh first, then copy a skill from it.`);
 
-    const user = await getStore().users.findById(uid);
-    const token = decryptSecret(user?.githubToken) ?? null;
+    const token = await tryGithubToken(uid); // auto-refreshed; null degrades to the server/anon token
     const r = await enrichGithub(owner, repo, { token, prevSkillIndex: item.github.skillIndex, etag: undefined });
     if (!("ok" in r) || !r.ok) {
       res.status(502).json({ error: { code: "GITHUB_UNREACHABLE", message: "Couldn't reach GitHub to copy this skill." } });

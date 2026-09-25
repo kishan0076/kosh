@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { config } from "../config.js";
 import { getStore, type ServerUser } from "../db/index.js";
+import { aiAvailableForUser, providerCatalog } from "../integrations/aiProviders.js";
 
 /** Is this user the vault admin? A configured admin login is the only thing that grants access in a
  *  real deployment. The "any dev-login user is admin" convenience is fail-CLOSED: it applies ONLY in
@@ -40,7 +41,8 @@ export async function getOrCreateUser(p: GithubProfile): Promise<ServerUser> {
     storageQuota: 2 * 1024 * 1024 * 1024,
     githubBudget: { remaining: 5000, total: 5000, resetAt: now },
     aiSpendToday: 0,
-    aiSpendCap: 2,
+    aiSpendCap: config.ai.dailyCapUsd, // the operator-configured default (AI_DAILY_CAP_USD), not a hardcoded value
+    aiProvider: config.ai.defaultProvider,
     emailToken: newEmailToken(),
     createdAt: now,
     updatedAt: now,
@@ -60,6 +62,12 @@ export function publicUser(u: ServerUser) {
     githubBudget: u.githubBudget,
     aiSpendToday: u.aiSpendToday,
     aiSpendCap: u.aiSpendCap,
+    aiProvider: u.aiProvider ?? config.ai.defaultProvider,
+    aiModel: u.aiModel,
+    aiAvailable: aiAvailableForUser(u),
+    // Booleans only — the encrypted keys themselves never leave the server.
+    aiKeys: Object.fromEntries(Object.entries(u.aiKeys ?? {}).map(([k]) => [k, true])),
+    aiProviders: providerCatalog(),
     emailToken: u.emailToken,
     github: {
       connected: !!u.githubToken,

@@ -22,7 +22,7 @@ import {
   revokeToken,
 } from "../integrations/googleDrive.js";
 import { invalidateAccessToken } from "../integrations/driveTokenCache.js";
-import { aiConfigured } from "../integrations/claude.js";
+import { aiAvailable } from "../integrations/claude.js";
 
 export const driveRouter: Router = Router();
 
@@ -78,8 +78,8 @@ function requireConfigured(): void {
 driveRouter.get(
   "/drive/config",
   ah(async (req, res) => {
-    requireUser(req);
-    res.json({ configured: googleConfigured(), scope: driveScopes(), fullAccess: config.google.fullAccess, pushSync: !!config.google.webhookUrl, ai: aiConfigured() });
+    const uid = requireUser(req);
+    res.json({ configured: googleConfigured(), scope: driveScopes(), fullAccess: config.google.fullAccess, pushSync: !!config.google.webhookUrl, ai: await aiAvailable(uid) });
   }),
 );
 
@@ -95,6 +95,12 @@ driveRouter.get(
     const uid = requireUser(req);
     requireConfigured();
     const from = returnPathOf(req.query.from);
+    if (req.query.client === "mobile") {
+      // Native app: return the consent URL for the system browser; the callback comes back via kosh://.
+      const state = await signState(uid, OAUTH_PURPOSE, from, { client: "mobile" });
+      res.json({ url: driveAuthUrl(state) });
+      return;
+    }
     const state = await signState(uid, OAUTH_PURPOSE, from);
     res.redirect(driveAuthUrl(state));
   }),
@@ -105,15 +111,25 @@ driveRouter.get(
   "/drive/auth/callback",
   ah(async (req: Request, res) => {
     let returnPath = "drive"; // resolved from the signed state once verified; errors fall back to V1
-    const back = (params: Record<string, string>) => res.redirect(`${config.appUrl}/${returnPath}?${new URLSearchParams(params)}`);
+    let mobile = false; // a flow started by the native app returns to it via the deep link
+    const back = (params: Record<string, string>) =>
+      res.redirect(
+        mobile
+          ? `${config.mobileScheme}://connected?${new URLSearchParams({ provider: "google", ...params })}`
+          : `${config.appUrl}/${returnPath}?${new URLSearchParams(params)}`,
+      );
     try {
       const { code, state, error } = req.query as { code?: string; state?: string; error?: string };
       if (error) return back({ error });
       if (!code || !state) return back({ error: "missing_code" });
 
-      const uid = req.userId ?? null; // session cookie is sent on this top-level GET (sameSite=lax)
       const verified = await verifyState(state, OAUTH_PURPOSE);
-      if (!uid || !verified || verified.uid !== uid) return back({ error: "state_mismatch" });
+      if (!verified) return back({ error: "state_mismatch" });
+      mobile = verified.client === "mobile";
+      // Web: cookie session must match the state's user (CSRF). Mobile: no app cookie in the system
+      // browser — the short-lived state minted over the app's Bearer channel carries the identity.
+      const uid = mobile ? verified.uid : (req.userId ?? null);
+      if (!uid || verified.uid !== uid) return back({ error: "state_mismatch" });
       returnPath = returnPathOf(verified.from); // send the user back to the module they started in
 
       const tokens = await exchangeCode(code);

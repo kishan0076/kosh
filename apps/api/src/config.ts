@@ -14,6 +14,19 @@ export const config = {
 
   appUrl: env.APP_URL ?? "http://localhost:5173",
   apiUrl: env.API_URL ?? `http://localhost:${env.PORT ?? 8787}`,
+  // Every browser origin allowed to call the API with credentials: the web app, plus the native mobile
+  // app's WebView origins (Capacitor serves the bundle from capacitor://localhost on iOS and
+  // https://localhost on Android). APP_ORIGINS adds more (comma-separated), e.g. a preview deployment.
+  appOrigins: Array.from(
+    new Set([
+      env.APP_URL ?? "http://localhost:5173",
+      "capacitor://localhost",
+      "https://localhost",
+      ...(env.APP_ORIGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    ]),
+  ),
+  // Custom URL scheme the mobile app registers; OAuth flows started from the app return here.
+  mobileScheme: env.MOBILE_SCHEME || "kosh",
 
   // storage: mongo when a URI is set, else the in-memory/JSON adapter (runs anywhere)
   mongoUri: env.MONGODB_URI || null,
@@ -66,10 +79,31 @@ export const config = {
     webhookUrl: env.DRIVE_WEBHOOK_URL || null,
   },
 
-  anthropic: {
-    apiKey: env.ANTHROPIC_API_KEY || null,
-    model: env.ANTHROPIC_MODEL || "claude-haiku-4-5", // cheap bulk summaries/tags
+  // Multi-provider AI. The default provider + per-user selection live in Settings; users can bring their
+  // own key (encrypted) for any provider, and the server can supply fallback keys via these env vars.
+  // Most providers are OpenAI-compatible (one adapter); Anthropic uses its native SDK. See aiProviders.ts.
+  ai: {
     dailyCapUsd: Number(env.AI_DAILY_CAP_USD ?? 2),
+    defaultProvider: env.AI_DEFAULT_PROVIDER || "gemini", // free tier, no card — cheapest to start with
+    anthropicModel: env.ANTHROPIC_MODEL || null, // optional override of the anthropic default model
+    ollamaBaseUrl: env.OLLAMA_BASE_URL || "http://localhost:11434/v1", // local, keyless
+    keys: {
+      anthropic: env.ANTHROPIC_API_KEY || null,
+      gemini: env.GEMINI_API_KEY || null,
+      groq: env.GROQ_API_KEY || null,
+      cerebras: env.CEREBRAS_API_KEY || null,
+      sambanova: env.SAMBANOVA_API_KEY || null,
+      together: env.TOGETHER_API_KEY || null,
+      zai: env.ZAI_API_KEY || null,
+      openrouter: env.OPENROUTER_API_KEY || null,
+      mistral: env.MISTRAL_API_KEY || null,
+      deepseek: env.DEEPSEEK_API_KEY || null,
+      deepinfra: env.DEEPINFRA_API_KEY || null,
+      fireworks: env.FIREWORKS_API_KEY || null,
+      nvidia: env.NVIDIA_API_KEY || null,
+      huggingface: env.HUGGINGFACE_API_KEY || null,
+      openai: env.OPENAI_API_KEY || null,
+    } as Record<string, string | null>,
   },
 
   telegram: {

@@ -1,26 +1,55 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { useMeasure } from "@/lib/useMeasure";
 
-/* Smooth an array of [x,y] into a bezier path (Catmull-Rom → cubic). */
+/* Smooth an array of [x,y] into a bezier path — monotone cubic (Fritsch–Carlson), so the curve never
+   overshoots the data: a spike can't dip the line below the baseline (and through the axis labels)
+   the way Catmull-Rom did. */
 function smoothPath(points: [number, number][]): string {
-  if (points.length < 2) return points.length ? `M ${points[0]![0]} ${points[0]![1]}` : "";
+  const n = points.length;
+  if (n < 2) return n ? `M ${points[0]![0]} ${points[0]![1]}` : "";
+  const dx: number[] = [];
+  const slope: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const w = points[i + 1]![0] - points[i]![0];
+    dx.push(w);
+    slope.push(w === 0 ? 0 : (points[i + 1]![1] - points[i]![1]) / w);
+  }
+  // Tangents: secant average inside, zero at local extrema, then the Fritsch–Carlson limiter.
+  const t: number[] = [slope[0]!];
+  for (let i = 1; i < n - 1; i++) {
+    const a = slope[i - 1]!;
+    const b = slope[i]!;
+    t.push(a * b <= 0 ? 0 : (a + b) / 2);
+  }
+  t.push(slope[n - 2]!);
+  for (let i = 0; i < n - 1; i++) {
+    const m = slope[i]!;
+    if (m === 0) {
+      t[i] = 0;
+      t[i + 1] = 0;
+      continue;
+    }
+    const a = t[i]! / m;
+    const b = t[i + 1]! / m;
+    const s = a * a + b * b;
+    if (s > 9) {
+      const tau = 3 / Math.sqrt(s);
+      t[i] = tau * a * m;
+      t[i + 1] = tau * b * m;
+    }
+  }
   const d = [`M ${points[0]![0]} ${points[0]![1]}`];
-  for (let i = 0; i < points.length - 1; i++) {
-    const p0 = points[i === 0 ? 0 : i - 1]!;
-    const p1 = points[i]!;
-    const p2 = points[i + 1]!;
-    const p3 = points[i + 2 < points.length ? i + 2 : i + 1]!;
-    const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
-    const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
-    const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
-    const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
-    d.push(`C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${p2[0]} ${p2[1]}`);
+  for (let i = 0; i < n - 1; i++) {
+    const [x0, y0] = points[i]!;
+    const [x1, y1] = points[i + 1]!;
+    const h = dx[i]! / 3;
+    d.push(`C ${x0 + h} ${y0 + t[i]! * h} ${x1 - h} ${y1 - t[i + 1]! * h} ${x1} ${y1}`);
   }
   return d.join(" ");
 }
 
-/* ── Area trend chart with hover tooltip ────────────────────── */
+/* ── Area trend chart with hover/tap tooltip ────────────────── */
 export function AreaTrend({
   data,
   height = 180,
@@ -35,6 +64,8 @@ export function AreaTrend({
   const [ref, width] = useMeasure<HTMLDivElement>();
   const gid = useId().replace(/:/g, "");
   const [hover, setHover] = useState<number | null>(null);
+  // A tap has no "leave": the tooltip stays until the next tap lands outside the chart.
+  const touching = useRef(false);
 
   const padX = 8;
   const padTop = 14;
@@ -53,8 +84,18 @@ export function AreaTrend({
 
   const line = smoothPath(pts);
   const area = pts.length ? `${line} L ${pts.at(-1)![0]} ${padTop + innerH} L ${pts[0]![0]} ${padTop + innerH} Z` : "";
+  const end = pts.at(-1);
+  const last = data.at(-1);
+  // The end value sits above the highest of the last few points, so a recent spike can't run through it.
+  const endLabelY = end ? Math.max(10, Math.min(...pts.slice(-5).map((p) => p[1])) - 8) : 0;
 
-  const onMove = (e: React.MouseEvent<SVGSVGElement>) => {
+  // Label cadence follows the width so neighbours never touch; labels count back from the last
+  // point, so the latest date always shows and nothing lands right next to it.
+  const maxLabels = Math.max(2, Math.floor(innerW / 56));
+  const every = Math.ceil(data.length / maxLabels);
+
+  const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    touching.current = e.pointerType !== "mouse";
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     let nearest = 0;
@@ -68,6 +109,19 @@ export function AreaTrend({
     });
     setHover(nearest);
   };
+  const onLeave = () => {
+    if (!touching.current) setHover(null);
+  };
+
+  useEffect(() => {
+    if (hover == null || !touching.current) return;
+    const el = ref.current;
+    const off = (e: PointerEvent) => {
+      if (el && !el.contains(e.target as Node)) setHover(null);
+    };
+    window.addEventListener("pointerdown", off);
+    return () => window.removeEventListener("pointerdown", off);
+  }, [hover, ref]);
 
   const hp = hover != null ? pts[hover] : null;
   const hd = hover != null ? data[hover] : null;
@@ -75,7 +129,15 @@ export function AreaTrend({
   return (
     <div ref={ref} className="relative w-full" style={{ height }}>
       {width > 0 && (
-        <svg width={w} height={h} onMouseMove={onMove} onMouseLeave={() => setHover(null)} className="overflow-visible">
+        <svg
+          width={w}
+          height={h}
+          onPointerMove={onMove}
+          onPointerDown={onMove}
+          onPointerLeave={onLeave}
+          className="overflow-visible"
+          style={{ touchAction: "pan-y" }}
+        >
           <defs>
             <linearGradient id={`area-${gid}`} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={color} stopOpacity="0.28" />
@@ -86,21 +148,37 @@ export function AreaTrend({
           <line x1={padX} y1={padTop + innerH} x2={w - padX} y2={padTop + innerH} stroke="var(--line)" strokeWidth="1" />
           <path d={area} fill={`url(#area-${gid})`} />
           <path d={line} fill="none" stroke={color} strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
-          {/* end dot */}
-          {pts.length > 0 && <circle cx={pts.at(-1)![0]} cy={pts.at(-1)![1]} r="3.5" fill={color} />}
+          {/* end dot + its value, so a number is readable without hovering; a leader joins them when a
+              recent spike pushes the label up */}
+          {end && last && (
+            <g>
+              <circle cx={end[0]} cy={end[1]} r="3.5" fill={color} />
+              {end[1] - 8 > endLabelY + 4 && (
+                <line x1={end[0]} y1={endLabelY + 4} x2={end[0]} y2={end[1] - 8} stroke="var(--line-strong)" strokeWidth="1" strokeDasharray="2 2" />
+              )}
+              <text
+                x={end[0]}
+                y={endLabelY}
+                textAnchor="end"
+                className="fill-foreground"
+                style={{ fontSize: 11, fontWeight: 600 }}
+              >
+                {formatValue(last.value)}
+              </text>
+            </g>
+          )}
           {/* hover */}
           {hp && hd && (
             <g>
-              <line x1={hp[0]} y1={padTop - 6} x2={hp[0]} y2={padTop + innerH} stroke="var(--border-strong)" strokeWidth="1" strokeDasharray="3 3" />
+              <line x1={hp[0]} y1={padTop - 6} x2={hp[0]} y2={padTop + innerH} stroke="var(--line-strong)" strokeWidth="1" strokeDasharray="3 3" />
               <circle cx={hp[0]} cy={hp[1]} r="4.5" fill="var(--surface)" stroke={color} strokeWidth="2.5" />
             </g>
           )}
           {/* sparse x labels */}
           {data.map((d, i) => {
-            const every = Math.ceil(data.length / 6);
-            if (i % every !== 0 && i !== data.length - 1) return null;
+            if ((data.length - 1 - i) % every !== 0) return null;
             return (
-              <text key={i} x={pts[i]![0]} y={h - 6} textAnchor="middle" className="fill-faint" style={{ fontSize: 10 }}>
+              <text key={i} x={pts[i]![0]} y={h - 5} textAnchor="middle" className="fill-muted" style={{ fontSize: 11 }}>
                 {d.label}
               </text>
             );
@@ -109,7 +187,7 @@ export function AreaTrend({
       )}
       {hp && hd && (
         <div
-          className="pointer-events-none absolute z-10 -translate-x-1/2 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-center shadow-[var(--shadow-pop)]"
+          className="pointer-events-none absolute z-10 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-center shadow-[var(--shadow-pop)]"
           style={{ left: Math.min(Math.max(hp[0], 44), w - 44), top: Math.max(hp[1] - 52, 0) }}
         >
           <div className="text-[11px] text-muted">{hd.label}</div>
@@ -153,20 +231,21 @@ export function MiniBars({ data, height = 150 }: { data: { label: string; value:
   const w = Math.max(width, 40);
   const barW = (w - gap * (data.length - 1)) / data.length;
   const chartH = height - 22;
+  const headroom = 22; // room above the tallest bar for its value label
 
   return (
     <div ref={ref} className="w-full" style={{ height }}>
       {width > 0 && (
         <svg width={w} height={height}>
           {data.map((d, i) => {
-            const bh = Math.max(4, (d.value / max) * (chartH - 8));
+            const bh = Math.max(4, (d.value / max) * (chartH - headroom));
             const x = i * (barW + gap);
             const isPeak = i === peak && d.value > 0;
             return (
               <g key={i}>
                 <rect x={x} y={chartH - bh} width={barW} height={bh} rx="6" fill={isPeak ? "var(--primary)" : "var(--surface-3)"} />
                 {isPeak && (
-                  <text x={x + barW / 2} y={chartH - bh - 6} textAnchor="middle" className="fill-primary" style={{ fontSize: 11, fontWeight: 600 }}>
+                  <text x={x + barW / 2} y={chartH - bh - 6} textAnchor="middle" className="fill-primary" style={{ fontSize: 12, fontWeight: 600 }}>
                     {d.value}
                   </text>
                 )}
@@ -203,7 +282,6 @@ export function Gauge({ value, size = 168, label, sublabel, color = "var(--ok)" 
           strokeWidth={stroke}
           strokeLinecap="round"
           strokeDasharray={`${dash} ${circ}`}
-          style={{ transition: "stroke-dasharray 0.7s cubic-bezier(0.2,0.8,0.2,1)" }}
         />
         <text x={cx} y={cy - 6} textAnchor="middle" className="fill-foreground font-display" style={{ fontSize: 30, fontWeight: 700 }}>
           {label ?? `${pct}%`}

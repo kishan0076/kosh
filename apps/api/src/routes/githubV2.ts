@@ -1,11 +1,10 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
 import { PUBLISH_LIMITS, scanSecrets, isValidRepoName } from "@kosh/shared";
-import { getStore } from "../db/index.js";
 import { AppError, ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
-import { decryptSecret } from "../auth/crypto.js";
 import { GithubAuthError, RepoNameTakenError } from "../integrations/github.js";
+import { getValidGithubToken } from "../integrations/githubToken.js";
 import {
   commitFiles,
   createRepo,
@@ -36,10 +35,16 @@ import {
  */
 export const githubV2Router: Router = Router();
 
-/** Resolve the caller's write-capable GitHub token, or fail with a reconnect-shaped error. */
+/** Resolve the caller's write-capable GitHub token — auto-refreshing an expired one — or fail with a
+ *  connect/reconnect-shaped error the client can act on. */
 async function requireGithubToken(uid: string): Promise<string> {
-  const user = await getStore().users.findById(uid);
-  const token = decryptSecret(user?.githubToken);
+  let token: string | null;
+  try {
+    token = await getValidGithubToken(uid);
+  } catch (err) {
+    if (err instanceof GithubAuthError) throw badRequest("NEEDS_RECONNECT", err.message);
+    throw err;
+  }
   if (!token) throw badRequest("NEEDS_CONNECT", "Connect GitHub to manage your repositories.");
   return token;
 }

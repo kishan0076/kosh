@@ -1,16 +1,18 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Copy, Plus, Quote } from "lucide-react";
-import { extractVariables, type Item } from "@kosh/shared";
+import { extractVariables, type Item, type Stage } from "@kosh/shared";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
+import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { useSetStage } from "@/lib/useSetStage";
 import { EmptyState, PageHeader, StageChip } from "@/components/common";
-import { Button } from "@/components/ui";
+import { Button, Input, Textarea } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { PromptFill } from "@/components/detail/PromptFill";
+import { useReveal } from "@/components/cards/ItemCard";
 
 export function Prompts() {
   const items = useData((s) => s.items);
@@ -51,32 +53,8 @@ export function Prompts() {
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {prompts.map((p) => (
-            <article key={p.id} className="flex flex-col rounded-[var(--radius-card)] border border-border bg-surface p-4 card-hover">
-              <div className="flex items-start justify-between gap-2">
-                <button onClick={() => openItem(p.id)} className="min-w-0 text-left">
-                  <h3 className="truncate text-[15px] font-semibold">{p.title}</h3>
-                  <p className="mt-0.5 line-clamp-1 text-[13px] text-muted">{p.description}</p>
-                </button>
-                <StageChip stage={p.stage} onChange={(s) => setStage(p.id, s)} size="sm" />
-              </div>
-              <div className="mt-3 line-clamp-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] leading-snug text-muted">
-                {p.prompt?.body}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {(p.prompt?.variables ?? []).map((v) => (
-                  <span key={v.name} className="rounded bg-primary-soft px-1.5 py-0.5 font-mono text-[11px] text-primary">
-                    {`{{${v.name}}}`}
-                  </span>
-                ))}
-              </div>
-              <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-                <span className="text-[11px] text-faint">used {p.prompt?.usedCount ?? 0}× · {ago(p.updatedAt)}</span>
-                <Button variant="secondary" size="sm" onClick={() => setFill(p)}>
-                  <Copy size={14} /> Fill & copy
-                </Button>
-              </div>
-            </article>
+          {prompts.map((p, i) => (
+            <PromptCard key={p.id} p={p} index={i} onOpen={() => openItem(p.id)} onFill={() => setFill(p)} onStage={(s) => setStage(p.id, s)} />
           ))}
         </div>
       )}
@@ -84,6 +62,42 @@ export function Prompts() {
       {fill && <PromptFill item={fill} open={!!fill} onClose={() => setFill(null)} />}
       <NewPromptModal open={newOpen} onClose={() => { setNewOpen(false); const n = new URLSearchParams(params); n.delete("new"); setParams(n, { replace: true }); }} />
     </div>
+  );
+}
+
+function PromptCard({ p, index, onOpen, onFill, onStage }: { p: Item; index: number; onOpen: () => void; onFill: () => void; onStage: (s: Stage) => void }) {
+  const reveal = useReveal(index);
+  return (
+    <article
+      onAnimationEnd={reveal.onAnimationEnd}
+      style={reveal.style}
+      className={cn("flex flex-col rounded-[var(--radius-card)] border border-border bg-surface p-4 card-hover", reveal.className)}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <button type="button" onClick={onOpen} className="min-w-0 rounded-md text-left pressable">
+          <h3 className="line-clamp-2 break-words text-[15px] font-semibold leading-snug">{p.title}</h3>
+          <p className="mt-0.5 line-clamp-1 text-[13px] text-muted">{p.description}</p>
+        </button>
+        <StageChip stage={p.stage} onChange={onStage} size="sm" />
+      </div>
+      {/* Clamp the text, not the padded box, so no 4th line peeks into the padding; long tokens wrap. */}
+      <div className="mt-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2 font-mono text-[12px] leading-snug text-muted">
+        <span className="line-clamp-3 break-words [overflow-wrap:anywhere]">{p.prompt?.body}</span>
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {(p.prompt?.variables ?? []).map((v) => (
+          <span key={v.name} className="rounded bg-primary-soft px-1.5 py-0.5 font-mono text-[11px] text-primary">
+            {`{{${v.name}}}`}
+          </span>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
+        <span className="min-w-0 truncate text-[11.5px] text-faint">used {p.prompt?.usedCount ?? 0}× · {ago(p.updatedAt)}</span>
+        <Button variant="secondary" size="sm" className="shrink-0" onClick={onFill}>
+          <Copy size={14} /> Fill & copy
+        </Button>
+      </div>
+    </article>
   );
 }
 
@@ -95,6 +109,7 @@ function NewPromptModal({ open, onClose }: { open: boolean; onClose: () => void 
   const [body, setBody] = useState("");
   const vars = extractVariables(body);
 
+  // Optimistic: the store returns the item at once and syncs behind it, so no loading state.
   const save = () => {
     if (!title.trim() || !body.trim()) return;
     const item = createPrompt({ title: title.trim(), body: body.trim() });
@@ -106,24 +121,20 @@ function NewPromptModal({ open, onClose }: { open: boolean; onClose: () => void 
   };
 
   return (
-    <Modal open={open} onClose={onClose} className="max-w-xl">
+    <Modal open={open} onClose={onClose} className="max-w-xl" labelledBy="new-prompt-title">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
         <Quote size={18} className="text-primary" />
-        <h2 className="text-base font-semibold">New prompt</h2>
+        <h2 id="new-prompt-title" className="text-base font-semibold">New prompt</h2>
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Title"
-          className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus"
-        />
-        <textarea
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Title" aria-label="Title" className="sm:text-[14px]" />
+        <Textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
           placeholder="Prompt body — use {{variables}} for fill-in fields"
+          aria-label="Prompt body"
           rows={7}
-          className="w-full resize-y rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 font-mono text-[12.5px] leading-relaxed outline-none focus:border-primary focus:ring-focus"
+          className="resize-y bg-surface-2 p-3 font-mono sm:text-[12.5px]"
         />
         {vars.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted">

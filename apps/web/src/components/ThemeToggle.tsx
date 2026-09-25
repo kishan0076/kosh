@@ -19,11 +19,13 @@ export function ThemeToggle({ compact }: { compact?: boolean }) {
     const current = OPTIONS.find((o) => o.value === theme)!;
     const Icon = current.icon;
     return (
-      <Tooltip label={`Theme: ${current.label}`}>
+      // `side="bottom"`: the topbar sits under the notch, a tip above it would be clipped. The label
+      // carries the current mode too, so the state is exposed without the (hover-only) tooltip.
+      <Tooltip label={`Theme: ${current.label}`} side="bottom">
         <button
           onClick={() => setTheme(next[theme])}
-          className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted transition-colors hover:bg-surface-2 hover:text-foreground"
-          aria-label="Toggle theme"
+          className="grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted transition-colors hover:bg-surface-2 hover:text-foreground pressable [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+          aria-label={`Toggle theme (${current.label})`}
         >
           <Icon size={17} />
         </button>
@@ -41,7 +43,7 @@ export function ThemeToggle({ compact }: { compact?: boolean }) {
             key={o.value}
             onClick={() => setTheme(o.value)}
             className={cn(
-              "grid h-7 w-8 place-items-center rounded-md transition-colors",
+              "grid h-7 w-8 place-items-center rounded-md transition-colors [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-10",
               active ? "bg-primary-soft text-primary" : "text-faint hover:text-foreground",
             )}
             aria-label={o.label}

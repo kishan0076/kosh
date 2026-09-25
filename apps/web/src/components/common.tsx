@@ -13,7 +13,7 @@ import { Menu, MenuItem, MenuLabel } from "./overlays";
    points up, but the pill goes red. Arrow glyph is always shown so the
    sign survives grayscale / colorblindness. */
 export function DeltaPill({ deltaPct, direction, invert }: { deltaPct: number | null; direction: "up" | "down" | "flat"; invert?: boolean }) {
-  if (deltaPct === null) return <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-faint">new</span>;
+  if (deltaPct === null) return <span className="rounded-full bg-surface-2 px-1.5 py-0.5 text-[11px] font-medium text-muted">new</span>;
   const Icon = direction === "up" ? ArrowUpRight : direction === "down" ? ArrowDownRight : Minus;
   const good = direction === "flat" ? "flat" : (direction === "up") !== !!invert ? "good" : "bad";
   const tone = good === "good" ? "text-ok" : good === "bad" ? "text-danger" : "text-muted";
@@ -47,9 +47,10 @@ export function StatTile({
   children?: ReactNode;
 }) {
   return (
-    <div className="group relative overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface p-4 card-hover">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 text-[13px] font-medium text-muted">
+    <div className="group relative overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface p-3 card-hover sm:p-4">
+      {/* The delta pill drops under the label rather than breaking "To try" mid-word in a 2-up phone grid. */}
+      <div className="flex flex-wrap items-center justify-between gap-y-1">
+        <div className="flex items-center gap-2 whitespace-nowrap text-[13px] font-medium text-muted">
           <span className="grid h-7 w-7 place-items-center rounded-lg" style={{ backgroundColor: `color-mix(in oklab, ${accent} 14%, transparent)`, color: accent }}>
             <Icon size={15} strokeWidth={2} />
           </span>
@@ -58,10 +59,10 @@ export function StatTile({
         {delta}
       </div>
       <div className="mt-3 flex items-end justify-between gap-2">
-        <div className="font-display text-[27px] font-semibold leading-none">{value}</div>
+        <div className="font-display text-[24px] font-semibold leading-none sm:text-[27px]">{value}</div>
         {children}
       </div>
-      {hint && <div className="mt-2 text-[11px] text-faint">{hint}</div>}
+      {hint && <div className="mt-2 text-[11.5px] text-muted">{hint}</div>}
     </div>
   );
 }
@@ -87,10 +88,12 @@ export function SectionCard({
   return (
     <section className={cn("rounded-[var(--radius-card)] border border-border bg-surface", className)}>
       {(title || action || menu) && (
-        <header className="flex items-center justify-between gap-3 px-5 pt-4 pb-3">
-          <div className="min-w-0">
-            {title && <h3 className="truncate text-[15px] font-semibold">{title}</h3>}
-            {subtitle && <p className="mt-0.5 truncate text-xs text-muted">{subtitle}</p>}
+        // Titles wrap and subtitles clamp to two lines; the action keeps its width and drops to its own
+        // row when the title needs the space (no more "GitHub conn…" on phones).
+        <header className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 px-5 pt-4 pb-3">
+          <div className="min-w-0 flex-1 basis-40">
+            {title && <h3 className="break-words text-[15px] font-semibold">{title}</h3>}
+            {subtitle && <p className="mt-0.5 line-clamp-2 text-xs text-muted">{subtitle}</p>}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {action}
@@ -107,13 +110,13 @@ export function SectionCard({
 export function PageHeader({ title, subtitle, actions, icon: Icon }: { title: string; subtitle?: ReactNode; actions?: ReactNode; icon?: IconType }) {
   return (
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-      <div className="flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         {Icon && (
-          <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">
+          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary">
             <Icon size={20} />
           </span>
         )}
-        <div>
+        <div className="min-w-0">
           <h1 className="font-display text-2xl font-semibold leading-tight">{title}</h1>
           {subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}
         </div>
@@ -124,15 +127,37 @@ export function PageHeader({ title, subtitle, actions, icon: Icon }: { title: st
 }
 
 /* ── Empty state ────────────────────────────────────────────── */
-export function EmptyState({ icon: Icon, title, description, action }: { icon: IconType; title: string; description?: ReactNode; action?: ReactNode }) {
+/** `md` for page-level empties, `sm` for in-card ones (Home lists, tab panes) so they share one look. */
+export function EmptyState({
+  icon: Icon,
+  title,
+  description,
+  action,
+  size = "md",
+  className,
+}: {
+  icon: IconType;
+  title: string;
+  description?: ReactNode;
+  action?: ReactNode;
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  const sm = size === "sm";
   return (
-    <div className="flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-dashed border-border-strong bg-surface/50 px-6 py-14 text-center">
-      <span className="mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-surface-2 text-muted">
-        <Icon size={26} strokeWidth={1.6} />
+    <div
+      className={cn(
+        "flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-dashed border-border-strong bg-surface/50 text-center",
+        sm ? "px-4 py-8" : "px-6 py-14",
+        className,
+      )}
+    >
+      <span className={cn("grid place-items-center bg-surface-2 text-muted", sm ? "mb-3 h-10 w-10 rounded-xl" : "mb-4 h-14 w-14 rounded-2xl")}>
+        <Icon size={sm ? 20 : 26} strokeWidth={1.6} />
       </span>
-      <h3 className="text-base font-semibold">{title}</h3>
-      {description && <p className="mt-1.5 max-w-md text-sm text-muted">{description}</p>}
-      {action && <div className="mt-5">{action}</div>}
+      <h3 className={cn("font-semibold", sm ? "text-sm" : "text-base")}>{title}</h3>
+      {description && <p className={cn("max-w-md text-muted", sm ? "mt-1 text-[13px]" : "mt-1.5 text-sm")}>{description}</p>}
+      {action && <div className={sm ? "mt-3" : "mt-5"}>{action}</div>}
     </div>
   );
 }
@@ -165,7 +190,8 @@ export function StageChip({ stage, onChange, size = "md" }: { stage: Stage; onCh
             "inline-flex items-center gap-1.5 rounded-full border border-transparent font-medium transition-colors",
             tone.bg,
             tone.text,
-            size === "sm" ? "h-6 px-2 text-[11px]" : "h-7 px-2.5 text-xs",
+            // 32px on touch: this is the card's primary triage control, next to the card's own tap target.
+            size === "sm" ? "h-6 px-2 text-[11px] [@media(pointer:coarse)]:h-8 [@media(pointer:coarse)]:px-2.5" : "h-7 px-2.5 text-xs [@media(pointer:coarse)]:h-8",
           )}
         >
           <StageDot stage={stage} />
@@ -196,7 +222,8 @@ export function TrustBadge({ trust }: { trust: Trust }) {
 /* ── Star rating ────────────────────────────────────────────── */
 export function StarRating({ value = 0, onChange, size = 15 }: { value?: number; onChange?: (v: number) => void; size?: number }) {
   return (
-    <div className="flex items-center gap-0.5">
+    // Each star keeps its 15px glyph inside a 36px hit box (negative margins keep the row's height).
+    <div className="flex items-center">
       {[1, 2, 3, 4, 5].map((n) => (
         <button
           key={n}
@@ -205,7 +232,7 @@ export function StarRating({ value = 0, onChange, size = 15 }: { value?: number;
             e.stopPropagation();
             onChange?.(n === value ? 0 : n);
           }}
-          className={cn("transition-transform", onChange && "hover:scale-110")}
+          className={cn("-my-2 grid h-9 w-9 place-items-center rounded-md transition-transform", onChange && "hover:scale-110 motion-safe:active:scale-90")}
           aria-label={`${n} star${n > 1 ? "s" : ""}`}
         >
           <Star size={size} className={n <= value ? "fill-gold text-gold" : "text-border-strong"} strokeWidth={1.5} />

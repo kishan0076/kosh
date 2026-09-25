@@ -1,6 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import { Bell, FolderLock, LogOut, Menu as MenuIcon, Plus, RefreshCw, Search, SlidersHorizontal, User } from "lucide-react";
 import { useData } from "@/data/store";
+import { backendEnabled } from "@/data/api";
 import { watchedChanges } from "@/data/selectors";
 import { useUi } from "@/data/ui";
 import { Avatar, Button, Kbd } from "../ui";
@@ -11,6 +12,7 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const user = useData((s) => s.user);
   const items = useData((s) => s.items);
   const resetVault = useData((s) => s.resetVault);
+  const signOut = useData((s) => s.signOut);
   const setPalette = useUi((s) => s.setPalette);
   const toast = useUi((s) => s.toast);
   const openConfirm = useUi((s) => s.openConfirm);
@@ -20,7 +22,7 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const changeCount = changes.reduce((a, i) => a + (i.github?.watch?.newSince ?? 0), 0);
 
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border bg-background/85 px-4 backdrop-blur-md sm:px-6">
+    <header className="sticky top-0 z-30 flex h-topbar-safe items-center gap-3 border-b border-border bg-background/85 px-4 pt-safe backdrop-blur-md sm:px-6">
       <Button variant="ghost" size="icon" onClick={onOpenMobileNav} className="lg:hidden" aria-label="Open menu">
         <MenuIcon size={20} />
       </Button>
@@ -41,34 +43,37 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
         </span>
       </button>
 
-      <div className="flex-1" />
+      {/* On phones the spacer would halve the search pill (both are flex-1) — let search take the row. */}
+      <div className="hidden flex-1 sm:block" />
 
       <div className="flex items-center gap-1.5 sm:gap-2">
+        {/* The primary capture action stays one tap away on phones as an icon button; the theme toggle
+            steps aside there (it lives in Settings → Appearance) so the search pill keeps its width. */}
+        <Button variant="primary" size="icon" className="sm:hidden" onClick={() => navigate("/add")} aria-label="Add">
+          <Plus size={18} />
+        </Button>
         <Button variant="primary" size="sm" className="hidden sm:inline-flex" onClick={() => navigate("/add")}>
           <Plus size={16} />
           Add
         </Button>
 
-        <ThemeToggle compact />
+        <div className="hidden sm:block">
+          <ThemeToggle compact />
+        </div>
 
         {/* notifications */}
         <Menu
           align="end"
           width={300}
           trigger={({ toggle, ref }) => (
-            <button
-              ref={ref}
-              onClick={toggle}
-              className="relative grid h-9 w-9 place-items-center rounded-[var(--radius-control)] border border-border text-muted transition-colors hover:bg-surface-2 hover:text-foreground"
-              aria-label="Notifications"
-            >
+            <Button ref={ref} variant="outline" size="icon" onClick={toggle} className="text-muted" aria-label="Notifications">
               <Bell size={17} />
               {changeCount > 0 && (
-                <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                <span className="absolute -right-1 -top-1 grid h-[18px] min-w-[18px] place-items-center rounded-full bg-primary px-1 text-[11px] font-bold text-primary-foreground">
                   {changeCount}
                 </span>
               )}
-            </button>
+            </Button>
           )}
         >
           <MenuLabel>Watched changes</MenuLabel>
@@ -88,7 +93,12 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           align="end"
           width={220}
           trigger={({ toggle, ref }) => (
-            <button ref={ref} onClick={toggle} className="rounded-full ring-offset-2 ring-offset-background transition-shadow hover:ring-2 hover:ring-border-strong" aria-label="Account">
+            <button
+              ref={ref}
+              onClick={toggle}
+              className="grid place-items-center rounded-full ring-offset-2 ring-offset-background transition-shadow hover:ring-2 hover:ring-border-strong pressable [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+              aria-label="Account"
+            >
               <Avatar name={user.name} src={user.avatarUrl} size={36} />
             </button>
           )}
@@ -123,7 +133,9 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           >
             Reset demo data
           </MenuItem>
-          <MenuItem icon={LogOut} danger onClick={() => toast({ message: "This is a demo — no real sign-out", tone: "warn" })}>
+          {/* Backend mode ends the real session (cookie on the web, Bearer token in the native app);
+              demo mode has nothing to sign out of. */}
+          <MenuItem icon={LogOut} danger onClick={() => (backendEnabled ? void signOut() : toast({ message: "This is a demo — no real sign-out", tone: "warn" }))}>
             Sign out
           </MenuItem>
         </Menu>

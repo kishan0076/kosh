@@ -1,6 +1,6 @@
-import { Blocks, Bookmark, Globe, Keyboard, Mail, MessageCircle, Share2, Terminal } from "lucide-react";
+import { Blocks, Bookmark, Globe, Keyboard, Mail, MessageCircle, Share2, Terminal, X } from "lucide-react";
 import { useUi } from "@/data/ui";
-import { Kbd } from "./ui";
+import { Button, Kbd } from "./ui";
 import { Modal } from "./overlays";
 
 const SHORTCUTS: [string, string[]][] = [
@@ -26,12 +26,20 @@ export function HelpSheet() {
 
   return (
     <Modal open={open} onClose={() => setHelp(false)} className="max-w-2xl">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-3 sm:py-4">
         <Keyboard size={18} className="text-primary" />
-        <h2 className="text-base font-semibold">Shortcuts & ways to save</h2>
+        {/* The keyboard column is hidden on phones, so the title follows suit. */}
+        <h2 className="text-base font-semibold">
+          <span className="sm:hidden">Ways to save</span>
+          <span className="hidden sm:inline">Shortcuts & ways to save</span>
+        </h2>
+        <Button variant="ghost" size="icon" aria-label="Close" className="-mr-2 ml-auto" onClick={() => setHelp(false)}>
+          <X size={18} />
+        </Button>
       </div>
       <div className="grid min-h-0 flex-1 gap-6 overflow-y-auto p-5 sm:grid-cols-2">
-        <div>
+        {/* Keyboard shortcuts mean nothing to a thumb: desktop only. */}
+        <div className="hidden sm:block">
           <h3 className="mb-3 text-[12px] font-semibold uppercase tracking-wide text-faint">Keyboard</h3>
           <div className="space-y-2">
             {SHORTCUTS.map(([label, keys]) => (

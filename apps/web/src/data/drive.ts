@@ -27,6 +27,7 @@ export interface DriveQueueItem {
   driveFileId?: string;
   webViewLink?: string;
   duplicate?: boolean; // a same-named file already exists in the destination
+  sessionPending?: boolean; // "uploading" but the session/offset request hasn't answered yet (Resume/Retry in flight)
   destFolderId: string; // folder chosen when the file was added
   destPath: string; // human-readable breadcrumb for history
 }
@@ -42,10 +43,13 @@ interface DriveState {
   path: DriveFolder[]; // breadcrumb below the implicit root
   folders: DriveFolder[]; // children of the current folder
   foldersLoading: boolean;
+  foldersError: string | null; // last listFolders failure, shown inline with a Retry (cleared on success)
   quota: DriveQuota | null;
+  quotaLoaded: boolean; // first about() answered (ok or not) — the Storage card shows a skeleton until then
+  history: DriveUploadRecord[];
+  historyLoaded: boolean; // same for the Recent uploads list
 
   queue: DriveQueueItem[];
-  history: DriveUploadRecord[];
 
   init: () => Promise<void>;
   refreshAccounts: () => Promise<void>;
@@ -83,6 +87,9 @@ let folderCache: Map<string, Promise<string>> | null = null;
 let tokenCache: { accountId: string; token: string; exp: number } | null = null;
 let activeCount = 0;
 const CONCURRENCY = 3;
+// Progress writes re-render the whole queue; phones get half the tick rate (3 concurrent uploads at
+// 120ms is ~25 list renders/s on a low-end Android).
+const PROGRESS_THROTTLE_MS = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches ? 250 : 120;
 
 const currentFolderId = (path: DriveFolder[]) => (path.length ? path[path.length - 1]!.id : "root");
 const pathString = (path: DriveFolder[]) => "My Drive" + path.map((f) => ` / ${f.name}`).join("");
@@ -105,7 +112,7 @@ export const useDrive = create<DriveState>((set, get) => {
 
   function emitProgress(id: string, uploaded: number, size: number) {
     const now = Date.now();
-    if (uploaded < size && now - (lastEmit.get(id) ?? 0) < 120) return; // throttle mid-flight writes
+    if (uploaded < size && now - (lastEmit.get(id) ?? 0) < PROGRESS_THROTTLE_MS) return; // throttle mid-flight writes
     lastEmit.set(id, now);
     patchItem(id, { uploaded });
   }
@@ -141,6 +148,8 @@ export const useDrive = create<DriveState>((set, get) => {
       const token = await ensureToken(accountId);
       patchItem(item.id, { status: "uploading", error: undefined });
 
+      // The first progress callback means the session (or the resume-offset query) answered.
+      let sessionSettled = false;
       const result = await resumableUpload({
         accessToken: token,
         file: item.file,
@@ -148,13 +157,21 @@ export const useDrive = create<DriveState>((set, get) => {
         mimeType: item.mimeType,
         folderId: targetFolderId,
         control,
-        onProgress: (b) => emitProgress(item.id, b, item.size),
+        onProgress: (b) => {
+          if (!sessionSettled) {
+            sessionSettled = true;
+            lastEmit.set(item.id, Date.now());
+            patchItem(item.id, { uploaded: b, sessionPending: false });
+            return;
+          }
+          emitProgress(item.id, b, item.size);
+        },
         getFreshToken: () => freshToken(accountId),
         resumeFrom: resumes.get(item.id),
       });
 
       resumes.delete(item.id);
-      patchItem(item.id, { status: "completed", uploaded: item.size, driveFileId: result.id, webViewLink: result.webViewLink });
+      patchItem(item.id, { status: "completed", uploaded: item.size, sessionPending: false, driveFileId: result.id, webViewLink: result.webViewLink });
       driveApi
         .recordUpload({
           accountId,
@@ -171,13 +188,13 @@ export const useDrive = create<DriveState>((set, get) => {
     } catch (err) {
       if (err instanceof PausedError) {
         resumes.set(item.id, { sessionUri: err.sessionUri, uploaded: err.uploaded });
-        patchItem(item.id, { status: "paused" });
+        patchItem(item.id, { status: "paused", sessionPending: false });
       } else if (err instanceof CanceledError) {
         resumes.delete(item.id);
-        patchItem(item.id, { status: "canceled" });
+        patchItem(item.id, { status: "canceled", sessionPending: false });
       } else {
         const message = err instanceof Error ? err.message : "Upload failed.";
-        patchItem(item.id, { status: "failed", error: message });
+        patchItem(item.id, { status: "failed", error: message, sessionPending: false });
         driveApi.recordUpload({ accountId, fileName: item.name, mimeType: item.mimeType, size: item.size, status: "failed", error: message, folderPath: item.destPath }).catch(() => {});
       }
     } finally {
@@ -195,7 +212,7 @@ export const useDrive = create<DriveState>((set, get) => {
       if (!next) break;
       const control: ResumableControl = { paused: false, canceled: false };
       controls.set(next.id, control);
-      patchItem(next.id, { status: "uploading" });
+      patchItem(next.id, { status: "uploading", sessionPending: true });
       void runItem(next, accountId);
     }
     // Refresh usage + history once the batch drains, and reset the per-batch folder memo.
@@ -215,9 +232,12 @@ export const useDrive = create<DriveState>((set, get) => {
     path: [],
     folders: [],
     foldersLoading: false,
+    foldersError: null,
     quota: null,
-    queue: [],
+    quotaLoaded: false,
     history: [],
+    historyLoaded: false,
+    queue: [],
 
     init: async () => {
       set({ status: "loading", error: null });
@@ -235,7 +255,7 @@ export const useDrive = create<DriveState>((set, get) => {
         const { accounts, configured } = await driveApi.listAccounts();
         set({ accounts, configured });
         if (accounts.length && !get().accountId) await get().selectAccount(accounts[0]!.id);
-        if (!accounts.length) set({ accountId: null, folders: [], path: [], quota: null });
+        if (!accounts.length) set({ accountId: null, folders: [], path: [], quota: null, quotaLoaded: false });
       } catch {
         /* keep prior state */
       }
@@ -243,7 +263,7 @@ export const useDrive = create<DriveState>((set, get) => {
 
     selectAccount: async (id) => {
       tokenCache = null;
-      set({ accountId: id, path: [], folders: [], quota: null });
+      set({ accountId: id, path: [], folders: [], foldersError: null, quota: null, quotaLoaded: false });
       await Promise.all([get().loadFolders(), get().loadQuota(), get().loadHistory()]);
     },
 
@@ -251,7 +271,7 @@ export const useDrive = create<DriveState>((set, get) => {
       await driveApi.deleteAccount(id);
       if (get().accountId === id) {
         tokenCache = null;
-        set({ accountId: null, folders: [], path: [], quota: null });
+        set({ accountId: null, folders: [], path: [], quota: null, quotaLoaded: false });
       }
       await get().refreshAccounts();
     },
@@ -268,12 +288,12 @@ export const useDrive = create<DriveState>((set, get) => {
     loadFolders: async () => {
       const accountId = get().accountId;
       if (!accountId) return;
-      set({ foldersLoading: true });
+      set({ foldersLoading: true, foldersError: null });
       try {
         const { folders } = await driveApi.listFolders(accountId, currentFolderId(get().path));
         set({ folders, foldersLoading: false });
       } catch (err) {
-        set({ foldersLoading: false, error: err instanceof Error ? err.message : "Couldn't list folders." });
+        set({ folders: [], foldersLoading: false, foldersError: err instanceof Error ? err.message : "Couldn't list folders." });
       }
     },
 
@@ -290,18 +310,18 @@ export const useDrive = create<DriveState>((set, get) => {
       if (!accountId) return;
       try {
         const { quota } = await driveApi.about(accountId);
-        set({ quota });
+        set({ quota, quotaLoaded: true });
       } catch {
-        /* non-fatal */
+        set({ quotaLoaded: true }); // non-fatal: the card just shows nothing instead of a skeleton forever
       }
     },
 
     loadHistory: async () => {
       try {
         const { uploads } = await driveApi.listUploads();
-        set({ history: uploads });
+        set({ history: uploads, historyLoaded: true });
       } catch {
-        /* non-fatal */
+        set({ historyLoaded: true }); // non-fatal
       }
     },
 

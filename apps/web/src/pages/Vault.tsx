@@ -19,13 +19,15 @@ import {
 import { cn } from "@/lib/cn";
 import { formatBytes } from "@kosh/shared";
 import { ago } from "@/lib/time";
+import { revealClass, revealStyle } from "@/lib/motion";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { useVault, type VaultEntry, type VaultEntryType } from "@/data/vault";
 import { passwordStrength } from "@/lib/vaultCrypto";
-import { PageHeader } from "@/components/common";
+import { EmptyState, PageHeader } from "@/components/common";
 import { Modal, SelectMenu } from "@/components/overlays";
-import { Button, Input, Spinner, Textarea } from "@/components/ui";
+import { PageSkeleton } from "@/components/PageSkeleton";
+import { Button, Input, Textarea } from "@/components/ui";
 
 const TYPE_ICON: Record<VaultEntryType, typeof FileText> = { note: FileText, secret: KeyRound, file: Paperclip };
 
@@ -72,14 +74,18 @@ export function Vault() {
 
   return (
     <div onClickCapture={touch} onKeyDownCapture={touch}>
-      {status === "loading" && (
-        <div className="grid min-h-[60vh] place-items-center">
-          <Spinner size={26} className="text-primary" />
-        </div>
-      )}
+      {status === "loading" && <PageSkeleton variant="settings" header={false} />}
       {status === "error" && (
-        <Gate icon={AlertTriangle} title="Couldn't open the vault">
-          Something went wrong reaching the vault API. <button onClick={() => void init()} className="text-primary underline">Try again</button>.
+        <Gate
+          icon={AlertTriangle}
+          title="Couldn't open the vault"
+          action={
+            <Button variant="outline" size="sm" onClick={() => void init()}>
+              Try again
+            </Button>
+          }
+        >
+          Something went wrong reaching the vault API.
         </Gate>
       )}
       {status === "first-run" && <CreateScreen />}
@@ -91,7 +97,7 @@ export function Vault() {
 
 /* ── gates & screens ─────────────────────────────────────────── */
 
-function Gate({ icon: Icon, title, children }: { icon: typeof Lock; title: string; children: ReactNode }) {
+function Gate({ icon: Icon, title, action, children }: { icon: typeof Lock; title: string; action?: ReactNode; children: ReactNode }) {
   return (
     <div className="mx-auto mt-16 max-w-md text-center">
       <span className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary">
@@ -99,6 +105,7 @@ function Gate({ icon: Icon, title, children }: { icon: typeof Lock; title: strin
       </span>
       <h1 className="text-lg font-semibold">{title}</h1>
       <p className="mt-1.5 text-[13.5px] leading-relaxed text-muted">{children}</p>
+      {action && <div className="mt-4 flex justify-center">{action}</div>}
     </div>
   );
 }
@@ -131,28 +138,28 @@ function CreateScreen() {
       <div className="space-y-3 rounded-[var(--radius-card)] border border-border bg-surface p-5">
         <div>
           <label className="mb-1.5 block text-[12px] font-medium text-muted">Master password</label>
-          <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus" />
+          <Input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus />
           {pw && (
             <div className="mt-1.5 flex items-center gap-2">
               <div className="h-1 flex-1 overflow-hidden rounded-full bg-surface-3">
                 <div className={cn("h-full rounded-full transition-all", strength.score >= 3 ? "bg-ok" : strength.score >= 2 ? "bg-warn" : "bg-danger")} style={{ width: `${(strength.score / 4) * 100}%` }} />
               </div>
-              <span className="text-[11px] text-muted">{strength.label}</span>
+              <span className="text-[12px] text-muted">{strength.label}</span>
             </div>
           )}
         </div>
         <div>
           <label className="mb-1.5 block text-[12px] font-medium text-muted">Confirm password</label>
-          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus" />
-          {confirm && confirm !== pw && <p className="mt-1 text-[11.5px] text-danger">Passwords don't match.</p>}
+          <Input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          {confirm && confirm !== pw && <p className="mt-1 text-[12.5px] text-danger">Passwords don't match.</p>}
         </div>
         <label className="flex cursor-pointer items-start gap-2 rounded-[var(--radius-control)] bg-warn-soft px-3 py-2.5 text-[12.5px]">
           <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[var(--primary)]" />
           <span>I understand that <strong>this password can't be recovered</strong> — if I forget it, the vault contents are permanently unreadable.</span>
         </label>
         {error && <p className="text-[12.5px] text-danger">{error}</p>}
-        <Button variant="primary" className="w-full" disabled={!canCreate} onClick={() => void create(pw)}>
-          {busy ? <Spinner size={15} /> : <ShieldCheck size={15} />} Create vault
+        <Button variant="primary" className="w-full" loading={busy} disabled={!canCreate} onClick={() => void create(pw)}>
+          <ShieldCheck size={15} /> Create vault
         </Button>
       </div>
     </div>
@@ -170,18 +177,18 @@ function UnlockScreen() {
     <div className="mx-auto mt-16 max-w-sm">
       <VaultHeader subtitle="Enter your master password to unlock." />
       <div className="space-y-3 rounded-[var(--radius-card)] border border-border bg-surface p-5">
-        <input
+        <Input
           type="password"
           value={pw}
           autoFocus
           onChange={(e) => setPw(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && submit()}
           placeholder="Master password"
-          className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-[14px] outline-none focus:border-primary focus:ring-focus"
+          aria-label="Master password"
         />
         {error && <p className="text-[12.5px] text-danger">{error}</p>}
-        <Button variant="primary" className="w-full" disabled={!pw || busy} onClick={submit}>
-          {busy ? <Spinner size={15} /> : <LockKeyhole size={15} />} Unlock
+        <Button variant="primary" className="w-full" loading={busy} disabled={!pw} onClick={submit}>
+          <LockKeyhole size={15} /> Unlock
         </Button>
       </div>
     </div>
@@ -224,8 +231,8 @@ function Dashboard() {
       />
 
       <div className="grid gap-5 lg:grid-cols-[220px_minmax(0,1fr)] lg:items-start">
-        {/* categories */}
-        <aside className="space-y-1 lg:sticky lg:top-4">
+        {/* categories — a horizontal chip strip (edge to edge) below lg, a sticky column on desktop */}
+        <aside className="-mx-4 flex gap-1.5 overflow-x-auto px-4 pb-1 sm:-mx-5 sm:px-5 lg:sticky lg:top-4 lg:mx-0 lg:block lg:space-y-1 lg:px-0 lg:pb-0">
           <CatButton label="All items" count={entries.length} active={cat === null} onClick={() => setCat(null)} />
           {(data?.categories ?? []).map((c) => (
             <CatButton key={c} label={c} count={entries.filter((e) => e.category === c).length} active={cat === c} onClick={() => setCat(c)} />
@@ -236,33 +243,38 @@ function Dashboard() {
         <div className="space-y-4">
           <div className="relative">
             <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search the vault…"
-              className="w-full rounded-[var(--radius-control)] border border-border bg-surface py-2 pl-9 pr-3 text-[14px] outline-none focus:border-primary focus:ring-focus"
-            />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search the vault…" aria-label="Search the vault" className="pl-9" />
           </div>
 
           {filtered.length === 0 ? (
-            <div className="rounded-[var(--radius-card)] border border-dashed border-border bg-surface px-6 py-12 text-center text-[13px] text-muted">
-              {entries.length === 0 ? "Your vault is empty. Add a note, secret, or file." : "No matching items."}
-            </div>
+            entries.length === 0 ? (
+              <EmptyState
+                size="sm"
+                icon={FolderLock}
+                title="Your vault is empty"
+                description="Add a note, secret, or file — everything is encrypted on this device before it leaves."
+                action={<Button variant="primary" size="sm" onClick={() => setAdding(true)}><Plus size={15} /> Add an item</Button>}
+              />
+            ) : (
+              <EmptyState size="sm" icon={Search} title="No matching items" description="Try another search or category." />
+            )
           ) : (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {filtered.map((e) => {
+            // Keyed by the active filter so re-filtering re-reveals; adds/edits patch in place without replaying.
+            <div key={`${cat ?? "all"}|${query.trim().toLowerCase()}`} className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {filtered.map((e, i) => {
                 const Icon = TYPE_ICON[e.type];
                 return (
                   <button
                     key={e.id}
                     onClick={() => setViewing(e)}
-                    className="flex flex-col items-start rounded-[var(--radius-card)] border border-border bg-surface p-3.5 text-left card-hover hover:border-border-strong"
+                    className={cn("flex flex-col items-start rounded-[var(--radius-card)] border border-border bg-surface p-3.5 text-left card-hover pressable hover:border-border-strong", revealClass(i))}
+                    style={revealStyle(i)}
                   >
                     <div className="flex w-full items-center gap-2">
                       <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary-soft text-primary"><Icon size={15} /></span>
                       <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{e.title}</span>
                     </div>
-                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
                       <span className="rounded-md bg-surface-2 px-1.5 py-0.5">{e.category}</span>
                       {e.folder && <span className="rounded-md bg-surface-2 px-1.5 py-0.5">{e.folder}</span>}
                       <span className="text-faint">· {ago(e.updatedAt)}</span>
@@ -284,11 +296,14 @@ function Dashboard() {
 
 function CatButton({ label, count, active, onClick }: { label: string; count: number; active: boolean; onClick: () => void }) {
   return (
+    // A pill in the phone strip; a full-width row in the desktop column.
     <button
       onClick={onClick}
+      aria-pressed={active}
       className={cn(
-        "flex w-full items-center justify-between rounded-[var(--radius-control)] px-3 py-2 text-left text-[13px] transition-colors",
-        active ? "bg-primary-soft font-medium text-primary" : "text-foreground hover:bg-surface-2",
+        "pressable flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-full border px-3 text-[13px] transition-colors [@media(pointer:coarse)]:h-9",
+        "lg:h-auto lg:w-full lg:justify-between lg:rounded-[var(--radius-control)] lg:border-transparent lg:py-2 lg:[@media(pointer:coarse)]:min-h-10",
+        active ? "border-primary/30 bg-primary-soft font-medium text-primary lg:border-transparent" : "border-border bg-surface text-foreground hover:bg-surface-2",
       )}
     >
       <span className="truncate">{label}</span>
@@ -344,13 +359,13 @@ function EntryForm({ entry, onClose }: { entry?: VaultEntry; onClose: () => void
       <div className="border-b border-border px-5 py-4">
         <h2 id="vault-form-title" className="text-base font-semibold">{editing ? "Edit item" : "Add to vault"}</h2>
       </div>
-      <div className="space-y-3.5 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto px-5 py-4">
         {!editing && (
           <div className="grid grid-cols-3 gap-2">
             {(["note", "secret", "file"] as const).map((t) => {
               const Icon = TYPE_ICON[t];
               return (
-                <button key={t} onClick={() => setType(t)} className={cn("flex flex-col items-center gap-1 rounded-[var(--radius-control)] border px-2 py-2.5 text-[12px] font-medium capitalize transition-colors", type === t ? "border-primary bg-primary-soft text-primary" : "border-border bg-surface-2 hover:border-border-strong")}>
+                <button key={t} onClick={() => setType(t)} aria-pressed={type === t} className={cn("pressable flex flex-col items-center gap-1 rounded-[var(--radius-control)] border px-2 py-2.5 text-[12px] font-medium capitalize transition-colors", type === t ? "border-primary bg-primary-soft text-primary" : "border-border bg-surface-2 hover:border-border-strong")}>
                   <Icon size={16} /> {t}
                 </button>
               );
@@ -385,7 +400,7 @@ function EntryForm({ entry, onClose }: { entry?: VaultEntry; onClose: () => void
         )}
         {type === "file" && !editing && (
           <Field label="File (encrypted before upload)">
-            <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="block w-full text-[13px] text-muted file:mr-3 file:rounded-md file:border-0 file:bg-primary-soft file:px-3 file:py-1.5 file:text-[12px] file:font-medium file:text-primary" />
+            <input type="file" onChange={(e) => setFile(e.target.files?.[0] ?? null)} className="block w-full text-[13px] text-muted file:mr-3 file:rounded-md file:border-0 file:bg-primary-soft file:px-3 file:py-1.5 file:text-[12px] file:font-medium file:text-primary [@media(pointer:coarse)]:file:py-2.5" />
           </Field>
         )}
         <Field label="Note (optional)">
@@ -394,8 +409,8 @@ function EntryForm({ entry, onClose }: { entry?: VaultEntry; onClose: () => void
       </div>
       <div className="flex justify-end gap-2 border-t border-border px-5 py-3.5">
         <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button variant="primary" onClick={submit} disabled={busy || !title.trim() || (type === "file" && !editing && !file)}>
-          {busy ? <Spinner size={15} /> : null} {editing ? "Save" : "Add"}
+        <Button variant="primary" onClick={submit} loading={busy} disabled={!title.trim() || (type === "file" && !editing && !file)}>
+          {editing ? "Save" : "Add"}
         </Button>
       </div>
     </Modal>
@@ -482,18 +497,22 @@ function EntryDetail({ entry, onClose, onEdit }: { entry: VaultEntry; onClose: (
       <div className="flex items-center gap-2.5 border-b border-border px-5 py-4">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary-soft text-primary"><Icon size={17} /></span>
         <div className="min-w-0 flex-1">
-          <h2 id="vault-detail-title" className="truncate text-base font-semibold">{entry.title}</h2>
+          <h2 id="vault-detail-title" className="line-clamp-2 break-words text-base font-semibold leading-snug">{entry.title}</h2>
           <div className="text-[12px] text-muted">{entry.category}{entry.folder ? ` · ${entry.folder}` : ""} · updated {ago(entry.updatedAt)}</div>
         </div>
       </div>
-      <div className="space-y-4 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
         {entry.type === "secret" && (
           <div>
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-[12px] font-medium text-muted">Secret</span>
-              <div className="flex gap-1">
-                <button onClick={() => setReveal((r) => !r)} className="rounded-md p-1.5 text-muted hover:bg-surface-2 hover:text-foreground" aria-label={reveal ? "Hide" : "Reveal"}>{reveal ? <EyeOff size={15} /> : <Eye size={15} />}</button>
-                <button onClick={copySecret} className="rounded-md p-1.5 text-muted hover:bg-surface-2 hover:text-foreground" aria-label="Copy"><Copy size={15} /></button>
+              <div className="-my-1 flex gap-1">
+                <Button variant="ghost" size="icon" onClick={() => setReveal((r) => !r)} aria-label={reveal ? "Hide" : "Reveal"}>
+                  {reveal ? <EyeOff size={15} /> : <Eye size={15} />}
+                </Button>
+                <Button variant="ghost" size="icon" onClick={copySecret} aria-label="Copy">
+                  <Copy size={15} />
+                </Button>
               </div>
             </div>
             <div className="break-all rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5 font-mono text-[13px]">
@@ -505,7 +524,9 @@ function EntryDetail({ entry, onClose, onEdit }: { entry: VaultEntry; onClose: (
           <div>
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-[12px] font-medium text-muted">File</span>
-              <button onClick={download} className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[12px] text-primary hover:bg-primary-soft"><Download size={14} /> Download</button>
+              <Button variant="ghost" size="sm" className="-my-1 text-primary hover:bg-primary-soft hover:text-primary" onClick={download}>
+                <Download size={14} /> Download
+              </Button>
             </div>
             {imgUrl ? (
               <img src={imgUrl} alt={entry.file.name} className="max-h-72 w-full rounded-[var(--radius-control)] border border-border object-contain" />

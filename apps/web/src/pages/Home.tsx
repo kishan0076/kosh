@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   ArrowRight,
   Blocks,
+  CheckCircle2,
   CircleDot,
   Clock,
   Inbox as InboxIcon,
@@ -30,10 +31,12 @@ import {
 } from "@/data/selectors";
 import { itemIcon } from "@/lib/icons";
 import { cn } from "@/lib/cn";
+import { revealClass, revealStyle } from "@/lib/motion";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { QuickAdd } from "@/components/quickadd/QuickAdd";
-import { StatTile, DeltaPill, SectionCard, STAGE_TONE } from "@/components/common";
+import { EmptyState, StageDot, StatTile, DeltaPill, SectionCard, STAGE_TONE } from "@/components/common";
 import { AreaTrend, Gauge, MiniBars, Sparkline } from "@/components/charts";
-import { Badge, Button } from "@/components/ui";
+import { Badge, Button, Spinner } from "@/components/ui";
 
 function greeting(): string {
   const h = new Date().getHours();
@@ -48,8 +51,12 @@ export function Home() {
   const user = useData((s) => s.user);
   const openItem = useUi((s) => s.openItem);
   const navigate = useNavigate();
-  const now = Date.now();
+  const phone = useMediaQuery(PHONE_QUERY);
+  // Pinned per data change, not per render: with `Date.now()` inline every toast/snooze/SSE patch
+  // re-ran all nine selectors below.
+  const now = useMemo(() => Date.now(), [items]);
 
+  const vault = useMemo(() => live(items), [items]);
   const stats = useMemo(() => homeStats(items, skills, now), [items, skills, now]);
   const trend = useMemo(() => savedTrend(items, 30, now), [items, now]);
   const health = useMemo(() => curationHealth(items, skills, now), [items, skills, now]);
@@ -58,10 +65,16 @@ export function Home() {
   const funnel = useMemo(() => stageFunnel(items), [items]);
   const recs = useMemo(() => recommendations(items, skills), [items, skills]);
   const weekday = useMemo(() => weekdayActivity(items), [items]);
+  const recent = useMemo(() => [...vault].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5), [vault]);
   const keep = keepRate(items);
 
-  const spark = (pred: (i: Item) => boolean) =>
-    savedTrend(items.filter(pred), 14, now).map((d) => d.value);
+  const sparks = useMemo(() => {
+    const spark = (pred: (i: Item) => boolean) => savedTrend(items.filter(pred), 14, now).map((d) => d.value);
+    return { all: spark(() => true), skills: spark((i) => i.kind === "skill"), toTry: spark((i) => i.stage === "to-try") };
+  }, [items, now]);
+  // Two tiles per row on phones leaves ~140px of content: a narrower sparkline keeps the value readable,
+  // the two long labels get their short forms and the "watched" badge (the hint says it) is dropped.
+  const sparkW = phone ? 56 : 96;
 
   const healthColor = health.score >= 75 ? "var(--ok)" : health.score >= 50 ? "var(--warn)" : "var(--danger)";
 
@@ -72,7 +85,7 @@ export function Home() {
         <h1 className="font-display text-[26px] font-semibold leading-tight">
           {greeting()}, {user.name}
         </h1>
-        <p className="mt-1 text-sm text-muted">Your treasury has {formatNumber(live(items).length)} things. Here's what to act on today.</p>
+        <p className="mt-1 text-sm text-muted">Your treasury has {formatNumber(vault.length)} things. Here's what to act on today.</p>
       </div>
       <QuickAdd />
 
@@ -87,16 +100,16 @@ export function Home() {
       </div>
 
       {/* Row B — KPI tiles */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatTile
           icon={LayoutGrid}
-          label="Total items"
+          label={phone ? "Items" : "Total items"}
           value={formatNumber(stats.total.value)}
           delta={<DeltaPill deltaPct={stats.total.deltaPct} direction={stats.total.direction} />}
           hint="vs. last 30 days"
           accent="var(--primary)"
         >
-          <Sparkline data={spark(() => true)} color="var(--primary)" />
+          <Sparkline data={sparks.all} color="var(--primary)" width={sparkW} />
         </StatTile>
         <StatTile
           icon={Blocks}
@@ -106,7 +119,7 @@ export function Home() {
           hint={`${stats.copiedSkills} copied · ${stats.indexOnlySkills} indexed`}
           accent="var(--tool-claude)"
         >
-          <Sparkline data={spark((i) => i.kind === "skill")} color="var(--tool-claude)" />
+          <Sparkline data={sparks.skills} color="var(--tool-claude)" width={sparkW} />
         </StatTile>
         <StatTile
           icon={InboxIcon}
@@ -116,17 +129,17 @@ export function Home() {
           hint="a smaller backlog is better"
           accent="var(--c3)"
         >
-          <Sparkline data={spark((i) => i.stage === "to-try")} color="var(--c3)" />
+          <Sparkline data={sparks.toTry} color="var(--c3)" width={sparkW} />
         </StatTile>
         <StatTile
           icon={RefreshCw}
-          label="Updates waiting"
+          label={phone ? "Updates" : "Updates waiting"}
           value={formatNumber(stats.watched)}
-          delta={<Badge tone="primary">watched</Badge>}
+          delta={phone ? undefined : <Badge tone="primary">watched</Badge>}
           hint="new upstream in watched repos"
           accent="var(--c2)"
         >
-          <Sparkline data={weekday.map((w) => w.value)} color="var(--c2)" />
+          <Sparkline data={weekday.map((w) => w.value)} color="var(--c2)" width={sparkW} />
         </StatTile>
       </div>
 
@@ -142,21 +155,25 @@ export function Home() {
         </SectionCard>
 
         <SectionCard className="lg:col-span-4" title="Curation health" subtitle="One number for vault hygiene">
-          <div className="flex flex-col items-center pt-2">
-            <Gauge value={health.score} label={`${health.score}`} color={healthColor} sublabel="" />
-            <div className="mt-2 flex items-center gap-1.5 text-center text-[13px] font-medium">
-              <CircleDot size={13} style={{ color: healthColor }} />
-              {health.nextBestAction}
+          {vault.length === 0 ? (
+            <EmptyState size="sm" icon={CircleDot} title="No score yet" description="Save a few things to get a health score." />
+          ) : (
+            <div className="flex flex-col items-center pt-2">
+              <Gauge value={health.score} label={`${health.score}`} color={healthColor} sublabel="" />
+              <div className="mt-2 flex items-center gap-1.5 text-center text-[13px] font-medium">
+                <CircleDot size={13} style={{ color: healthColor }} />
+                {health.nextBestAction}
+              </div>
+              <div className="mt-4 grid w-full grid-cols-2 gap-2">
+                {health.components.map((c) => (
+                  <div key={c.label} className="rounded-lg border border-border bg-surface-2 px-2.5 py-1.5">
+                    <div className="text-[11px] text-muted">{c.label}</div>
+                    <div className="font-display text-sm font-semibold tabular">{c.value}%</div>
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="mt-4 grid w-full grid-cols-2 gap-2">
-              {health.components.map((c) => (
-                <div key={c.label} className="rounded-lg border border-border bg-surface-2 px-2.5 py-1.5">
-                  <div className="text-[11px] text-muted">{c.label}</div>
-                  <div className="font-display text-sm font-semibold tabular">{c.value}%</div>
-                </div>
-              ))}
-            </div>
-          </div>
+          )}
         </SectionCard>
       </div>
 
@@ -182,7 +199,7 @@ export function Home() {
           action={<Sparkles size={16} className="text-gold" />}
         >
           {recs.length === 0 ? (
-            <div className="py-6 text-center text-sm text-muted">Save a few repos and skills to get recommendations.</div>
+            <EmptyState size="sm" icon={TrendingUp} title="No recommendations yet" description="Save a few repos and skills to get recommendations." />
           ) : (
             <div className="space-y-2">
               {recs.map((r) => (
@@ -215,15 +232,30 @@ export function Home() {
           className="lg:col-span-7"
           title="Recently saved"
           action={
-            <Button variant="ghost" size="sm" onClick={() => navigate("/library")}>
-              View all <ArrowRight size={14} />
-            </Button>
+            recent.length > 0 && (
+              <Button variant="ghost" size="sm" onClick={() => navigate("/library")}>
+                View all <ArrowRight size={14} />
+              </Button>
+            )
           }
         >
-          <RecentList items={live(items).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5)} onOpen={openItem} />
+          {recent.length === 0 ? (
+            <EmptyState size="sm" icon={LayoutGrid} title="Nothing saved yet" description="Paste a link above to start your treasury." />
+          ) : (
+            <RecentList items={recent} onOpen={openItem} />
+          )}
         </SectionCard>
       </div>
     </div>
+  );
+}
+
+/** Stands in for the subtitle while the optimistic row waits for its metadata. */
+function EnrichingBadge() {
+  return (
+    <Badge tone="neutral" className="mt-0.5">
+      <Spinner size={10} /> Enriching…
+    </Badge>
   );
 }
 
@@ -245,21 +277,30 @@ function TodaysPick({ picks, onOpen }: { picks: Item[]; onOpen: (id: string) => 
       className="h-full"
     >
       {picks.length === 0 ? (
-        <div className="py-8 text-center text-sm text-muted">Nothing waiting to try. Your inbox is clear ✨</div>
+        <EmptyState size="sm" icon={Sparkles} title="Nothing waiting to try" description="Your inbox is clear ✨" />
       ) : (
         <div className="space-y-2.5">
-          {picks.map((p) => {
+          {picks.map((p, idx) => {
             const Icon = itemIcon(p);
             return (
-              <div key={p.id} className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
+              // On phones the text takes the rest of the first line and the Try/Snooze/Drop cluster drops
+              // to a row of its own, so titles wrap instead of truncating to a dozen characters.
+              <div
+                key={p.id}
+                className={cn(
+                  "flex flex-wrap items-center gap-x-3 gap-y-2 rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 sm:flex-nowrap",
+                  revealClass(idx),
+                )}
+                style={revealStyle(idx)}
+              >
                 <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface text-muted">
                   <Icon size={16} />
                 </span>
-                <button onClick={() => onOpen(p.id)} className="min-w-0 flex-1 text-left">
-                  <div className="truncate text-[13.5px] font-semibold">{p.title}</div>
-                  <div className="truncate text-[12px] text-muted">{p.ai?.summary ?? p.description}</div>
+                <button onClick={() => onOpen(p.id)} className="min-w-0 flex-1 basis-[calc(100%-3rem)] text-left pressable sm:basis-auto">
+                  <div className="line-clamp-2 text-[13.5px] font-semibold leading-snug">{p.title}</div>
+                  {p.status === "enriching" ? <EnrichingBadge /> : <div className="truncate text-[12px] text-muted">{p.ai?.summary ?? p.description}</div>}
                 </button>
-                <div className="flex shrink-0 items-center gap-1">
+                <div className="flex basis-full items-center justify-end gap-2 sm:basis-auto sm:shrink-0 sm:gap-1">
                   <Button variant="primary" size="sm" onClick={() => { setStage(p.id, "trying"); toast({ message: "Moved to Trying", description: p.title, tone: "ok" }); }}>
                     Try
                   </Button>
@@ -289,20 +330,21 @@ function NeedsAttention({ attention, onOpen }: { attention: ReturnType<typeof ne
       className="h-full"
     >
       {attention.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-8 text-center">
-          <span className="mb-2 grid h-10 w-10 place-items-center rounded-full bg-ok-soft text-ok">✓</span>
-          <p className="text-sm text-muted">Nothing needs attention.</p>
-        </div>
+        <EmptyState size="sm" icon={CheckCircle2} title="Nothing needs attention" description="No dead links, risky skills or drift right now." />
       ) : (
         <div className="space-y-2">
-          {attention.map((a) => {
+          {attention.map((a, idx) => {
             const Icon = iconFor[a.kind];
             const tone = a.kind === "risky-skill" || a.kind === "dead" ? "text-danger" : "text-warn";
             return (
               <button
                 key={a.id}
                 onClick={() => onOpen(a.itemId)}
-                className="flex w-full items-start gap-2.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-left card-hover"
+                className={cn(
+                  "flex w-full items-start gap-2.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 text-left card-hover",
+                  revealClass(idx),
+                )}
+                style={revealStyle(idx)}
               >
                 <Icon size={15} className={cn("mt-0.5 shrink-0", tone)} />
                 <div className="min-w-0 flex-1">
@@ -324,7 +366,7 @@ function StageFunnelBars({ funnel, onStage }: { funnel: ReturnType<typeof stageF
   return (
     <div className="space-y-3">
       {funnel.map((f) => (
-        <button key={f.stage} onClick={() => onStage(f.stage)} className="group block w-full text-left">
+        <button key={f.stage} onClick={() => onStage(f.stage)} className="group block w-full text-left pressable">
           <div className="mb-1 flex items-center justify-between text-[12px]">
             <span className="flex items-center gap-1.5 font-medium">
               <span className="h-2 w-2 rounded-full" style={{ backgroundColor: STAGE_TONE[f.stage].dot }} />
@@ -334,7 +376,7 @@ function StageFunnelBars({ funnel, onStage }: { funnel: ReturnType<typeof stageF
           </div>
           <div className="h-2.5 w-full overflow-hidden rounded-full bg-surface-3">
             <div
-              className="h-full rounded-full transition-[width] duration-500 group-hover:brightness-110"
+              className="h-full rounded-full group-hover:brightness-110"
               style={{ width: `${(f.value / max) * 100}%`, backgroundColor: STAGE_TONE[f.stage].dot }}
             />
           </div>
@@ -351,17 +393,15 @@ function RecentList({ items, onOpen }: { items: Item[]; onOpen: (id: string) => 
       {items.map((i) => {
         const Icon = itemIcon(i);
         return (
-          <button key={i.id} onClick={() => onOpen(i.id)} className="flex w-full items-center gap-3 py-2.5 text-left first:pt-0 last:pb-0 hover:opacity-80">
+          <button key={i.id} onClick={() => onOpen(i.id)} className="flex w-full items-center gap-3 py-2.5 text-left first:pt-0 last:pb-0 pressable hover:opacity-80">
             <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted">
               <Icon size={15} />
             </span>
             <div className="min-w-0 flex-1">
               <div className="truncate text-[13.5px] font-medium">{i.title}</div>
-              <div className="truncate text-[11.5px] text-muted">{i.meta?.siteName ?? i.description}</div>
+              {i.status === "enriching" ? <EnrichingBadge /> : <div className="truncate text-[11.5px] text-muted">{i.meta?.siteName ?? i.description}</div>}
             </div>
-            <span className="shrink-0">
-              <span className="h-2 w-2 rounded-full" />
-            </span>
+            <StageDot stage={i.stage} />
           </button>
         );
       })}

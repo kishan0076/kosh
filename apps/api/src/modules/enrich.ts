@@ -4,7 +4,7 @@ import { getStore, type ServerItem } from "../db/index.js";
 import { publish } from "../events.js";
 import { logger } from "../logger.js";
 import { enrichGithub, type GithubEnrichment } from "../integrations/github.js";
-import { decryptSecret } from "../auth/crypto.js";
+import { tryGithubToken } from "../integrations/githubToken.js";
 import { fetchOpenGraph } from "../integrations/opengraph.js";
 import { lookupPackage, parsePackageUrl } from "../integrations/registries.js";
 import { summarizeForUser } from "../integrations/claude.js";
@@ -111,8 +111,7 @@ export async function enrichItem(userId: string, itemId: string): Promise<void> 
   const store = getStore();
   const item = await store.items.findById(itemId);
   if (!item || item.kind !== "link" || !item.url) return;
-  const user = await store.users.findById(userId);
-  const patch = await computePatch(item, decryptSecret(user?.githubToken) ?? null);
+  const patch = await computePatch(item, await tryGithubToken(userId)); // auto-refreshed; null → server/anon token
   const updated = await store.items.updateById(itemId, { ...patch, updatedAt: nowIso() } as Partial<ServerItem>);
   if (updated) publish(userId, { kind: "item.updated", item: updated });
 }

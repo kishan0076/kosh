@@ -3,7 +3,7 @@ import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as 
 import { formatBytes, sortDriveNodes, parseTags, tagColorIndex } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
-import { Button, Spinner } from "@/components/ui";
+import { Button, Skeleton, Spinner } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { getDragIds, hasDriveDrag } from "./dnd";
@@ -115,9 +115,9 @@ export function TagChips({ node, max = 3, className }: { node: DriveNode; max?: 
   return (
     <div className={cn("flex flex-wrap items-center gap-1", className)}>
       {shown.map((t) => (
-        <span key={t} className={cn("max-w-[96px] truncate rounded-[var(--radius-chip)] px-1.5 py-0.5 text-[10px] font-medium", tagChipClass(t))}>{t}</span>
+        <span key={t} className={cn("max-w-[96px] truncate rounded-[var(--radius-chip)] px-1.5 py-0.5 text-[11px] font-medium leading-none", tagChipClass(t))}>{t}</span>
       ))}
-      {extra > 0 && <span className="text-[10px] text-faint">+{extra}</span>}
+      {extra > 0 && <span className="text-[11px] text-faint">+{extra}</span>}
     </div>
   );
 }
@@ -191,7 +191,8 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
         if (e.key === "Escape") onCancel();
       }}
       onBlur={submit}
-      className={cn("min-w-0 rounded-[var(--radius-control)] border border-primary bg-surface px-1.5 py-0.5 text-[13px] outline-none ring-focus", center ? "w-full text-center" : "flex-1")}
+      // 16px on phones so iOS Safari doesn't zoom into the field; the row's 13px above sm.
+      className={cn("min-w-0 rounded-[var(--radius-control)] border border-primary bg-surface px-1.5 py-0.5 text-base outline-none ring-focus sm:text-[13px] [@media(pointer:coarse)]:min-h-10", center ? "w-full text-center" : "flex-1")}
     />
   );
 }
@@ -200,8 +201,10 @@ function InlineRename({ node, onSubmit, onCancel, center }: { node: DriveNode; o
  * Circular select checkbox. Hidden by default, revealed on hover (or keyboard focus), and always shown
  * once the item is selected. `reveal="collapse"` removes it from layout when hidden (inline list rows);
  * the default uses opacity so an absolutely-positioned card overlay fades in.
+ * The button is a 40px hit box with negative margins (its layout footprint stays the disc's 20/24px);
+ * the disc itself is the inner span, so the look is unchanged while taps get a real target.
  */
-function SelectDisc({ selected, onToggle, className, reveal = "opacity", tabIndex }: { selected: boolean; onToggle: () => void; className?: string; reveal?: "opacity" | "collapse"; tabIndex?: number }) {
+function SelectDisc({ selected, onToggle, className, reveal = "opacity", size = "md", tabIndex }: { selected: boolean; onToggle: () => void; className?: string; reveal?: "opacity" | "collapse"; size?: "sm" | "md"; tabIndex?: number }) {
   // On touch/coarse-pointer devices there is no hover, so the disc must be visible by default —
   // otherwise multi-select is unreachable on a phone/tablet.
   const hidden =
@@ -215,15 +218,27 @@ function SelectDisc({ selected, onToggle, className, reveal = "opacity", tabInde
       aria-label={selected ? "Deselect" : "Select"}
       aria-pressed={selected}
       className={cn(
-        "h-6 w-6 shrink-0 place-items-center rounded-full border backdrop-blur transition-colors",
-        selected ? "grid border-primary bg-primary text-primary-foreground opacity-100" : cn(hidden, "border-border-strong bg-surface/80 text-transparent hover:text-muted"),
+        "group/disc h-10 w-10 shrink-0 place-items-center rounded-full outline-none",
+        size === "sm" ? "-m-2.5" : "-m-2",
+        selected ? "grid opacity-100" : hidden,
         className,
       )}
     >
-      <Check size={13} strokeWidth={3} />
+      <span
+        className={cn(
+          "grid place-items-center rounded-full border backdrop-blur transition-colors group-focus-visible/disc:ring-2 group-focus-visible/disc:ring-primary",
+          size === "sm" ? "h-5 w-5" : "h-6 w-6",
+          selected ? "border-primary bg-primary text-primary-foreground" : "border-border-strong bg-surface/80 text-transparent group-hover/disc:text-muted",
+        )}
+      >
+        <Check size={13} strokeWidth={3} />
+      </span>
     </button>
   );
 }
+
+/** Row/card "star" and "more" buttons: 28px chrome on desktop, a 40px hit box on touch screens. */
+const ICON_BTN = "grid h-7 w-7 place-items-center [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10";
 
 /* ── list row ──
  * Memoized: with the handlers object made stable upstream, a sync tick or selection change only
@@ -248,34 +263,43 @@ function FileRowImpl({ node, index, colIndex, selected, busy, renaming, focusabl
       onClick={(e) => onClick(node, e)}
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
+      // Below md the row is two lines (name over size · modified) so a phone shows the whole name;
+      // the owner/size/modified columns only exist from md up.
       className={cn(
-        "group grid cursor-pointer grid-cols-[minmax(0,1fr)_104px_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
+        "group pressable grid cursor-pointer grid-cols-[minmax(0,1fr)_36px] items-center gap-3 rounded-[var(--radius-control)] px-2.5 text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]",
         compact ? "py-1" : "py-1.5",
         over ? "bg-primary-soft ring-1 ring-inset ring-primary" : selected ? "bg-primary-soft shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-surface-2",
       )}
     >
       <div className="flex min-w-0 items-center gap-2.5">
-        <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} reveal="collapse" className="h-5 w-5" tabIndex={innerTab} />
+        <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} reveal="collapse" size="sm" tabIndex={innerTab} />
         <span className={cn("relative grid shrink-0 place-items-center overflow-hidden rounded-[8px] bg-surface-2", compact ? "h-7 w-7" : "h-8 w-8")}>
           <NodeIcon node={node} size={compact ? 16 : 18} thumb />
         </span>
         {renaming ? (
           <InlineRename node={node} onSubmit={(name) => onRenameSubmit(node, name)} onCancel={onRenameCancel} />
         ) : (
-          <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium">{node.name}</span>
+            <span className="block truncate font-mono text-[11.5px] tabular text-muted md:hidden">{metaLine(node)}</span>
+          </span>
         )}
-        <button
-          onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
-          tabIndex={innerTab}
-          className={cn("shrink-0 rounded p-0.5 transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
-          aria-label={node.starred ? "Unstar" : "Star"}
-        >
-          <Star size={13} className={cn(node.starred && "fill-gold")} />
-        </button>
+        {/* Starring from Trash makes no sense (the trash menu offers Restore/Delete only); on touch an
+            unstarred row hides the star too — it lives in the More menu — so the name keeps its width. */}
+        {!node.trashed && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
+            tabIndex={innerTab}
+            className={cn(ICON_BTN, "-my-1.5 shrink-0 rounded-md transition-opacity hover:text-gold", node.starred ? "text-gold opacity-100" : "text-faint opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:hidden")}
+            aria-label={node.starred ? "Unstar" : "Star"}
+          >
+            <Star size={13} className={cn(node.starred && "fill-gold")} />
+          </button>
+        )}
       </div>
       <span className="hidden truncate text-[12px] text-muted md:block">{node.owners?.[0]?.displayName ?? (node.ownedByMe ? "me" : "—")}</span>
       <span className="hidden justify-self-end font-mono text-[11.5px] tabular text-muted md:block">{!node.isFolder && node.size != null ? formatBytes(node.size) : "—"}</span>
-      <span className="truncate font-mono text-[11.5px] tabular text-muted">{node.modifiedTime ? ago(node.modifiedTime) : "—"}</span>
+      <span className="hidden truncate font-mono text-[11.5px] tabular text-muted md:block">{node.modifiedTime ? ago(node.modifiedTime) : "—"}</span>
       <div className="flex items-center justify-end">
         {busy ? (
           <Spinner size={14} className="text-muted" />
@@ -283,7 +307,7 @@ function FileRowImpl({ node, index, colIndex, selected, busy, renaming, focusabl
           <button
             onClick={(e) => { e.stopPropagation(); onMore(node, e); }}
             tabIndex={innerTab}
-            className="grid h-7 w-7 place-items-center rounded-md text-muted opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+            className={cn(ICON_BTN, "-my-1.5 rounded-md text-muted opacity-0 transition-opacity hover:bg-surface-3 hover:text-foreground focus:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:-mx-1.5 [@media(pointer:coarse)]:opacity-100")}
             aria-label="More actions"
           >
             <MoreVertical size={16} />
@@ -319,7 +343,7 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
       onDoubleClick={() => onOpen(node)}
       onContextMenu={(e) => onContext(node, e)}
       className={cn(
-        "group relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow,border-color] duration-200 will-change-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+        "group pressable relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border bg-surface transition-[transform,box-shadow,border-color] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         over
           ? "border-primary bg-primary-soft ring-2 ring-primary"
           : selected
@@ -331,7 +355,8 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
       {node.isFolder && (
         <span className={cn("h-[3px] w-full shrink-0", !node.folderColorRgb && "bg-primary")} style={node.folderColorRgb ? { backgroundColor: node.folderColorRgb } : undefined} />
       )}
-      <div className={cn("relative flex items-center justify-center overflow-hidden", compact ? "h-24" : "h-36", KIND_HERO[kind])}>
+      {/* A shorter hero on phones: two columns of 144px heroes left ~1.5 rows visible under the header. */}
+      <div className={cn("relative flex items-center justify-center overflow-hidden", compact ? "h-24" : "h-28 sm:h-36", KIND_HERO[kind])}>
         {/* faint top light for a physical, lit feel */}
         <span className="pointer-events-none absolute inset-x-0 top-0 h-1/2 bg-gradient-to-b from-white/10 to-transparent dark:from-white/5" />
         {node.isFolder ? (
@@ -349,26 +374,32 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
           <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} tabIndex={innerTab} />
         </div>
 
-        {/* star + more (frosted pill) */}
-        <div className="absolute right-2 top-2 flex items-center gap-1">
-          <button
-            onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
-            tabIndex={innerTab}
-            className={cn("grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur transition-opacity hover:bg-surface", node.starred ? "opacity-100" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100")}
-            aria-label={node.starred ? "Unstar" : "Star"}
-          >
-            <Star size={14} className={cn(node.starred ? "fill-gold text-gold" : "text-muted")} />
-          </button>
+        {/* star + more (frosted pills) — the pill is the inner span so the 40px touch box stays invisible */}
+        <div className="absolute right-1 top-1 flex items-center [@media(pointer:coarse)]:right-0 [@media(pointer:coarse)]:top-0">
+          {!node.trashed && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onToggleStar(node); }}
+              tabIndex={innerTab}
+              className={cn(ICON_BTN, "group/star h-9 w-9 transition-opacity", node.starred ? "opacity-100" : "opacity-0 focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100")}
+              aria-label={node.starred ? "Unstar" : "Star"}
+            >
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur group-hover/star:bg-surface">
+                <Star size={14} className={cn(node.starred ? "fill-gold text-gold" : "text-muted")} />
+              </span>
+            </button>
+          )}
           {busy ? (
-            <span className="grid h-7 w-7 place-items-center rounded-full bg-surface/80"><Spinner size={13} className="text-muted" /></span>
+            <span className="grid h-9 w-9 place-items-center [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"><span className="grid h-7 w-7 place-items-center rounded-full bg-surface/80"><Spinner size={13} className="text-muted" /></span></span>
           ) : (
             <button
               onClick={(e) => { e.stopPropagation(); onMore(node, e); }}
               tabIndex={innerTab}
-              className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 text-muted opacity-0 backdrop-blur transition-opacity hover:bg-surface hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+              className={cn(ICON_BTN, "group/more h-9 w-9 text-muted opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100")}
               aria-label="More actions"
             >
-              <MoreVertical size={15} />
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-surface/80 backdrop-blur group-hover/more:bg-surface">
+                <MoreVertical size={15} />
+              </span>
             </button>
           )}
         </div>
@@ -378,9 +409,9 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
         {renaming ? (
           <InlineRename node={node} onSubmit={(name) => onRenameSubmit(node, name)} onCancel={onRenameCancel} center />
         ) : (
-          <div className="flex items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{node.name}</span>
-          </div>
+          // Two clamped lines on phones so extensions/versions survive ("backup-2026-09-21.tar.gz");
+          // the reserved height keeps a row of cards aligned. One truncated line from sm up.
+          <span className="line-clamp-2 min-h-[2.5em] break-words text-[13px] font-medium leading-snug [overflow-wrap:anywhere] sm:line-clamp-1 sm:min-h-0 sm:leading-normal">{node.name}</span>
         )}
         <span className="truncate font-mono text-[11px] tabular text-faint">{metaLine(node)}</span>
         <TagChips node={node} className="mt-1" />
@@ -397,42 +428,50 @@ export function ListHeader() {
   const sortDir = useDriveV2((s) => s.prefs.sortDir);
   const setSort = useDriveV2((s) => s.setSort);
   const caret = (k: SortKey) => (sortKey === k ? (sortDir === "asc" ? " ↑" : " ↓") : "");
+  // A 32px hit box (40px on touch) around the 11px label; the negative margins keep the header's height.
   const SortBtn = ({ k, label, className }: { k: SortKey; label: string; className?: string }) => (
-    <button onClick={() => setSort(k)} className={cn("inline-flex items-center text-left transition-colors hover:text-foreground", sortKey === k && "text-primary", className)}>
+    <button onClick={() => setSort(k)} className={cn("pressable -mx-1 -my-1.5 inline-flex h-8 items-center justify-self-start rounded-md px-1 text-left transition-colors hover:text-foreground [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:-my-2.5", sortKey === k && "text-primary", className)}>
       {label}<span className="tabular">{caret(k)}</span>
     </button>
   );
   return (
-    <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_104px_36px] gap-3 border-b border-border bg-background/85 px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-faint backdrop-blur md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]">
+    <div className="sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_36px] items-center gap-3 border-b border-border bg-background/85 px-2.5 py-2 text-[11px] font-semibold uppercase tracking-wide text-faint backdrop-blur md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]">
       <SortBtn k="name" label="Name" />
       <span className="hidden md:block">Owner</span>
       <SortBtn k="size" label="Size" className="hidden justify-self-end md:inline-flex" />
-      <SortBtn k="modified" label="Modified" />
+      <SortBtn k="modified" label="Modified" className="hidden md:inline-flex" />
       <span />
     </div>
   );
 }
 
 /* ── states ── */
+/** Built on the `Skeleton` primitive, in the exact silhouette of FileCard/FileRow (two columns and a
+ *  112px hero on phones, the two-line row below md) so the swap to real content doesn't shift layout. */
 export function DriveContentSkeleton({ layout }: { layout: "grid" | "list" }) {
   if (layout === "grid") {
     return (
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(176px,1fr))] gap-4">
+      <div role="status" aria-busy="true" aria-label="Loading" className="grid grid-cols-2 gap-4 py-2 sm:grid-cols-[repeat(auto-fill,minmax(176px,1fr))]">
         {Array.from({ length: 12 }).map((_, i) => (
           <div key={i} className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-            <div className="shimmer h-36" />
-            <div className="flex flex-col gap-1.5 px-3 py-2.5"><div className="shimmer h-3.5 w-3/4 rounded" /><div className="shimmer h-2.5 w-1/2 rounded" /></div>
+            <Skeleton className="h-28 rounded-none sm:h-36" />
+            {/* Two name lines on phones (the card reserves 2.5em), one from sm; then the meta line. */}
+            <div className="flex flex-col gap-1.5 px-3 py-2.5"><Skeleton className="h-3.5 w-3/4" /><Skeleton className="h-3.5 w-1/2 sm:hidden" /><Skeleton className="h-3 w-2/5" /></div>
           </div>
         ))}
       </div>
     );
   }
   return (
-    <div className="space-y-0.5">
+    // pt matches the sticky ListHeader's height so rows land where the skeleton rows were.
+    <div role="status" aria-busy="true" aria-label="Loading" className="space-y-0.5 pt-[34px]">
       {Array.from({ length: 12 }).map((_, i) => (
-        <div key={i} className="grid grid-cols-[minmax(0,1fr)_150px_96px_128px_36px] items-center gap-3 px-2.5 py-2">
-          <div className="flex items-center gap-2.5"><div className="shimmer h-8 w-8 rounded-[8px]" /><div className="shimmer h-3.5 w-1/3 rounded" /></div>
-          <div className="shimmer h-3 w-20 rounded" /><div className="shimmer h-3 w-12 justify-self-end rounded" /><div className="shimmer h-3 w-16 rounded" /><div />
+        <div key={i} className="grid h-12 grid-cols-[minmax(0,1fr)_36px] items-center gap-3 px-2.5 md:h-11 md:grid-cols-[minmax(0,1fr)_150px_96px_128px_36px]">
+          <div className="flex items-center gap-2.5">
+            <Skeleton className="h-8 w-8 rounded-[8px]" />
+            <div className="flex flex-1 flex-col gap-1.5"><Skeleton className="h-3.5 w-1/3" /><Skeleton className="h-2.5 w-1/4 md:hidden" /></div>
+          </div>
+          <Skeleton className="hidden h-3 w-20 md:block" /><Skeleton className="hidden h-3 w-12 justify-self-end md:block" /><Skeleton className="hidden h-3 w-16 md:block" /><div />
         </div>
       ))}
     </div>
@@ -460,7 +499,8 @@ export function DriveEmptyState({ view, onUpload }: { view: DriveView; onUpload?
         {view === "myDrive" && onUpload && (
           <Button variant="primary" onClick={onUpload} className="mx-auto mt-5"><UploadCloud size={15} /> Upload files</Button>
         )}
-        <div className="mt-5 font-mono text-[11px] text-faint">Press ⌘K to search · Drop files anywhere to upload</div>
+        {/* Keyboard hints mean nothing on a phone (no ⌘K, no drag-and-drop). */}
+        <div className="mt-5 hidden font-mono text-[11px] text-faint sm:block">Press ⌘K to search · Drop files anywhere to upload</div>
       </div>
     </div>
   );

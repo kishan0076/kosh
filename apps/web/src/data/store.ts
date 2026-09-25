@@ -20,15 +20,22 @@ import {
   type User,
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
-import { api, backendEnabled, publishRepoWithProgress, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
+import { api, ApiError, backendEnabled, publishRepoWithProgress, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
+import { isNative, loadSessionToken, setSessionToken } from "@/lib/native";
 import { useUi } from "./ui";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
 
 /** Surface a failed save to the user instead of swallowing it — silent failures are how data
  *  "disappears after refresh" (the optimistic row never reached the server). */
 function notifyError(message: string, err: unknown) {
-  const description = err instanceof Error ? err.message : "Is the Kosh API running?";
-  useUi.getState().toast({ message, description, tone: "danger", duration: 6000 });
+  useUi.getState().toast({ message, description: friendlyReason(err), tone: "danger", duration: 6000 });
+}
+/** A reason the user can act on. API errors carry a real message; a TypeError is either a failed fetch
+ *  ("Failed to fetch") or a bug — neither is worth showing verbatim in a toast. */
+function friendlyReason(err: unknown): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error && !(err instanceof TypeError)) return err.message;
+  return err instanceof TypeError ? "Check your connection and try again." : "Is the Kosh API running?";
 }
 
 // A single SSE subscription for the tab's lifetime (guards against StrictMode / retry double-subscribe).
@@ -87,9 +94,14 @@ interface DataState {
   backend: boolean;
   /** Set when backend mode is configured but the API couldn't be reached — drives the offline banner. */
   backendError: string | null;
+  /** Native app only: there's no session, show the sign-in screen (the web signs in via GitHub redirect). */
+  needsLogin: boolean;
 
   initBackend: () => Promise<void>;
   retryBackend: () => void;
+  /** Native app: store the Bearer session token handed back by the login flow, then hydrate. */
+  completeLogin: (token: string) => Promise<void>;
+  signOut: () => Promise<void>;
   upsertItem: (item: Item) => void;
   upsertSkill: (skill: Skill) => void;
 
@@ -101,7 +113,9 @@ interface DataState {
   setRating: (id: string, rating: number) => void;
   togglePin: (id: string) => void;
   toggleFavorite: (id: string) => void;
-  softDelete: (id: string) => Item | undefined;
+  /** Optimistic; `onError` fires if the server rejects it (after the row is rolled back) — use it to
+   *  dismiss the "Moved to Trash · Undo" toast so it doesn't contradict the failure toast. */
+  softDelete: (id: string, opts?: { onError?: () => void }) => Item | undefined;
   restore: (id: string) => void;
   purge: (id: string) => void;
   emptyTrash: () => void;
@@ -176,14 +190,26 @@ export const useData = create<DataState>()(
       hydrated: !backendEnabled,
       backend: backendEnabled,
       backendError: null,
+      needsLogin: false,
 
       initBackend: async () => {
         if (!backendEnabled || initInFlight) return;
         initInFlight = true;
         try {
+          await loadSessionToken(); // native: prime the Bearer token before the first request
           try {
             await withTimeout(api.me());
-          } catch {
+          } catch (err) {
+            if (isNative) {
+              // A phone never auto-signs-in as a dev user. No/expired token → the sign-in screen;
+              // anything else (API unreachable) → the offline banner via the outer catch.
+              if (err instanceof ApiError && err.status === 401) {
+                await setSessionToken(null);
+                set({ hydrated: true, needsLogin: true, backendError: null });
+                return;
+              }
+              throw err;
+            }
             await withTimeout(api.devLogin("darshan", "Darshan"));
           }
           const [me, items, trash, skills, collections] = await withTimeout(
@@ -210,6 +236,25 @@ export const useData = create<DataState>()(
       retryBackend: () => {
         set({ backendError: null });
         void get().initBackend();
+      },
+      completeLogin: async (token) => {
+        await setSessionToken(token);
+        set({ needsLogin: false, hydrated: false, backendError: null });
+        await get().initBackend();
+      },
+      signOut: async () => {
+        try {
+          await api.logout();
+        } catch {
+          /* best-effort */
+        }
+        await setSessionToken(null);
+        if (sseUnsub) {
+          sseUnsub();
+          sseUnsub = null;
+        }
+        set({ user: emptyUser(), items: [], skills: [], collections: [], needsLogin: isNative, hydrated: true, backendError: null });
+        if (!isNative) window.location.reload(); // web: the cookie is gone — reload into the fresh (auto-login/dev) state
       },
 
       upsertItem: (item) =>
@@ -319,12 +364,13 @@ export const useData = create<DataState>()(
         if (i) get().patchItem(id, { favorite: !i.favorite });
       },
 
-      softDelete: (id) => {
+      softDelete: (id, opts) => {
         const item = get().items.find((i) => i.id === id);
         set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: nowIso() } : i)) }));
         if (get().backend && !isOptimistic(id))
           api.deleteItem(id).catch((err) => {
             set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, deletedAt: undefined } : i)) }));
+            opts?.onError?.();
             notifyError("Couldn't move to Trash", err);
           });
         return item;
@@ -586,6 +632,26 @@ export const useData = create<DataState>()(
       finalizeDrafts: (drafts, source) => {
         const created: Item[] = [];
         const now = nowIso();
+        // One toast per batch, not one per file: failures are collected for a beat and reported together
+        // with a Retry that re-finalizes just the drafts that failed.
+        const failed: DropDraft[] = [];
+        let flush = 0;
+        const reportFailure = (d: DropDraft, err: unknown) => {
+          failed.push(d);
+          window.clearTimeout(flush);
+          flush = window.setTimeout(() => {
+            const batch = failed.splice(0);
+            const first = batch[0]!;
+            const label = first.kind === "skill" ? `skill "${first.name}"` : `"${first.path}"`;
+            useUi.getState().toast({
+              message: batch.length === 1 ? `Couldn't upload ${label}` : `Couldn't upload ${batch.length} files`,
+              description: friendlyReason(err),
+              tone: "danger",
+              duration: 8000,
+              action: { label: "Retry", onClick: () => get().finalizeDrafts(batch, source) },
+            });
+          }, 300);
+        };
         for (const d of drafts) {
           if (d.kind === "skill") {
             const entry = d.files.find((f) => /^SKILL\.md$/i.test(f.path));
@@ -629,7 +695,7 @@ export const useData = create<DataState>()(
                 })
                 .catch((err) => {
                   set((s) => ({ items: s.items.filter((i) => i.id !== itemId), skills: s.skills.filter((sk) => sk.id !== skillId) }));
-                  notifyError(`Couldn't save skill "${d.name}"`, err);
+                  reportFailure(d, err);
                 });
             }
           } else {
@@ -648,7 +714,7 @@ export const useData = create<DataState>()(
                 })
                 .catch((err) => {
                   set((s) => ({ items: s.items.filter((i) => i.id !== item.id) }));
-                  notifyError(`Couldn't upload "${d.path}"`, err);
+                  reportFailure(d, err);
                 });
             }
           }

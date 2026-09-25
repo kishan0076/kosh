@@ -10,7 +10,7 @@ import { enqueue } from "../modules/queue.js";
 import { enrichItem } from "../modules/enrich.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
-import { decryptSecret } from "../auth/crypto.js";
+import { tryGithubToken } from "../integrations/githubToken.js";
 
 export const itemsRouter: Router = Router();
 
@@ -262,13 +262,13 @@ itemsRouter.post(
     const g = item.github;
     if (!g?.owner || !g.repo) throw notFound("Not a repo item.");
     const body = z.object({ dirs: z.array(z.string()).optional() }).parse(req.body ?? {});
-    const user = await getStore().users.findById(uid);
-    const r = await enrichGithub(g.owner, g.repo, { token: decryptSecret(user?.githubToken) ?? null, prevSkillIndex: g.skillIndex, etag: undefined });
+    const token = await tryGithubToken(uid); // auto-refreshed; null degrades to the server/anon token
+    const r = await enrichGithub(g.owner, g.repo, { token, prevSkillIndex: g.skillIndex, etag: undefined });
     if (!("ok" in r) || !r.ok) {
       res.status(502).json({ error: { code: "GITHUB_UNREACHABLE", message: "Couldn't reach GitHub to snapshot skills." } });
       return;
     }
-    const copied = await snapshotRepoSkills(item, r.data, { token: decryptSecret(user?.githubToken) ?? null, dirs: body.dirs });
+    const copied = await snapshotRepoSkills(item, r.data, { token, dirs: body.dirs });
     res.json({ copied });
   }),
 );

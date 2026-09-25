@@ -10,10 +10,15 @@ import { VerdictDialog } from "../detail/VerdictDialog";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { HelpSheet } from "../HelpSheet";
 import { Toaster } from "../Toaster";
-import { Button, Spinner } from "../ui";
+import { LoginScreen } from "../LoginScreen";
+import { Button } from "../ui";
+import { HydrationBar } from "../HydrationBar";
+import { PageSkeleton, skeletonFor } from "../PageSkeleton";
+import { PageTransition } from "../PageTransition";
 import { useUi } from "@/data/ui";
 import { useData } from "@/data/store";
-import { backendEnabled } from "@/data/api";
+import { api, backendEnabled } from "@/data/api";
+import { closeExternal, onDeepLink } from "@/lib/native";
 
 const COLLAPSE_KEY = "kosh.sidebar.collapsed";
 
@@ -33,11 +38,45 @@ export function AppShell() {
   const initBackend = useData((s) => s.initBackend);
   const hydrated = useData((s) => s.hydrated);
   const backendError = useData((s) => s.backendError);
-  const retryBackend = useData((s) => s.retryBackend);
+  const needsLogin = useData((s) => s.needsLogin);
+  const completeLogin = useData((s) => s.completeLogin);
+  const toast = useUi((s) => s.toast);
+  // A Retry from the offline banner re-runs the hydrate with the app still mounted; the only
+  // indication is the top progress bar (the banner clears while it's in flight and returns on failure).
+  const [retrying, setRetrying] = useState(false);
 
   useEffect(() => {
     void initBackend();
   }, [initBackend]);
+
+  // Native app: OAuth flows run in the system browser and come back as kosh:// deep links.
+  //   kosh://auth?code=…            → exchange the one-time code for a session token, then hydrate
+  //   kosh://connected?provider=…   → a Connect (GitHub / Google) flow finished; refresh the user
+  useEffect(
+    () =>
+      onDeepLink((url) => {
+        void closeExternal();
+        const host = url.host || url.pathname.replace(/^\/+/, "");
+        if (host === "auth") {
+          const code = url.searchParams.get("code");
+          if (!code) return;
+          api
+            .mobileExchange(code)
+            .then(({ token }) => completeLogin(token))
+            .catch((err: unknown) => toast({ message: "Sign-in didn't complete", description: err instanceof Error ? err.message : undefined, tone: "danger" }));
+        } else if (host === "connected") {
+          const err = url.searchParams.get("github_error") ?? url.searchParams.get("error");
+          if (err) {
+            toast({ message: "Connection failed", description: err, tone: "danger" });
+            return;
+          }
+          const who = url.searchParams.get("github_connected") ?? url.searchParams.get("connected");
+          void api.me().then((me) => useData.setState({ user: me.user })).catch(() => {});
+          toast({ message: `Connected${who ? ` as ${who}` : ""}`, tone: "ok" });
+        }
+      }),
+    [completeLogin, toast],
+  );
 
   const toggleCollapse = () => {
     setCollapsed((c) => {
@@ -68,38 +107,45 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [setPalette, setHelp, paletteOpen]);
 
-  // First load in backend mode: wait for the initial hydrate so pages don't flash empty states.
-  if (backendEnabled && !hydrated && !backendError) {
-    return (
-      <div className="grid h-dvh place-items-center bg-background">
-        <div className="flex flex-col items-center gap-3 text-muted">
-          <Spinner size={28} className="text-primary" />
-          <span className="text-[13px]">Loading your vault…</span>
-        </div>
-      </div>
-    );
-  }
+  if (needsLogin) return <LoginScreen />;
+
+  // First load in backend mode: the shell (topbar, drawer — both data-light) paints at once and the
+  // page slot shows a route-shaped skeleton until the hydrate lands, so a deep link already looks like
+  // where it's going and nothing jumps when the content arrives.
+  const hydrating = backendEnabled && !hydrated && !backendError;
+  const retry = () => {
+    setRetrying(true);
+    useData.setState({ backendError: null });
+    void initBackend().finally(() => setRetrying(false));
+  };
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
+      <HydrationBar active={hydrating || retrying} />
       <Sidebar collapsed={collapsed} onToggleCollapse={toggleCollapse} mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar onOpenMobileNav={() => setMobileOpen(true)} />
         {backendError && (
-          <div className="flex flex-wrap items-center gap-2 border-b border-danger/30 bg-danger-soft px-4 py-2 text-[13px] text-danger sm:px-5">
+          <div className="reveal-in flex flex-wrap items-center gap-2 border-b border-danger/30 bg-danger-soft px-4 py-2 text-[13px] text-danger sm:px-5">
             <WifiOff size={15} className="shrink-0" />
-            <span className="min-w-0 flex-1">Can't reach the Kosh API — changes won't be saved. Start it with <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">npm run api</code>.</span>
-            <Button variant="outline" size="sm" onClick={retryBackend}>Retry</Button>
+            <span className="min-w-0 flex-1">Can't reach the Kosh API — changes won't be saved. Start it with <code className="whitespace-nowrap rounded bg-surface px-1 py-0.5 font-mono text-[11px]">npm run api</code>.</span>
+            <Button variant="outline" size="sm" onClick={retry}>Retry</Button>
           </div>
         )}
-        <main className="min-h-0 flex-1 overflow-y-auto">
+        <main className="min-h-0 flex-1 overflow-y-auto pb-safe">
           {/* Fluid content — fills the width with a small responsive side gutter (16–20px), no fixed max width. */}
           <div className="w-full px-4 py-6 sm:px-5">
-            {/* A page crash shows an in-place recovery card (keeping the shell) instead of white-screening;
-                the resetKey clears it automatically once the user navigates elsewhere. */}
-            <ErrorBoundary resetKey={location.pathname + location.search}>
-              <Outlet />
-            </ErrorBoundary>
+            {hydrating ? (
+              <PageSkeleton variant={skeletonFor(location.pathname)} />
+            ) : (
+              /* A page crash shows an in-place recovery card (keeping the shell) instead of white-screening;
+                 the resetKey clears it automatically once the user navigates elsewhere. */
+              <ErrorBoundary resetKey={location.pathname + location.search}>
+                <PageTransition>
+                  <Outlet />
+                </PageTransition>
+              </ErrorBoundary>
+            )}
           </div>
         </main>
       </div>

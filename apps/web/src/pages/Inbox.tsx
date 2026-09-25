@@ -7,8 +7,13 @@ import { useUi } from "@/data/ui";
 import { inbox } from "@/data/selectors";
 import { itemIcon, GitHubMark } from "@/lib/icons";
 import { ago } from "@/lib/time";
+import { DUR, EASE, SPRING } from "@/lib/motion";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 import { PageHeader } from "@/components/common";
 import { Button, Kbd, Progress } from "@/components/ui";
+
+// Keyboard hints are noise under a thumb: hidden on touch screens, kept for keyboard users.
+const KBD = "[@media(pointer:coarse)]:hidden";
 
 export function Inbox() {
   const items = useData((s) => s.items);
@@ -18,6 +23,8 @@ export function Inbox() {
   const openItem = useUi((s) => s.openItem);
   const openVerdict = useUi((s) => s.openVerdict);
   const toast = useUi((s) => s.toast);
+  const dismissToast = useUi((s) => s.dismissToast);
+  const touch = useMediaQuery("(pointer: coarse)");
 
   const queue = inbox(items);
   const [idx, setIdx] = useState(0);
@@ -38,8 +45,9 @@ export function Inbox() {
   };
   const del = () => {
     if (!current) return;
-    softDelete(current.id);
-    toast({ message: "Deleted", description: current.title, action: { label: "Undo", onClick: () => restore(current.id) } });
+    const id = toast({ message: "Deleted", description: current.title, action: { label: "Undo", onClick: () => restore(current.id) } });
+    // A failed DELETE rolls the item back; drop the Undo toast so it doesn't outlive the delete.
+    softDelete(current.id, { onError: () => dismissToast(id) });
   };
 
   useEffect(() => {
@@ -83,11 +91,11 @@ export function Inbox() {
 
   return (
     <div>
-      <PageHeader title="Inbox" subtitle="Triage new captures — keyboard-first" icon={InboxIcon} />
+      <PageHeader title="Inbox" subtitle={touch ? "Triage new captures" : "Triage new captures — keyboard-first"} icon={InboxIcon} />
 
       {done ? (
         <div className="flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-border bg-surface px-6 py-20 text-center">
-          <motion.div initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", stiffness: 400, damping: 20 }} className="mb-4 grid h-16 w-16 place-items-center rounded-full bg-ok-soft text-ok">
+          <motion.div initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={SPRING.snappy} className="mb-4 grid h-16 w-16 place-items-center rounded-full bg-ok-soft text-ok">
             <Check size={32} />
           </motion.div>
           <h2 className="font-display text-xl font-semibold">Inbox zero</h2>
@@ -109,18 +117,18 @@ export function Inbox() {
                 initial={{ opacity: 0, y: 16, scale: 0.98 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -16, scale: 0.98 }}
-                transition={{ duration: 0.2 }}
-                className="rounded-[var(--radius-panel)] border border-border bg-surface p-6"
+                transition={{ duration: DUR.base, ease: EASE.standard }}
+                className="rounded-[var(--radius-panel)] border border-border bg-surface p-5 sm:p-6"
               >
                 <div className="flex items-start gap-3">
                   <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary">
                     {current.linkType === "repo" ? <GitHubMark size={20} /> : (() => { const I = itemIcon(current); return <I size={20} />; })()}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <button onClick={() => openItem(current.id)} className="text-left">
-                      <h2 className="text-lg font-semibold">{current.title}</h2>
+                    <button type="button" onClick={() => openItem(current.id)} className="-my-2 max-w-full rounded-md py-2 text-left pressable">
+                      <h2 className="break-words text-lg font-semibold leading-snug [overflow-wrap:anywhere]">{current.title}</h2>
                     </button>
-                    <p className="mt-0.5 text-[12px] text-faint">
+                    <p className="mt-0.5 break-words text-[12px] text-faint [overflow-wrap:anywhere]">
                       {current.meta?.siteName ?? current.url} · saved {ago(current.createdAt)}
                       {current.foundVia ? ` · via ${current.foundVia.label}` : ""}
                     </p>
@@ -148,10 +156,10 @@ export function Inbox() {
 
                 <div className="mt-4 flex items-center justify-between border-t border-border pt-4">
                   <Button variant="ghost" size="sm" onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0}>
-                    <ArrowLeft size={15} /> Prev <Kbd>K</Kbd>
+                    <ArrowLeft size={15} /> Prev <Kbd className={KBD}>K</Kbd>
                   </Button>
                   <Button variant="ghost" size="sm" onClick={advance}>
-                    Skip <Kbd>S</Kbd> <ArrowRight size={15} />
+                    Skip <Kbd className={KBD}>S</Kbd> <ArrowRight size={15} />
                   </Button>
                 </div>
               </motion.div>
@@ -172,12 +180,13 @@ function TriageBtn({ onClick, icon: Icon, label, k, tone }: { onClick: () => voi
   };
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`flex flex-col items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-3 text-[13px] font-medium text-muted transition-colors ${tones[tone]}`}
+      className={`flex flex-col items-center gap-1.5 rounded-[var(--radius-control)] border border-border bg-surface px-3 py-3 text-[13px] font-medium text-muted transition-colors pressable motion-safe:active:scale-[0.97] ${tones[tone]}`}
     >
       <Icon size={18} />
       <span className="flex items-center gap-1.5">
-        {label} <Kbd>{k}</Kbd>
+        {label} <Kbd className={KBD}>{k}</Kbd>
       </span>
     </button>
   );

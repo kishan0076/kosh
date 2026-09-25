@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Book, FileCode2, FileText, FolderUp, Github, Globe, Lock, Plus, RefreshCw, Scale, Sparkles, Tag } from "lucide-react";
+import { ArrowLeft, Book, ChevronDown, FileCode2, FileText, FolderUp, Github, Globe, Lock, Plus, RefreshCw, Scale, Sparkles, Tag } from "lucide-react";
 import { formatBytes, isValidRepoName } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
@@ -10,8 +10,9 @@ import { useGithubV2, ghToast } from "@/data/githubV2";
 import { GITIGNORE_TEMPLATES, LICENSE_TEMPLATES } from "@/lib/githubTemplates";
 import { readFolderPlan, readDropPlan, type LoadedRepoFile } from "@/lib/repoFolder";
 import { GitHubMark } from "@/lib/icons";
-import { Button, Input, Spinner, Toggle } from "@/components/ui";
+import { Badge, Button, Input, Spinner, Toggle } from "@/components/ui";
 import { SelectMenu } from "@/components/overlays";
+import { Collapse } from "@/components/motion";
 import { GitScanCard } from "@/components/github/GitScanCard";
 import { RepoNameField, SecretFindings, TopicsInput, VisibilityPicker, type NameStatus, type SecretFinding } from "@/components/github/RepoForm";
 
@@ -51,6 +52,8 @@ export function GithubNew() {
   const [nameStatus, setNameStatus] = useState<NameStatus>("idle");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Under lg the "You'll get" preview sits above the form as a one-line strip; this expands it.
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   useEffect(() => {
     const el = seedInputRef.current;
@@ -182,16 +185,47 @@ export function GithubNew() {
       <span className="flex items-center gap-2">
         {o.avatarUrl ? <img src={o.avatarUrl} alt="" referrerPolicy="no-referrer" className="h-4 w-4 rounded-full" /> : <Github size={13} className="text-muted" />}
         <span className="truncate">{o.login}</span>
-        {o.type === "org" && <span className="ml-auto rounded-full bg-surface-3 px-1.5 text-[10px] text-muted">org</span>}
+        {o.type === "org" && <span className="ml-auto rounded-full bg-surface-3 px-1.5 text-[11px] text-muted">org</span>}
       </span>
     ),
   }));
 
+  // The preview body is rendered once for lg+ (always open) and once inside the phone Collapse.
+  const preview = (
+    <div className="space-y-3 px-4 py-4">
+      <div className="flex items-center gap-2">
+        <GitHubMark size={17} className="shrink-0 text-muted" />
+        <span className="min-w-0 flex-1 truncate font-mono text-[13.5px] font-semibold">{owner}/{trimmedName || <span className="text-faint">name</span>}</span>
+        <Badge className="shrink-0">{isPrivate ? <Lock size={10} /> : <Globe size={10} />} {isPrivate ? "Private" : "Public"}</Badge>
+      </div>
+      {description.trim() && <p className="text-[12.5px] text-muted">{description.trim()}</p>}
+      <div className="break-all rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-muted">
+        git clone https://github.com/{owner}/{trimmedName || "name"}.git
+      </div>
+      {initFiles.length > 0 ? (
+        <div>
+          <div className="mb-1 text-[12px] text-faint">Initial files</div>
+          <div className="flex flex-wrap gap-1.5">
+            {initFiles.map((f) => <Badge key={f} tone="primary" className="font-mono"><Sparkles size={10} /> {f}</Badge>)}
+          </div>
+        </div>
+      ) : (
+        <p className="text-[12px] text-faint">Created empty — you can push your first commit right away.</p>
+      )}
+      {topics.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {topics.map((t) => <Badge key={t}>#{t}</Badge>)}
+        </div>
+      )}
+    </div>
+  );
+  const previewSummary = `${owner}/${trimmedName || "name"} · ${isPrivate ? "Private" : "Public"}${initFiles.length ? ` · ${initFiles.join(", ")}` : " · empty"}`;
+
   return (
     <div className="w-full space-y-5">
-      <button onClick={() => navigate("/github")} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground"><ArrowLeft size={15} /> All repositories</button>
+      <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate("/github")}><ArrowLeft size={15} /> All repositories</Button>
 
-      <header className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
+      <header className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-4 py-4 sm:px-5">
         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><Plus size={22} /></span>
         <div className="min-w-0">
           <h1 className="text-xl font-semibold leading-tight">Create a new repository</h1>
@@ -199,16 +233,19 @@ export function GithubNew() {
         </div>
       </header>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+      {/* minmax(0,1fr) so intrinsic widths (a long org login, the clone URL) can't size the column past the phone */}
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
         {/* left: form */}
-        <div className="space-y-4 rounded-[var(--radius-card)] border border-border bg-surface p-5">
+        <div className="min-w-0 space-y-4 rounded-[var(--radius-card)] border border-border bg-surface p-5">
           {/* owner + name */}
-          <div className="grid gap-3 sm:grid-cols-[auto_1fr] sm:items-end">
-            <div>
+          <div className="grid grid-cols-[minmax(0,1fr)] gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-end">
+            <div className="min-w-0">
               <label className="mb-1.5 block text-[12px] font-medium text-muted">Owner</label>
               <SelectMenu value={owner} onChange={setOwner} options={ownerOptions} width={240} ariaLabel="Owner" className="w-full sm:w-[160px]" />
             </div>
-            <RepoNameField value={name} onChange={setName} ownerPrefix={owner} status={nameStatus} autoFocus onEnter={create} />
+            <div className="min-w-0">
+              <RepoNameField value={name} onChange={setName} ownerPrefix={owner} status={nameStatus} autoFocus onEnter={create} />
+            </div>
           </div>
 
           <div>
@@ -225,7 +262,7 @@ export function GithubNew() {
           <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3.5">
             <div className="mb-2.5 text-[12px] font-semibold uppercase tracking-wide text-faint">Initialize this repository</div>
             <div className="flex items-center justify-between gap-3">
-              <span className="flex items-center gap-2 text-[13px]"><Book size={15} className="text-muted" /> Add a README {readmeForced && <span className="text-[11px] text-faint">(added automatically with a template)</span>}</span>
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px]"><Book size={15} className="text-muted" /> Add a README {readmeForced && <span className="text-[12px] text-faint">(added automatically with a template)</span>}</span>
               <Toggle checked={initReadme || readmeForced} onChange={setInitReadme} disabled={readmeForced} label="Add a README" />
             </div>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -263,6 +300,8 @@ export function GithubNew() {
                   >
                     <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">{seedReading ? <Spinner size={18} /> : <FolderUp size={20} />}</span>
                     <span className="text-[13px] font-medium">{seedReading ? "Reading folder…" : "Drop a folder, or choose one"}</span>
+                    {/* phone browsers can't pick a whole folder — say so instead of letting the tap silently fail */}
+                    <span className="text-[12.5px] text-muted [@media(pointer:fine)]:hidden">Folder upload works best in a desktop browser.</span>
                   </button>
                 ) : (
                   <div className="overflow-hidden rounded-[var(--radius-control)] border border-border">
@@ -274,7 +313,7 @@ export function GithubNew() {
                     </div>
                     <div className="max-h-40 overflow-y-auto">
                       {seedFiles.slice(0, 200).map((f) => (
-                        <div key={f.path} className="flex items-center gap-2 border-b border-border px-3 py-1 font-mono text-[11.5px] last:border-0">
+                        <div key={f.path} className="flex items-center gap-2 border-b border-border px-3 py-1 font-mono text-[12px] last:border-0">
                           <span className="min-w-0 flex-1 truncate">{f.path}</span>
                           <span className="shrink-0 text-faint">{formatBytes(f.size)}</span>
                         </div>
@@ -288,9 +327,9 @@ export function GithubNew() {
           </div>
 
           {/* advanced */}
-          <button onClick={() => setShowAdvanced((v) => !v)} className="text-[12.5px] font-medium text-primary hover:underline">
+          <Button variant="ghost" size="sm" className="-ml-3 text-primary" onClick={() => setShowAdvanced((v) => !v)}>
             {showAdvanced ? "Hide" : "Show"} advanced options
-          </button>
+          </Button>
           {showAdvanced && (
             <div className="space-y-4 border-t border-border pt-4">
               <div>
@@ -306,46 +345,26 @@ export function GithubNew() {
 
           {error && <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
 
-          <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+          {/* Sticky on phones so Create stays reachable under the seed/advanced sections and the keyboard. */}
+          <div className="sticky bottom-0 z-10 -mx-5 -mb-5 flex items-center justify-end gap-2 rounded-b-[var(--radius-card)] border-t border-border bg-surface px-5 pb-[calc(0.75rem+var(--safe-bottom))] pt-3 lg:static lg:mx-0 lg:mb-0 lg:rounded-none lg:px-0 lg:pb-0 lg:pt-4">
             <Button variant="ghost" onClick={() => navigate("/github")} disabled={busy}>Cancel</Button>
-            <Button variant="primary" onClick={create} disabled={!canCreate}>{busy ? <Spinner size={15} /> : <Plus size={15} />} Create repository</Button>
+            <Button variant="primary" className="flex-1 sm:flex-none" onClick={create} disabled={!canCreate} loading={busy}><Plus size={15} /> Create repository</Button>
           </div>
         </div>
 
-        {/* right: preview */}
-        <aside className="space-y-4 lg:sticky lg:top-4">
+        {/* right: preview — first (a collapsed strip) on phones, a sticky card on lg+ */}
+        <aside className="order-first min-w-0 space-y-4 lg:order-none lg:sticky lg:top-4">
           <section className="overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface">
-            <div className="border-b border-border px-4 py-3 text-[12px] font-semibold uppercase tracking-wide text-faint">You'll get</div>
-            <div className="space-y-3 px-4 py-4">
-              <div className="flex items-center gap-2">
-                <GitHubMark size={17} className="shrink-0 text-muted" />
-                <span className="min-w-0 flex-1 truncate font-mono text-[13.5px] font-semibold">{owner}/{trimmedName || <span className="text-faint">name</span>}</span>
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10.5px] text-muted">
-                  {isPrivate ? <Lock size={10} /> : <Globe size={10} />} {isPrivate ? "Private" : "Public"}
-                </span>
-              </div>
-              {description.trim() && <p className="text-[12.5px] text-muted">{description.trim()}</p>}
-              <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 px-2.5 py-2 font-mono text-[11.5px] text-muted">
-                git clone https://github.com/{owner}/{trimmedName || "name"}.git
-              </div>
-              {initFiles.length > 0 ? (
-                <div>
-                  <div className="mb-1 text-[11.5px] text-faint">Initial files</div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {initFiles.map((f) => <span key={f} className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2 py-0.5 font-mono text-[11px] text-primary"><Sparkles size={10} /> {f}</span>)}
-                  </div>
-                </div>
-              ) : (
-                <p className="text-[11.5px] text-faint">Created empty — you can push your first commit right away.</p>
-              )}
-              {topics.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {topics.map((t) => <span key={t} className="rounded-full bg-surface-2 px-2 py-0.5 text-[11px] text-muted">#{t}</span>)}
-                </div>
-              )}
-            </div>
+            <button type="button" onClick={() => setPreviewOpen((v) => !v)} aria-expanded={previewOpen} className="pressable flex min-h-11 w-full items-center gap-2 px-4 py-2.5 text-left lg:hidden">
+              <span className="shrink-0 text-[12px] font-semibold uppercase tracking-wide text-faint">You'll get</span>
+              <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-muted">{previewSummary}</span>
+              <ChevronDown size={15} className={cn("shrink-0 text-faint transition-transform", previewOpen && "rotate-180")} />
+            </button>
+            <div className="hidden border-b border-border px-4 py-3 text-[12px] font-semibold uppercase tracking-wide text-faint lg:block">You'll get</div>
+            <div className="hidden lg:block">{preview}</div>
+            <Collapse open={previewOpen} className="lg:hidden"><div className="border-t border-border">{preview}</div></Collapse>
           </section>
-          <p className="px-1 text-[11.5px] text-faint">Want to push an existing folder instead? Use <button onClick={() => navigate("/github/upload")} className="font-medium text-primary hover:underline">Upload a folder</button>.</p>
+          <p className="px-1 text-[12px] text-faint">Want to push an existing folder instead? Use <button onClick={() => navigate("/github/upload")} className="-my-2 inline-block py-2 font-medium text-primary hover:underline">Upload a folder</button>.</p>
         </aside>
       </div>
     </div>

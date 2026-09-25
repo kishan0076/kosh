@@ -6,8 +6,9 @@ import { ApiError } from "@/data/api";
 import { githubV2Api, type BranchLite, type RepoDetail } from "@/data/githubV2Api";
 import { useGithubV2, ghToast } from "@/data/githubV2";
 import { GitHubMark } from "@/lib/icons";
-import { Button, Input, Spinner } from "@/components/ui";
+import { Button, Input } from "@/components/ui";
 import { Modal, SelectMenu } from "@/components/overlays";
+import { PageSkeleton } from "@/components/PageSkeleton";
 import { RepoNameField, TopicsInput, VisibilityPicker } from "@/components/github/RepoForm";
 
 /**
@@ -32,6 +33,7 @@ export function GithubSettings() {
   const [topics, setTopics] = useState<string[]>([]);
 
   const [busy, setBusy] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -53,7 +55,7 @@ export function GithubSettings() {
     return () => { live = false; };
   }, [owner, repo]);
 
-  if (loading) return <div className="grid min-h-[50vh] place-items-center"><Spinner size={24} className="text-primary" /></div>;
+  if (loading) return <PageSkeleton variant="settings" />;
   if (loadError || !detail) {
     return (
       <div className="mx-auto grid min-h-[50vh] w-full max-w-lg place-items-center">
@@ -101,8 +103,8 @@ export function GithubSettings() {
   }
 
   async function toggleArchive() {
-    if (busy || !detail) return;
-    setBusy(true); setError(null);
+    if (busy || archiving || !detail) return;
+    setArchiving(true); setError(null);
     try {
       const { repo: d } = await githubV2Api.updateRepo(detail.owner, detail.name, { archived: !detail.archived });
       useGithubV2.getState().upsertRepo(d);
@@ -111,7 +113,7 @@ export function GithubSettings() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't change archive state.");
     } finally {
-      setBusy(false);
+      setArchiving(false);
     }
   }
 
@@ -119,9 +121,9 @@ export function GithubSettings() {
 
   return (
     <div className="w-full space-y-5">
-      <button onClick={() => navigate(`/github/${owner}/${repo}`)} className="inline-flex items-center gap-1.5 text-[13px] text-muted hover:text-foreground"><ArrowLeft size={15} /> Back to repository</button>
+      <Button variant="ghost" size="sm" className="-ml-2" onClick={() => navigate(`/github/${owner}/${repo}`)}><ArrowLeft size={15} /> Back to repository</Button>
 
-      <header className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-5 py-4">
+      <header className="flex items-center gap-4 rounded-[var(--radius-card)] border border-border bg-surface px-4 py-4 sm:px-5">
         <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><Settings2 size={22} /></span>
         <div className="min-w-0">
           <h1 className="text-xl font-semibold leading-tight">Settings</h1>
@@ -134,7 +136,7 @@ export function GithubSettings() {
         <div className="text-[12px] font-semibold uppercase tracking-wide text-faint">General</div>
         <div>
           <RepoNameField value={name} onChange={setName} ownerPrefix={detail.owner} label="Repository name" onEnter={save} />
-          {nameValid && renamed && <p className="mt-1 text-[11.5px] text-warn">Renaming changes the repository URL — existing links and clones will break.</p>}
+          {nameValid && renamed && <p className="mt-1 text-[12.5px] text-warn">Renaming changes the repository URL — existing links and clones will break.</p>}
         </div>
         <div>
           <label htmlFor="s-desc" className="mb-1.5 block text-[12px] font-medium text-muted">Description</label>
@@ -144,12 +146,13 @@ export function GithubSettings() {
           <label htmlFor="s-home" className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-muted"><Globe size={13} /> Homepage</label>
           <Input id="s-home" value={homepage} onChange={(e) => setHomepage(e.target.value)} placeholder="https://…" />
         </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
+        {/* minmax(0,1fr): a long branch name in the SelectMenu must truncate, not size the column past the phone */}
+        <div className="grid grid-cols-[minmax(0,1fr)] gap-4 sm:grid-cols-2">
+          <div className="min-w-0">
             <span className="mb-1.5 block text-[12px] font-medium text-muted">Visibility</span>
             <VisibilityPicker isPrivate={isPrivate} onChange={setIsPrivate} variant="compact" />
           </div>
-          <div>
+          <div className="min-w-0">
             <label className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-muted"><GitBranch size={13} /> Default branch</label>
             <SelectMenu value={defaultBranch} onChange={setDefaultBranch} options={branchOptions} width={280} ariaLabel="Default branch" className="w-full" />
           </div>
@@ -161,9 +164,9 @@ export function GithubSettings() {
 
         {error && <div className="rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
 
-        <div className="flex items-center justify-between border-t border-border pt-4">
-          <Button variant="ghost" size="sm" onClick={toggleArchive} disabled={busy}><Archive size={14} /> {detail.archived ? "Unarchive" : "Archive"}</Button>
-          <Button variant="primary" onClick={save} disabled={!nameValid || !dirty || busy}>{busy ? <Spinner size={15} /> : <Check size={15} />} Save changes</Button>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+          <Button variant="ghost" size="sm" onClick={toggleArchive} disabled={busy} loading={archiving}><Archive size={14} /> {detail.archived ? "Unarchive" : "Archive"}</Button>
+          <Button variant="primary" onClick={save} disabled={!nameValid || !dirty || archiving} loading={busy}><Check size={15} /> Save changes</Button>
         </div>
       </section>
 
@@ -172,9 +175,9 @@ export function GithubSettings() {
         <section className="overflow-hidden rounded-[var(--radius-card)] border border-danger/30">
           <div className="border-b border-danger/20 bg-danger-soft/40 px-5 py-2.5 text-[12px] font-semibold uppercase tracking-wide text-danger">Danger zone</div>
           <div className="flex flex-wrap items-center justify-between gap-3 bg-surface px-5 py-4">
-            <div>
+            <div className="min-w-0 flex-1 basis-56">
               <div className="text-[13.5px] font-semibold">Delete this repository</div>
-              <div className="text-[12px] text-muted">Permanently removes {detail.fullName}, its code, issues, PRs and releases.</div>
+              <div className="text-[12px] text-muted [overflow-wrap:anywhere]">Permanently removes {detail.fullName}, its code, issues, PRs and releases.</div>
             </div>
             <Button variant="outline" size="sm" className="border-danger/40 text-danger hover:bg-danger-soft" onClick={() => setDeleting(true)}><Trash2 size={14} /> Delete</Button>
           </div>
@@ -208,16 +211,17 @@ function DeleteRepoModal({ repo, onClose, onDeleted }: { repo: RepoDetail; onClo
 
   return (
     <Modal open onClose={onClose} className="w-full max-w-md" labelledBy="del-repo-title">
-      <div className="p-5">
+      {/* body scrolls, footer stays visible (the Modal panel is a flex column / bottom sheet on phones) */}
+      <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-2">
         <h2 id="del-repo-title" className="flex items-center gap-2 text-[16px] font-semibold text-danger"><GitHubMark size={17} /> Delete repository</h2>
-        <p className="mt-2 text-[13px] text-muted">This permanently deletes <span className="font-mono font-medium text-foreground">{repo.fullName}</span>, its code, issues, PRs and releases. This cannot be undone.</p>
-        <label htmlFor="del-confirm" className="mb-1.5 mt-4 block text-[12px] font-medium text-muted">Type <span className="font-mono text-foreground">{repo.fullName}</span> to confirm</label>
-        <input id="del-confirm" autoFocus value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && del()} className="w-full rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[13px] outline-none focus:border-danger focus:ring-focus" />
+        <p className="mt-2 text-[13px] text-muted [overflow-wrap:anywhere]">This permanently deletes <span className="font-mono font-medium text-foreground">{repo.fullName}</span>, its code, issues, PRs and releases. This cannot be undone.</p>
+        <label htmlFor="del-confirm" className="mb-1.5 mt-4 block text-[12px] font-medium text-muted [overflow-wrap:anywhere]">Type <span className="font-mono text-foreground">{repo.fullName}</span> to confirm</label>
+        <Input id="del-confirm" autoFocus value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && del()} autoCapitalize="off" autoComplete="off" spellCheck={false} className="font-mono focus:border-danger" />
         {error && <div className="mt-3 rounded-[var(--radius-control)] border border-danger/40 bg-danger-soft px-3 py-2 text-[12.5px] text-danger">{error}</div>}
-        <div className="mt-5 flex justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button variant="danger" onClick={del} disabled={!match || busy}>{busy ? <Spinner size={15} /> : <Trash2 size={15} />} Delete forever</Button>
-        </div>
+      </div>
+      <div className="flex shrink-0 justify-end gap-2 px-5 pb-5 pt-3">
+        <Button variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button variant="danger" onClick={del} disabled={!match} loading={busy}><Trash2 size={15} /> Delete forever</Button>
       </div>
     </Modal>
   );

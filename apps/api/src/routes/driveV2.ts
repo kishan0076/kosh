@@ -2,7 +2,7 @@ import { Router, type Request } from "express";
 import { z } from "zod";
 import { canGrantExpiry, driveHasTextSource, EXPIRY_ROLES } from "@kosh/shared";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
-import { aiConfigured, AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
+import { aiAvailable, AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
 import { nlToDriveQuery, prioritizeCleanup, summarizeDriveFile } from "../integrations/driveAi.js";
 import { AppError, ah, badRequest, forbidden, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
@@ -584,8 +584,8 @@ driveV2Router.post(
   "/drive-v2/accounts/:id/files/:fileId/summarize",
   ah(async (req, res) => {
     const uid = requireWrite(req);
-    // Fail fast before any Drive call when AI is off, so a misconfigured server doesn't do wasted work.
-    if (!aiConfigured()) throw new AppError("AI_OFF", "AI isn't configured on the server.", 503);
+    // Fail fast before any Drive call when AI is off for this user, so we don't do wasted work.
+    if (!(await aiAvailable(uid))) throw new AppError("AI_OFF", "AI isn't configured — add an API key in Settings.", 503);
     const token = await auth(req, uid);
     const id = fileId(String(req.params.fileId));
     const node = await driveCall(req, getFile(token, id));
@@ -609,7 +609,7 @@ driveV2Router.post(
   "/drive-v2/accounts/:id/ai-search",
   ah(async (req, res) => {
     const uid = requireWrite(req);
-    if (!aiConfigured()) throw new AppError("AI_OFF", "AI isn't configured on the server.", 503);
+    if (!(await aiAvailable(uid))) throw new AppError("AI_OFF", "AI isn't configured — add an API key in Settings.", 503);
     // Pure LLM step (no Drive call) — the client runs the returned query through the normal search path.
     const { query, today } = z
       .object({ query: z.string().trim().min(1).max(500), today: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() })
@@ -624,7 +624,7 @@ driveV2Router.post(
   "/drive-v2/accounts/:id/ai-cleanup",
   ah(async (req, res) => {
     const uid = requireWrite(req);
-    if (!aiConfigured()) throw new AppError("AI_OFF", "AI isn't configured on the server.", 503);
+    if (!(await aiAvailable(uid))) throw new AppError("AI_OFF", "AI isn't configured — add an API key in Settings.", 503);
     const { buckets } = z
       .object({
         buckets: z

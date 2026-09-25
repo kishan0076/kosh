@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Command } from "cmdk";
 import {
@@ -16,6 +16,7 @@ import {
   Settings,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
 import { searchItems } from "@kosh/shared";
 import { GitHubMark, itemIcon } from "@/lib/icons";
@@ -23,10 +24,12 @@ import { parseCapture } from "@/lib/capture";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
-import { Kbd } from "../ui";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
+import { Button, Kbd } from "../ui";
 
 export function CommandPalette() {
   const open = useUi((s) => s.paletteOpen);
+  const paletteQuery = useUi((s) => s.paletteQuery);
   const setPalette = useUi((s) => s.setPalette);
   const openItem = useUi((s) => s.openItem);
   const toast = useUi((s) => s.toast);
@@ -34,6 +37,11 @@ export function CommandPalette() {
   const ingestUrl = useData((s) => s.ingestUrl);
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
+  const phone = useMediaQuery(PHONE_QUERY);
+  // Open pre-filled with whatever the opener handed over (Quick-Add free text, "/settings"); close() clears it.
+  useEffect(() => {
+    if (open) setSearch(paletteQuery);
+  }, [open, paletteQuery]);
 
   const intent = parseCapture(search);
   const isSave = intent.kind === "link" || intent.kind === "repo";
@@ -89,28 +97,34 @@ export function CommandPalette() {
       }}
     >
       <div className="fixed inset-0 z-[60] bg-black/45 backdrop-blur-[2px]" onClick={close} />
-      <div className="fixed left-1/2 top-[12vh] z-[61] w-[calc(100%-2rem)] max-w-[640px] -translate-x-1/2 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-elevated shadow-[var(--shadow-pop)]">
+      {/* Phones: anchored to the top (under the notch) with a dvh-based list, so the input and the
+          first results stay above the keyboard; desktop keeps the 12vh drop. */}
+      <div className="fixed left-1/2 top-[max(var(--safe-top),8px)] z-[61] w-[calc(100%-1rem)] max-w-[640px] -translate-x-1/2 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-elevated shadow-[var(--shadow-pop)] sm:top-[12vh] sm:w-[calc(100%-2rem)]">
         {/* input */}
         <div className="flex items-center gap-3 border-b border-border px-4">
           <span className="shrink-0 text-muted">
             {intent.kind === "repo" ? <GitHubMark size={18} /> : intent.kind === "link" ? <Link2 size={18} /> : intent.kind === "command" ? <Sparkles size={18} className="text-primary" /> : <Search size={18} />}
           </span>
+          {/* 16px on phones — iOS zooms into anything smaller — and a placeholder that fits the width. */}
           <Command.Input
             value={search}
             onValueChange={setSearch}
             autoFocus
-            placeholder="Search your vault, paste a link, or type / for commands…"
-            className="h-14 flex-1 bg-transparent text-[15px] outline-none placeholder:text-faint"
+            placeholder={phone ? "Search or paste a link…" : "Search your vault, paste a link, or type / for commands…"}
+            className="h-14 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-faint sm:text-[15px]"
           />
           {isSave && (
             <span className="hidden shrink-0 items-center gap-1 rounded-full bg-primary-soft px-2 py-1 text-[11px] font-semibold text-primary sm:flex">
               {intent.kind === "repo" ? "Add repo" : "Save link"}
             </span>
           )}
-          <Kbd>Esc</Kbd>
+          <Kbd className="hidden sm:inline-flex">Esc</Kbd>
+          <Button variant="ghost" size="icon" aria-label="Close" onClick={close} className="-mr-2 sm:hidden">
+            <X size={18} />
+          </Button>
         </div>
 
-        <Command.List className="max-h-[min(60vh,420px)] overflow-y-auto p-2">
+        <Command.List className="max-h-[calc(100dvh-max(var(--safe-top),8px)-4.5rem)] overflow-y-auto p-2 sm:max-h-[min(60vh,420px)]">
           <Command.Empty className="py-10 text-center text-sm text-muted">No matches. Paste a URL to save it.</Command.Empty>
 
           {/* save action */}
@@ -132,7 +146,7 @@ export function CommandPalette() {
                   subtitle={intent.kind === "repo" ? intent.url : (intent as { url: string }).url}
                   onSelect={() => doSave(false)}
                   trailing={
-                    <span className="flex items-center gap-1 text-[11px] text-faint">
+                    <span className="hidden items-center gap-1 text-[11px] text-faint sm:flex">
                       <Kbd>⌘</Kbd>
                       <Kbd>↵</Kbd> keep open
                     </span>
@@ -140,15 +154,6 @@ export function CommandPalette() {
                   highlight
                 />
               )}
-            </Command.Group>
-          )}
-
-          {/* create */}
-          {!isSave && (
-            <Command.Group heading="Create" className="cmdk-group">
-              <PaletteRow icon={Quote} title="New prompt" onSelect={() => go("/prompts?new=1")} />
-              <PaletteRow icon={Blocks} title="New skill" onSelect={() => go("/skills/new")} />
-              <PaletteRow icon={FolderOpen} title="New collection" onSelect={() => go("/collections")} />
             </Command.Group>
           )}
 
@@ -170,6 +175,15 @@ export function CommandPalette() {
             </Command.Group>
           )}
 
+          {/* create — after the matches, so a typed query surfaces results first on a short list */}
+          {!isSave && (
+            <Command.Group heading="Create" className="cmdk-group">
+              <PaletteRow icon={Quote} title="New prompt" onSelect={() => go("/prompts?new=1")} />
+              <PaletteRow icon={Blocks} title="New skill" onSelect={() => go("/skills/new")} />
+              <PaletteRow icon={FolderOpen} title="New collection" onSelect={() => go("/collections")} />
+            </Command.Group>
+          )}
+
           {/* go to */}
           {!isSave && (
             <Command.Group heading="Go to" className="cmdk-group">
@@ -184,8 +198,8 @@ export function CommandPalette() {
           )}
         </Command.List>
 
-        {/* footer */}
-        <div className="flex items-center justify-between border-t border-border px-4 py-2.5 text-[11px] text-faint">
+        {/* footer — keyboard guidance, so desktop only */}
+        <div className="hidden items-center justify-between border-t border-border px-4 py-2.5 text-[11px] text-faint sm:flex">
           <span className="flex items-center gap-1.5">
             <Sparkles size={13} className="text-gold" /> Kosh
           </span>

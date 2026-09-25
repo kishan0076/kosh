@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Blocks,
   ChevronLeft,
@@ -22,9 +23,13 @@ import { cn } from "@/lib/cn";
 import { useData } from "@/data/store";
 import { inbox, live } from "@/data/selectors";
 import { useUi } from "@/data/ui";
+import { DUR, EASE } from "@/lib/motion";
 import { Logo } from "./Logo";
 import { Tooltip } from "../overlays";
-import { Progress } from "../ui";
+import { Button, Progress } from "../ui";
+
+// Drawer rows: 40px on phones (py-2.5), the designed 36px with a mouse; `.pressable` gives the press.
+const ROW = "flex items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2.5 font-medium pressable lg:py-2";
 
 interface NavItem {
   to: string;
@@ -35,7 +40,7 @@ interface NavItem {
 }
 
 export function Sidebar({
-  collapsed,
+  collapsed: collapsedPref,
   onToggleCollapse,
   mobileOpen,
   onCloseMobile,
@@ -45,6 +50,9 @@ export function Sidebar({
   mobileOpen: boolean;
   onCloseMobile: () => void;
 }) {
+  // The desktop "collapsed" preference must never leak into the phone drawer: an icon-only 76px drawer
+  // with hover-tooltips and no expand control is unusable on touch. The drawer is always full width.
+  const collapsed = collapsedPref && !mobileOpen;
   const items = useData((s) => s.items);
   const collections = useData((s) => s.collections);
   const user = useData((s) => s.user);
@@ -72,24 +80,34 @@ export function Sidebar({
 
   return (
     <>
-      {/* mobile scrim */}
-      {mobileOpen && <div className="fixed inset-0 z-40 bg-black/40 lg:hidden" onClick={onCloseMobile} />}
+      {/* mobile scrim — fades with the drawer instead of popping */}
+      <AnimatePresence>
+        {mobileOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1, transition: { duration: DUR.base, ease: EASE.standard } }}
+            exit={{ opacity: 0, transition: { duration: DUR.fast, ease: EASE.exit } }}
+            className="fixed inset-0 z-40 bg-black/40 lg:hidden"
+            onClick={onCloseMobile}
+          />
+        )}
+      </AnimatePresence>
 
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-border bg-surface transition-[width,transform] duration-300 lg:static lg:z-auto lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-50 flex flex-col border-r border-border bg-surface pt-safe pb-safe transition-[width,transform] duration-[var(--motion-slow)] ease-[var(--ease-emphasized)] lg:static lg:z-auto lg:translate-x-0",
           collapsed ? "w-[76px]" : "w-[248px]",
           mobileOpen ? "translate-x-0" : "-translate-x-full",
         )}
       >
         {/* brand */}
         <div className={cn("flex h-16 items-center px-4", collapsed ? "justify-center" : "justify-between")}>
-          <NavLink to="/" onClick={onCloseMobile}>
+          <NavLink to="/" onClick={onCloseMobile} className="-mx-1 flex min-h-10 items-center rounded-md px-1 pressable">
             <Logo collapsed={collapsed} />
           </NavLink>
-          <button onClick={onCloseMobile} className="rounded-md p-1.5 text-muted hover:bg-surface-2 lg:hidden" aria-label="Close menu">
+          <Button variant="ghost" size="icon" onClick={onCloseMobile} className="-mr-2 lg:hidden" aria-label="Close menu">
             <X size={18} />
-          </button>
+          </Button>
         </div>
 
         {/* nav */}
@@ -110,10 +128,7 @@ export function Sidebar({
                     to={`/collections/${c.slug}`}
                     onClick={onCloseMobile}
                     className={({ isActive }) =>
-                      cn(
-                        "flex items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors",
-                        isActive ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground",
-                      )
+                      cn(ROW, "text-[13.5px]", isActive ? "bg-primary-soft text-primary active:bg-primary-soft/80" : "text-muted hover:bg-surface-2 hover:text-foreground active:bg-surface-2")
                     }
                   >
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
@@ -124,7 +139,7 @@ export function Sidebar({
                 <NavLink
                   to="/collections"
                   onClick={onCloseMobile}
-                  className="flex items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13px] text-faint transition-colors hover:bg-surface-2 hover:text-foreground"
+                  className={cn(ROW, "text-[13px] font-normal text-faint hover:bg-surface-2 hover:text-foreground active:bg-surface-2")}
                 >
                   <FolderOpen size={16} />
                   All collections
@@ -138,9 +153,10 @@ export function Sidebar({
           </div>
         </nav>
 
-        {/* status card */}
+        {/* status card — the meters cost ~200px, so on short phone viewports (iPhone SE, small
+            Android) they yield to the nav (they remain in Settings); desktop always shows them. */}
         {!collapsed && (
-          <div className="mx-3 mb-2 rounded-[var(--radius-card)] border border-border bg-surface-2 p-3.5 raised">
+          <div className="mx-3 mb-2 hidden rounded-[var(--radius-card)] border border-border bg-surface-2 p-3.5 raised [@media(min-height:760px)]:block lg:block">
             <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-muted">
               <span>Storage</span>
               <span className="tabular">{formatBytes(user.storageUsed)} / {formatBytes(user.storageQuota)}</span>
@@ -162,10 +178,7 @@ export function Sidebar({
               setHelp(true);
               onCloseMobile();
             }}
-            className={cn(
-              "flex w-full items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium text-muted transition-colors hover:bg-surface-2 hover:text-foreground",
-              collapsed && "justify-center px-0",
-            )}
+            className={cn(ROW, "w-full text-[13.5px] text-muted hover:bg-surface-2 hover:text-foreground active:bg-surface-2", collapsed && "justify-center px-0")}
           >
             <HelpCircle size={18} />
             {!collapsed && "Help & shortcuts"}
@@ -195,9 +208,10 @@ function NavRow({ item, collapsed, onClick }: { item: NavItem; collapsed: boolea
       onClick={onClick}
       className={({ isActive }) =>
         cn(
-          "relative flex items-center gap-2.5 rounded-[var(--radius-control)] px-3 py-2 text-[13.5px] font-medium transition-colors",
+          ROW,
+          "relative text-[13.5px]",
           collapsed && "justify-center px-0",
-          isActive ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground",
+          isActive ? "bg-primary-soft text-primary active:bg-primary-soft/80" : "text-muted hover:bg-surface-2 hover:text-foreground active:bg-surface-2",
         )
       }
     >

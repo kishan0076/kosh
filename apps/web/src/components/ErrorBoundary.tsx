@@ -57,7 +57,7 @@ export class ErrorBoundary extends Component<Props, State> {
             This view hit an unexpected error and stopped rendering. Your files are safe — reloading usually clears it.
           </p>
           {error.message && (
-            <p className="mx-auto mt-3 max-w-sm break-words rounded-[var(--radius-control)] bg-surface-2 px-3 py-2 font-mono text-[11.5px] text-muted">
+            <p className="mx-auto mt-3 max-w-sm break-words rounded-[var(--radius-control)] bg-surface-2 px-3 py-2 text-left font-mono text-[12px] text-muted sm:text-[11.5px]">
               {error.message}
             </p>
           )}

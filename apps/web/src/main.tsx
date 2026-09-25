@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { MotionConfig } from "motion/react";
 import "./index.css";
 import { initTheme } from "@/lib/theme";
+import { isNative } from "@/lib/native";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { AppShell } from "@/components/layout/AppShell";
 import { Home } from "@/pages/Home";
@@ -26,8 +27,9 @@ import { NotFound } from "@/pages/NotFound";
 
 initTheme();
 
-// Register the PWA service worker (share target, installability, light offline shell).
-if ("serviceWorker" in navigator && import.meta.env.PROD) {
+// Register the PWA service worker (share target, installability, light offline shell). Not inside the
+// native app: the bundle is served from a custom scheme where service workers aren't supported (iOS).
+if ("serviceWorker" in navigator && import.meta.env.PROD && !isNative) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/sw.js").catch(() => {});
   });

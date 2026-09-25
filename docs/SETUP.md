@@ -234,11 +234,18 @@ The GitHub Repository Manager (create a repo + upload a folder) needs a token wi
 
 ### 5.7 Optional integrations
 
-#### `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` / `AI_DAILY_CAP_USD`
-- **What:** enable AI auto-tags/summaries. `ANTHROPIC_MODEL` defaults to
-  `claude-haiku-4-5`; spend is capped by `AI_DAILY_CAP_USD` (default `2`).
+#### `AI_DEFAULT_PROVIDER` / provider keys / `AI_DAILY_CAP_USD`
+- **What:** enable AI auto-tags/summaries, Drive file summaries, natural-language search and the
+  cleanup wizard. Kosh supports **multiple providers** — `AI_DEFAULT_PROVIDER` (default `gemini`,
+  a free tier with no credit card) picks which one new users start on; each user can switch and add
+  their own key in **Settings → AI provider**. Provide the matching server key as a fallback:
+  `GEMINI_API_KEY`, `GROQ_API_KEY`, `CEREBRAS_API_KEY`, `OPENROUTER_API_KEY`, `MISTRAL_API_KEY`,
+  `DEEPSEEK_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` (+ optional `ANTHROPIC_MODEL`, default
+  `claude-haiku-4-5`). Paid-provider spend is capped by `AI_DAILY_CAP_USD` (default `2`); free tiers
+  and local Ollama never count. Full matrix and setup: **docs/AI_PROVIDERS.md**.
 - **Required:** no.
-- **How to get:** see Section 6.5.
+- **How to get:** Gemini (default) — [aistudio.google.com/apikey](https://aistudio.google.com/apikey),
+  no card. Anthropic — see Section 6.5.
 
 #### `TELEGRAM_BOT_TOKEN` / `TELEGRAM_WEBHOOK_SECRET`
 - **What:** save items via a Telegram bot.
@@ -422,3 +429,22 @@ Everything else (R2, Anthropic, Telegram, OAuth) is optional.
 > ⚠️ **Secure Vault:** the master password has **no recovery**. If you lose it, the
 > encrypted data is permanently unreadable — that is the price of real end-to-end
 > encryption. Store the password safely offline.
+
+---
+
+## 11. Mobile app (Android / iOS)
+
+The native app is the same web bundle wrapped with Capacitor and pointed at the same API — no separate
+backend, no separate data. Full guide: [`MOBILE.md`](./MOBILE.md). The variables that matter:
+
+| Variable | Side | Notes |
+| --- | --- | --- |
+| `VITE_API_URL` | web (build-time) | The API **as reachable from the phone** — never `localhost`. Emulator: `http://10.0.2.2:8787/api`; phone on your Wi-Fi: `http://<laptop-LAN-IP>:8787/api`; production: `https://api.your-host.com/api`. A plain `http://` value turns on the dev-only cleartext allowance automatically. |
+| `VITE_DEV_LOGIN` | web (build-time) | `1` shows the **Dev sign-in** button in the app. Only works against an API with `DEV_LOGIN=1` (never production). |
+| `MOBILE_SCHEME` | API | Deep-link scheme (default `kosh`). Must match `AndroidManifest.xml` / `Info.plist`. |
+| `APP_ORIGINS` | API | Extra CORS origins; the native WebView origins are always allowed. |
+
+Build the APK without any local Android tooling: repo **Settings → Secrets and variables → Actions →
+Variables** → add `MOBILE_API_URL` (and optionally `MOBILE_DEV_LOGIN=1`) → **Actions → Android APK → Run
+workflow** → download the `kosh-debug-apk` artifact. Locally: `npm run build:mobile -w @kosh/web` then
+`npm run cap:android -w @kosh/web` (Android Studio) or `npm run cap:ios -w @kosh/web` (Xcode).
