@@ -166,7 +166,7 @@ export interface ListResult {
 /** Options shared by every list/view helper. `driveId` scopes the query to a Shared Drive. */
 export interface ViewOpts {
   pageToken?: string;
-  orderBy?: string;
+  orderBy?: string | null; // null = send NO orderBy (Google forbids sorting a fullText query)
   pageSize?: number;
   driveId?: string;
 }
@@ -176,7 +176,9 @@ export async function listByQuery(accessToken: string, q: string, opts: ViewOpts
   const u = new URL(`${DRIVE_API}/files`);
   u.searchParams.set("q", q);
   u.searchParams.set("fields", `nextPageToken,files(${FILE_FIELDS})`);
-  u.searchParams.set("orderBy", opts.orderBy ?? "folder,name_natural");
+  // Google forbids orderBy on a fullText query (403 "Sorting is not supported for queries with fullText
+  // terms"), so callers pass orderBy:null to omit it; results then come back in relevance order.
+  if (opts.orderBy !== null) u.searchParams.set("orderBy", opts.orderBy ?? "folder,name_natural");
   u.searchParams.set("pageSize", String(opts.pageSize ?? 100));
   u.searchParams.set("spaces", "drive");
   u.searchParams.set("supportsAllDrives", "true");
@@ -213,7 +215,13 @@ export function searchFiles(
   if (params.before) clauses.push(`modifiedTime < '${qval(params.before)}'`);
   if (params.after) clauses.push(`modifiedTime > '${qval(params.after)}'`);
   if (params.starred) clauses.push("starred = true");
-  return listByQuery(accessToken, clauses.join(" and "), { pageToken: params.pageToken, driveId: params.driveId });
+  // A text term adds a `fullText contains` clause; Google then rejects any orderBy, so omit it (results
+  // come back in relevance order). Non-text searches (type/owner/date/starred only) keep the normal sort.
+  return listByQuery(accessToken, clauses.join(" and "), {
+    pageToken: params.pageToken,
+    driveId: params.driveId,
+    orderBy: params.text ? null : undefined,
+  });
 }
 
 /* ── Shared Drives (team drives) ── */
