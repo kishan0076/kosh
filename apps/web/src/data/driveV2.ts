@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { uid } from "@/lib/ids";
 import { API_BASE, ApiError } from "./api";
-import { driveApi, resumableUpload, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
+import { driveApi, resumableUpload, CanceledError, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
 import { startConnect } from "@/lib/connect";
 import { isNative } from "@/lib/native";
 import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
@@ -212,6 +212,14 @@ interface DriveV2State {
   /** Upload a dropped/picked folder tree — recreates the folder structure in Drive, then uploads each
    *  file into its correct parent (preserving subfolders and empty folders). */
   uploadDropped: (items: UploadItem[]) => Promise<void>;
+  /** Cancel one in-flight upload (aborts the transfer at the next chunk boundary). */
+  cancelUpload: (id: string) => void;
+  /** Cancel every in-flight upload. */
+  cancelAllUploads: () => void;
+  /** Remove one finished/canceled/failed row from the tray (cancels it first if somehow still running). */
+  dismissUpload: (id: string) => void;
+  /** Clear every non-active row from the tray (leaves in-flight uploads running). */
+  clearFinishedUploads: () => void;
   downloadRevision: (fileId: string, revId: string, filename: string) => Promise<void>;
   /** Download a file to disk: binary via alt=media, native Google docs auto-exported to their default format. */
   downloadNode: (id: string) => Promise<void>;
@@ -394,7 +402,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       });
       set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: u.size, status: "done" } : u)) }));
     } catch (err) {
-      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "error", error: err instanceof Error ? err.message : "Upload failed" } : u)) }));
+      // A user cancel surfaces as CanceledError — mark it "canceled", not "error" (no red "Failed" row).
+      const canceled = err instanceof CanceledError;
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: canceled ? "canceled" : "error", error: canceled ? undefined : err instanceof Error ? err.message : "Upload failed" } : u)) }));
     } finally {
       uploadControls.delete(id);
     }
@@ -1553,6 +1563,26 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       void get().loadQuota();
       if (get().view === "myDrive") void load(true);
     },
+
+    cancelUpload: (id) => {
+      const control = uploadControls.get(id);
+      if (control) control.canceled = true; // resumableUpload aborts at the next chunk → uploadOneFile marks it canceled
+      // Reflect it immediately (the abort + catch may lag a chunk); the catch then sets the same status.
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id && u.status === "uploading" ? { ...u, status: "canceled" } : u)) }));
+    },
+
+    cancelAllUploads: () => {
+      for (const c of uploadControls.values()) c.canceled = true;
+      set((s) => ({ uploads: s.uploads.map((u) => (u.status === "uploading" ? { ...u, status: "canceled" } : u)) }));
+    },
+
+    dismissUpload: (id) => {
+      const control = uploadControls.get(id);
+      if (control) control.canceled = true; // defensive: if the row is somehow still uploading, stop it too
+      set((s) => ({ uploads: s.uploads.filter((u) => u.id !== id) }));
+    },
+
+    clearFinishedUploads: () => set((s) => ({ uploads: s.uploads.filter((u) => u.status === "uploading") })),
 
     downloadRevision: async (fileId, revId, filename) => {
       const accountId = get().accountId;

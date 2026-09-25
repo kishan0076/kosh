@@ -1435,26 +1435,40 @@ function UploadTray() {
   const active = uploads.filter((u) => u.status === "uploading");
   const done = uploads.filter((u) => u.status === "done").length;
   const failed = uploads.filter((u) => u.status === "error").length;
+  const canceled = uploads.filter((u) => u.status === "canceled").length;
   const total = uploads.length;
   // Aggregate progress across everything in the tray (uploaded bytes / total bytes).
   const totalBytes = uploads.reduce((a, u) => a + u.size, 0);
   const doneBytes = uploads.reduce((a, u) => a + (u.status === "done" ? u.size : u.uploaded), 0);
   const aggPct = totalBytes ? Math.round((doneBytes / totalBytes) * 100) : 0;
-  // Header: a real count, not a truncated "…". Show in-flight files, plus batch progress when there's
-  // more than one file, and any failures once finished.
+  // Header: a real count, not a truncated "…". In-flight files while uploading, else a summary of the
+  // final tallies (complete / failed / canceled).
   const heading =
     active.length > 0
       ? `Uploading ${active.length} file${active.length === 1 ? "" : "s"}${total > active.length ? ` · ${done}/${total} done` : ""}`
-      : `${done} upload${done === 1 ? "" : "s"} complete${failed ? ` · ${failed} failed` : ""}`;
+      : [done && `${done} complete`, failed && `${failed} failed`, canceled && `${canceled} canceled`].filter(Boolean).join(" · ") || "Uploads";
+  const headerIcon = active.length > 0 ? <Spinner size={14} className="text-primary" /> : done > 0 ? <Check size={15} className="text-ok" /> : <X size={15} className="text-muted" />;
+  const uploading = active.length > 0;
 
   // Lives in the BottomStack (which owns the fixed position, the safe-area padding and the z-index).
   return (
     <motion.div variants={slideUp} initial="hidden" animate="show" className="pointer-events-auto w-full overflow-hidden rounded-[var(--radius-card)] border border-border bg-elevated shadow-[var(--shadow-pop)] sm:w-80">
-      <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="pressable flex min-h-10 w-full items-center gap-2 border-b border-border px-3.5 py-2.5 text-[13px] font-semibold">
-        {active.length > 0 ? <Spinner size={14} className="text-primary" /> : <Check size={15} className="text-ok" />}
-        <span className="flex-1 truncate text-left" title={heading}>{heading}</span>
-        <ChevronRight size={15} className={cn("text-muted transition-transform duration-[var(--motion-base)]", open && "rotate-90")} />
-      </button>
+      <div className="flex min-h-10 w-full items-center border-b border-border">
+        <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="pressable flex min-w-0 flex-1 items-center gap-2 px-3.5 py-2.5 text-[13px] font-semibold">
+          {headerIcon}
+          <span className="min-w-0 flex-1 truncate text-left" title={heading}>{heading}</span>
+          <ChevronRight size={15} className={cn("shrink-0 text-muted transition-transform duration-[var(--motion-base)]", open && "rotate-90")} />
+        </button>
+        {/* While uploading this cancels everything in flight; once finished it clears the tray. */}
+        <button
+          onClick={() => (uploading ? useDriveV2.getState().cancelAllUploads() : useDriveV2.getState().clearFinishedUploads())}
+          aria-label={uploading ? "Cancel all uploads" : "Clear completed"}
+          title={uploading ? "Cancel all" : "Clear"}
+          className={cn("pressable grid h-10 w-10 shrink-0 place-items-center border-l border-border text-muted hover:text-foreground [@media(pointer:coarse)]:w-11", uploading && "hover:text-danger")}
+        >
+          <X size={16} />
+        </button>
+      </div>
       {active.length > 0 && (
         <div className="border-b border-border px-3.5 py-2">
           <Progress value={aggPct} />
@@ -1479,7 +1493,26 @@ function UploadTray() {
                   <div className={cn("text-[11px]", u.status === "done" ? "text-ok" : u.status === "error" ? "text-danger" : "text-muted")}>{u.status === "done" ? formatBytes(u.size) + " · Done" : u.status === "error" ? u.error ?? "Failed" : "Canceled"}</div>
                 )}
               </div>
-              {u.status === "done" && <Check size={15} className="shrink-0 text-ok" />}
+              {/* An in-flight row can be canceled; a finished/failed/canceled row can be dismissed. */}
+              {u.status === "uploading" ? (
+                <button
+                  onClick={() => useDriveV2.getState().cancelUpload(u.id)}
+                  aria-label={`Cancel upload of ${u.name}`}
+                  title="Cancel"
+                  className="pressable grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted transition-colors hover:bg-surface-3 hover:text-danger [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+                >
+                  <X size={14} />
+                </button>
+              ) : (
+                <button
+                  onClick={() => useDriveV2.getState().dismissUpload(u.id)}
+                  aria-label={`Dismiss ${u.name}`}
+                  title="Dismiss"
+                  className="pressable grid h-8 w-8 shrink-0 place-items-center rounded-md text-faint transition-colors hover:bg-surface-3 hover:text-foreground [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+                >
+                  <X size={14} />
+                </button>
+              )}
             </div>
           ))}
         </div>
