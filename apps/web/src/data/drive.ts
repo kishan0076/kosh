@@ -240,6 +240,12 @@ export const useDrive = create<DriveState>((set, get) => {
     queue: [],
 
     init: async () => {
+      // Stale-while-revalidate: once the dashboard is up, a re-mount refreshes in the background rather
+      // than dropping back to the loading skeleton and re-rendering the (unchanged) accounts list.
+      if (get().status === "ready" && get().accounts.length) {
+        void get().refreshAccounts();
+        return;
+      }
       set({ status: "loading", error: null });
       try {
         const { accounts, configured } = await driveApi.listAccounts();
@@ -268,11 +274,32 @@ export const useDrive = create<DriveState>((set, get) => {
     },
 
     disconnect: async (id) => {
-      await driveApi.deleteAccount(id);
-      if (get().accountId === id) {
+      // Optimistic: drop the account (and re-point the selection) before the DELETE round-trip so the pill
+      // doesn't linger on a removed account for the whole request; restore the snapshot if it fails.
+      const prev = {
+        accounts: get().accounts,
+        accountId: get().accountId,
+        path: get().path,
+        folders: get().folders,
+        quota: get().quota,
+        quotaLoaded: get().quotaLoaded,
+      };
+      const remaining = prev.accounts.filter((a) => a.id !== id);
+      const wasActive = prev.accountId === id;
+      const nextAccountId = wasActive ? (remaining[0]?.id ?? null) : prev.accountId;
+      if (wasActive) {
         tokenCache = null;
-        set({ accountId: null, folders: [], path: [], quota: null, quotaLoaded: false });
+        set({ accounts: remaining, accountId: nextAccountId, folders: [], path: [], quota: null, quotaLoaded: false });
+      } else {
+        set({ accounts: remaining });
       }
+      try {
+        await driveApi.deleteAccount(id);
+      } catch (err) {
+        set(prev); // put the account (and its view) back; the caller toasts the failure
+        throw err;
+      }
+      if (wasActive && nextAccountId) await get().selectAccount(nextAccountId);
       await get().refreshAccounts();
     },
 

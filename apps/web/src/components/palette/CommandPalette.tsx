@@ -45,6 +45,24 @@ export function CommandPalette() {
 
   const intent = parseCapture(search);
   const isSave = intent.kind === "link" || intent.kind === "repo";
+  // A "/settings"-style command should narrow the Create / Go to rows to what was typed (the opener hands
+  // the slash text straight in), so Enter lands on the one match instead of the user hunting the full list.
+  const cmdFilter = intent.kind === "command" ? search.replace(/^\//, "").trim().toLowerCase() : "";
+  const matchCmd = (title: string) => !cmdFilter || title.toLowerCase().includes(cmdFilter);
+  const createRows = [
+    { icon: Quote, title: "New prompt", to: "/prompts?new=1" },
+    { icon: Blocks, title: "New skill", to: "/skills/new" },
+    { icon: FolderOpen, title: "New collection", to: "/collections" },
+  ].filter((r) => matchCmd(r.title));
+  const goRows = [
+    { icon: Home, title: "Home", to: "/" },
+    { icon: Inbox, title: "Inbox", to: "/inbox" },
+    { icon: LibraryBig, title: "Library", to: "/library" },
+    { icon: Blocks, title: "Skills", to: "/skills" },
+    { icon: FileText, title: "Prompts", to: "/prompts" },
+    { icon: Trash2, title: "Trash", to: "/trash" },
+    { icon: Settings, title: "Settings", to: "/settings" },
+  ].filter((r) => matchCmd(r.title));
 
   const results = useMemo(() => {
     const list = live(items);
@@ -176,24 +194,20 @@ export function CommandPalette() {
           )}
 
           {/* create — after the matches, so a typed query surfaces results first on a short list */}
-          {!isSave && (
+          {!isSave && createRows.length > 0 && (
             <Command.Group heading="Create" className="cmdk-group">
-              <PaletteRow icon={Quote} title="New prompt" onSelect={() => go("/prompts?new=1")} />
-              <PaletteRow icon={Blocks} title="New skill" onSelect={() => go("/skills/new")} />
-              <PaletteRow icon={FolderOpen} title="New collection" onSelect={() => go("/collections")} />
+              {createRows.map((r) => (
+                <PaletteRow key={r.to} icon={r.icon} title={r.title} onSelect={() => go(r.to)} />
+              ))}
             </Command.Group>
           )}
 
           {/* go to */}
-          {!isSave && (
+          {!isSave && goRows.length > 0 && (
             <Command.Group heading="Go to" className="cmdk-group">
-              <PaletteRow icon={Home} title="Home" onSelect={() => go("/")} />
-              <PaletteRow icon={Inbox} title="Inbox" onSelect={() => go("/inbox")} />
-              <PaletteRow icon={LibraryBig} title="Library" onSelect={() => go("/library")} />
-              <PaletteRow icon={Blocks} title="Skills" onSelect={() => go("/skills")} />
-              <PaletteRow icon={FileText} title="Prompts" onSelect={() => go("/prompts")} />
-              <PaletteRow icon={Trash2} title="Trash" onSelect={() => go("/trash")} />
-              <PaletteRow icon={Settings} title="Settings" onSelect={() => go("/settings")} />
+              {goRows.map((r) => (
+                <PaletteRow key={r.to} icon={r.icon} title={r.title} onSelect={() => go(r.to)} />
+              ))}
             </Command.Group>
           )}
         </Command.List>

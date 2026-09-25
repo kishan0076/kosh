@@ -190,8 +190,11 @@ export function StageChip({ stage, onChange, size = "md" }: { stage: Stage; onCh
             "inline-flex items-center gap-1.5 rounded-full border border-transparent font-medium transition-colors",
             tone.bg,
             tone.text,
-            // 32px on touch: this is the card's primary triage control, next to the card's own tap target.
-            size === "sm" ? "h-6 px-2 text-[11px] [@media(pointer:coarse)]:h-8 [@media(pointer:coarse)]:px-2.5" : "h-7 px-2.5 text-xs [@media(pointer:coarse)]:h-8",
+            // The pill stays 32px on touch, but a ::before spacer grows the tap target to the 40px
+            // primary-target floor without changing the look — this is the card's main triage control.
+            size === "sm"
+              ? "relative h-6 px-2 text-[11px] [@media(pointer:coarse)]:h-8 [@media(pointer:coarse)]:px-3 [@media(pointer:coarse)]:before:absolute [@media(pointer:coarse)]:before:-inset-y-1 [@media(pointer:coarse)]:before:inset-x-0 [@media(pointer:coarse)]:before:content-['']"
+              : "h-7 px-2.5 text-xs [@media(pointer:coarse)]:h-8",
           )}
         >
           <StageDot stage={stage} />

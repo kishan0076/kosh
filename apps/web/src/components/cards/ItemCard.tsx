@@ -121,7 +121,9 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
       onAnimationEnd={reveal.onAnimationEnd}
       style={reveal.style}
       className={cn(
-        "group relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface pl-4 pr-3.5 py-3.5 card-hover hover:border-border-strong",
+        // content-visibility lets off-screen cards skip layout/paint (a long catalog stays smooth); the
+        // intrinsic-size reserves each card's height so the scrollbar and IntersectionObserver stay honest.
+        "group relative flex cursor-pointer flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface pl-4 pr-3.5 py-3.5 card-hover hover:border-border-strong [content-visibility:auto] [contain-intrinsic-size:auto_176px]",
         enriching && "animate-pulse-gold",
         reveal.className,
       )}

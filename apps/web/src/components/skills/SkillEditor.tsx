@@ -10,6 +10,7 @@ import { Badge, Button, Chip, Input, Textarea } from "../ui";
 import { FadeSwap } from "../motion";
 import { Markdown } from "../markdown";
 import { PageHeader } from "../common";
+import { useBottomStack } from "../Toaster";
 
 const SAMPLE = `---
 name: my-skill
@@ -46,6 +47,12 @@ export function SkillEditor() {
   const [tab, setTab] = useState<Tab>("lint");
   const [seeded, setSeeded] = useState(false);
   const checksRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const bounced = useRef(false);
+
+  // Publish the sticky save-bar's height as `--bottom-stack` so toasts rise above it (and the scroll
+  // container can pad its bottom by the same amount to keep the caret clear of the bar).
+  useBottomStack(barRef);
 
   // Seed once — from the existing SKILL.md when editing, or the sample for a new skill.
   useEffect(() => {
@@ -64,7 +71,9 @@ export function SkillEditor() {
   // A bad /skills/:id/edit URL (or a deleted skill) bounces back once the store is loaded — with a
   // word about why, so the catalog doesn't just silently appear.
   useEffect(() => {
+    if (bounced.current) return; // once only — StrictMode double-invokes, and `navigate`'s identity
     if (id && skills.length > 0 && !existing) {
+      bounced.current = true; // …changes with location, so the effect can re-run and stack toasts.
       toast({ message: "Skill not found", description: "It may have been deleted.", tone: "warn" });
       navigate("/skills", { replace: true });
     }
@@ -233,7 +242,7 @@ export function SkillEditor() {
 
       {/* Phone/tablet action bar: sticks to the bottom of the scroll container, clears the home
           indicator, and always says why Save is off. */}
-      <div className="sticky bottom-0 z-10 -mx-4 mt-6 flex items-center justify-between gap-3 border-t border-border bg-surface/90 px-4 pt-3 pb-[calc(0.75rem+var(--safe-bottom))] backdrop-blur sm:-mx-5 sm:px-5 lg:hidden">
+      <div ref={barRef} className="sticky bottom-0 z-10 -mx-4 mt-6 flex items-center justify-between gap-3 border-t border-border bg-surface/90 px-4 pt-3 pb-[calc(0.75rem+var(--safe-bottom))] backdrop-blur sm:-mx-5 sm:px-5 lg:hidden">
         <p className="min-w-0 truncate text-[12.5px] text-muted">
           {lint.ok ? (existing ? `Saves version ${existing.latest + 1}` : "Ready to save") : `Fix ${plural(nErrors, "error")} to save`}
         </p>

@@ -298,10 +298,11 @@ export function Settings() {
         >
           <div className="space-y-2">
             {apiKeys === null ? (
-              // Same 58px as a real row, so the swap doesn't shift the sections below.
+              // Matches a real row's height — taller on phones where the meta line wraps (80px) and 58px
+              // from `sm` up — so the swap doesn't shift the sections below.
               <div role="status" aria-busy="true" aria-label="Loading API keys" className="space-y-2">
-                <Skeleton className="h-[58px] rounded-[var(--radius-control)]" />
-                <Skeleton className="h-[58px] rounded-[var(--radius-control)]" />
+                <Skeleton className="h-20 rounded-[var(--radius-control)] sm:h-[58px]" />
+                <Skeleton className="h-20 rounded-[var(--radius-control)] sm:h-[58px]" />
               </div>
             ) : apiKeys.length === 0 ? (
               <EmptyState size="sm" icon={KeyRound} title="No API keys yet" description="Create one to use the CLI, MCP or bookmarklet." />
@@ -373,7 +374,24 @@ export function Settings() {
             />
           ) : (
             <div className="space-y-3">
-              {ghOauth === null && <Skeleton className="h-[62px] rounded-[var(--radius-control)]" />}
+              {ghOauth === null && (
+                // A StatusRow-shaped placeholder (plus the "Prefer a PAT?" link row it lands with): the row
+                // stacks on phones (icon + copy, then a full-width button) so the GitHub card — and the AI
+                // card below it — don't grow when /api/github/config resolves.
+                <>
+                  <div className="flex flex-col gap-3 rounded-[var(--radius-control)] border border-border p-3.5 sm:h-[62px] sm:flex-row sm:items-center">
+                    <div className="flex flex-1 items-center gap-3">
+                      <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+                      <div className="flex-1 space-y-2">
+                        <Skeleton className="h-3.5 w-40 max-w-full" />
+                        <Skeleton className="h-3 w-56 max-w-full" />
+                      </div>
+                    </div>
+                    <Skeleton className="h-10 w-full rounded-[var(--radius-control)] sm:h-9 sm:w-40" />
+                  </div>
+                  <Skeleton className="h-4 w-56 max-w-full" />
+                </>
+              )}
               {ghOauth && (
                 <StatusRow
                   tone="primary"
@@ -526,7 +544,7 @@ export function Settings() {
                 value={mergeInto}
                 onChange={(e) => setMergeInto(e.target.value)}
                 placeholder="target tag"
-                className="sm:w-36"
+                className="sm:w-36 [&::-webkit-calendar-picker-indicator]:hidden"
               />
               <datalist id="kosh-merge-target">
                 {picked.map((t) => (
@@ -656,7 +674,7 @@ function AiProviderCard({ user, backend }: { user: User; backend: boolean }) {
   return (
     <SectionCard
       title="AI provider"
-      subtitle="Powers summaries, auto-tags, natural-language search and the cleanup wizard"
+      subtitle="Summaries, auto-tags, NL search & cleanup"
       className="lg:col-span-2"
       action={<Badge tone={ready ? "ok" : "warn"}>{ready ? "Ready" : "Needs a key"}</Badge>}
     >
@@ -862,7 +880,9 @@ function Snippet({ icon: Icon, title, cmd, onCopy, plain, truncate }: { icon: ty
         <code
           className={cn(
             "min-w-0 flex-1 font-mono text-[12px] text-muted",
-            truncate ? "overflow-x-auto whitespace-nowrap py-1 [scrollbar-width:thin]" : plain ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]",
+            truncate
+              ? "overflow-x-auto whitespace-nowrap py-1 [scrollbar-width:thin] [mask-image:linear-gradient(90deg,black_calc(100%-28px),transparent)]"
+              : plain ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]",
           )}
         >
           {cmd}

@@ -74,7 +74,7 @@ export function Vault() {
 
   return (
     <div onClickCapture={touch} onKeyDownCapture={touch}>
-      {status === "loading" && <PageSkeleton variant="settings" header={false} />}
+      {status === "loading" && <PageSkeleton variant="vault" />}
       {status === "error" && (
         <Gate
           icon={AlertTriangle}
@@ -112,8 +112,9 @@ function Gate({ icon: Icon, title, action, children }: { icon: typeof Lock; titl
 
 function VaultHeader({ subtitle }: { subtitle: string }) {
   return (
-    <div className="mb-6 flex flex-col items-center text-center">
-      <span className="mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary">
+    <div className="mb-4 flex flex-col items-center text-center sm:mb-6">
+      {/* On a short (keyboard-open) viewport the 56px badge is dropped so the field + CTA stay above the fold. */}
+      <span className="mb-3 grid h-14 w-14 place-items-center rounded-2xl bg-primary-soft text-primary [@media(max-height:560px)]:hidden">
         <FolderLock size={26} />
       </span>
       <h1 className="text-xl font-semibold">Secure Vault</h1>
@@ -133,7 +134,7 @@ function CreateScreen() {
   const canCreate = pw.length >= 8 && pw === confirm && ack && !busy;
 
   return (
-    <div className="mx-auto mt-10 max-w-sm">
+    <div className="mx-auto mt-6 max-w-sm sm:mt-10">
       <VaultHeader subtitle="Create a master password to protect this device's vault." />
       <div className="space-y-3 rounded-[var(--radius-card)] border border-border bg-surface p-5">
         <div>
@@ -174,7 +175,7 @@ function UnlockScreen() {
   const submit = () => pw && void unlock(pw);
 
   return (
-    <div className="mx-auto mt-16 max-w-sm">
+    <div className="mx-auto mt-6 max-w-sm sm:mt-16">
       <VaultHeader subtitle="Enter your master password to unlock." />
       <div className="space-y-3 rounded-[var(--radius-card)] border border-border bg-surface p-5">
         <Input

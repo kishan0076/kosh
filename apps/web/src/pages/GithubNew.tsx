@@ -219,7 +219,9 @@ export function GithubNew() {
       )}
     </div>
   );
-  const previewSummary = `${owner}/${trimmedName || "name"} · ${isPrivate ? "Private" : "Public"}${initFiles.length ? ` · ${initFiles.join(", ")}` : " · empty"}`;
+  // Lead with the name + visibility + files (what the strip is for); the owner trails so a long org login
+  // truncates off the end instead of pushing everything else out of view.
+  const previewSummary = `${trimmedName || "name"} · ${isPrivate ? "Private" : "Public"}${initFiles.length ? ` · ${initFiles.join(", ")}` : " · empty"} · ${owner}`;
 
   return (
     <div className="w-full space-y-5">

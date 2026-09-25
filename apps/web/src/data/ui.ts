@@ -80,8 +80,10 @@ export const useUi = create<UiState>((set, get) => ({
   toast: (t) => {
     const id = uid("toast");
     const toast: Toast = { id, duration: 4200, ...t };
-    // Cap the stack at three — a burst of failures otherwise covers half a phone screen.
-    set((s) => ({ toasts: [...s.toasts, toast].slice(-3) }));
+    // Cap the stack — a burst of failures otherwise covers half a phone screen; two on phones (where the
+    // keyboard already halves the viewport), three on larger screens.
+    const cap = typeof window !== "undefined" && window.matchMedia?.("(max-width: 639px)").matches ? 2 : 3;
+    set((s) => ({ toasts: [...s.toasts, toast].slice(-cap) }));
     if (toast.duration) {
       window.setTimeout(() => get().dismissToast(id), toast.duration);
     }

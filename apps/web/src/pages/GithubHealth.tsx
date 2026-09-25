@@ -127,9 +127,10 @@ export function GithubHealth() {
         <div className="mb-2 px-1 text-[12px] font-semibold uppercase tracking-wide text-faint">Needs action</div>
         <div className="grid grid-cols-3 gap-2 sm:gap-3">
           {Object.values(ISSUE_SIGNALS).map((s, i) => (
-            <div key={s.key} className={cn("rounded-[var(--radius-card)] border border-border bg-surface p-3 sm:p-4", revealClass(i))} style={revealStyle(i)}>
+            <div key={s.key} className={cn("flex flex-col rounded-[var(--radius-card)] border border-border bg-surface p-3 sm:p-4", revealClass(i))} style={revealStyle(i)}>
               <div className="flex items-start gap-1.5 text-[12px] font-medium leading-tight text-muted sm:items-center sm:gap-2"><s.icon size={14} className={cn("mt-px shrink-0 sm:mt-0", s.tone)} /> <span className="sm:hidden">{s.short ?? s.label}</span><span className="hidden text-pretty sm:inline">{s.label}</span></div>
-              <div className="mt-2 font-display text-[20px] font-semibold leading-none tabular sm:text-[24px]">{counts[s.key] ?? 0}</div>
+              {/* bottom-align the count so a two-line label (e.g. 'No license' on 360px) doesn't drop its number below the neighbours */}
+              <div className="mt-auto pt-2 font-display text-[20px] font-semibold leading-none tabular sm:text-[24px]">{counts[s.key] ?? 0}</div>
             </div>
           ))}
         </div>

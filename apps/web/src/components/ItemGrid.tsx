@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence } from "motion/react";
 import type { Item } from "@kosh/shared";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { Button } from "./ui";
 import { ItemCard } from "./cards/ItemCard";
 
-const PAGE = 24;
-
-/** Responsive card grid used across Library, Collections and Home. Mounts a page (24 cards) at a time
- *  and grows as the tail scrolls near — a vault of a few hundred links never renders all at once — with
- *  the "Show more" button as the no-IntersectionObserver fallback. Remount (key) to reset the paging. */
+/** Responsive card grid used across Library, Collections and Home. Mounts a page at a time (12 cards on
+ *  phones, 24 on wider screens — a page of 24 costs a 150–200ms long task on a mid-range phone) and
+ *  grows as the tail scrolls near — a vault of a few hundred links never renders all at once — with the
+ *  "Show more" button as the no-IntersectionObserver fallback. Remount (key) to reset the paging. */
 export function ItemGrid({ items }: { items: Item[] }) {
+  const phone = useMediaQuery(PHONE_QUERY);
+  const PAGE = phone ? 12 : 24;
   const [shown, setShown] = useState(PAGE);
   const tail = useRef<HTMLDivElement>(null);
   const more = items.length > shown;
@@ -25,7 +27,7 @@ export function ItemGrid({ items }: { items: Item[] }) {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [more, shown]);
+  }, [more, shown, PAGE]);
 
   return (
     <div>

@@ -4,6 +4,7 @@ import { CheckCircle2, Info, X, AlertTriangle, XCircle } from "lucide-react";
 import { useUi } from "@/data/ui";
 import { cn } from "@/lib/cn";
 import { DUR, EASE } from "@/lib/motion";
+import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { Button } from "./ui";
 
 const TONE_ICON = {
@@ -37,9 +38,13 @@ export function useBottomStack(ref: RefObject<HTMLElement | null>) {
 export function Toaster() {
   const toasts = useUi((s) => s.toasts);
   const dismiss = useUi((s) => s.dismissToast);
+  const phone = useMediaQuery(PHONE_QUERY);
+  // A phone bottom-sheet lands its footer exactly where a bottom-anchored toast sits, so while one is
+  // open we lift the stack to the top (the CSS below); the enter then drops in from above instead of up.
+  const topAnchored = phone && typeof document !== "undefined" && document.documentElement.hasAttribute("data-sheet-open");
 
   return (
-    <div className="pointer-events-none fixed bottom-[calc(1rem+var(--bottom-stack,0px))] left-1/2 z-[70] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 flex-col gap-2 pb-safe sm:left-auto sm:right-4 sm:translate-x-0">
+    <div className="pointer-events-none fixed bottom-[calc(1rem+var(--bottom-stack,0px))] left-1/2 z-[70] flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 flex-col gap-2 pb-safe [[data-sheet-open]_&]:bottom-auto [[data-sheet-open]_&]:top-[calc(var(--safe-top)+4.5rem)] sm:left-auto sm:right-4 sm:translate-x-0 sm:[[data-sheet-open]_&]:top-auto sm:[[data-sheet-open]_&]:bottom-4">
       <AnimatePresence>
         {toasts.map((t) => {
           const Icon = TONE_ICON[t.tone ?? "default"];
@@ -47,9 +52,9 @@ export function Toaster() {
             <motion.div
               key={t.id}
               layout
-              initial={{ opacity: 0, y: 16, scale: 0.96 }}
+              initial={{ opacity: 0, y: topAnchored ? -16 : 16, scale: 0.96 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.96, transition: { duration: DUR.fast, ease: EASE.exit } }}
+              exit={{ opacity: 0, y: topAnchored ? -8 : 8, scale: 0.96, transition: { duration: DUR.fast, ease: EASE.exit } }}
               transition={{ duration: DUR.base, ease: EASE.standard }}
               // Swipe sideways to dismiss (the X is small even at 36px); a short drag snaps back.
               drag="x"

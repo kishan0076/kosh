@@ -295,11 +295,19 @@ function TrayRow({ draft }: { draft: DropDraft }) {
       </div>
     );
   }
+  // The filename + extension is the distinguishing part, so truncate the leading directory (from the
+  // left, via rtl) and keep the basename intact instead of clipping every row to the same "…-nu…".
+  const slash = draft.path.lastIndexOf("/");
+  const dir = slash === -1 ? "" : draft.path.slice(0, slash + 1);
+  const base = slash === -1 ? draft.path : draft.path.slice(slash + 1);
   return (
     <div className="flex items-center gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2">
       <FileText size={16} className="shrink-0 text-muted" />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-medium">{draft.path}</div>
+        <div className="flex min-w-0 text-[13px] font-medium">
+          {dir && <span className="min-w-0 truncate text-faint [direction:rtl] [unicode-bidi:plaintext]">{dir}</span>}
+          <span className="shrink-0">{base}</span>
+        </div>
         <div className="text-[11px] text-muted">file · {formatBytes(draft.size)}</div>
       </div>
     </div>

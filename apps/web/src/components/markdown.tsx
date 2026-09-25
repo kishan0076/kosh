@@ -1,11 +1,50 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
 import { cn } from "@/lib/cn";
 
+/** A horizontal scroller that shows a right-edge fade only while more content is clipped to the right,
+ *  so on touch (where the scrollbar is invisible) there's an affordance that a wide table/code block
+ *  continues sideways. The fade retracts as you reach the end. */
+function OverflowScroller({ className, children }: { className?: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [atEnd, setAtEnd] = useState(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const check = () => setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    el.addEventListener("scroll", check, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", check);
+    };
+  }, [children]);
+  return (
+    <div className="relative my-3">
+      <div ref={ref} className={cn("max-w-full overflow-x-auto [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]", className)}>
+        {children}
+      </div>
+      {/* A fade that only appears while there's more to the right; never intercepts touches. */}
+      <div
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute inset-y-0 right-0 w-8 rounded-r-[inherit] bg-gradient-to-l from-surface-2 to-transparent transition-opacity duration-150",
+          atEnd && "opacity-0",
+        )}
+      />
+    </div>
+  );
+}
+
 /** Sanitized markdown renderer (README / SKILL.md / notes). Never uses dangerouslySetInnerHTML.
  *  Phone-safe by construction: prose breaks long tokens (URLs, paths) anywhere, code blocks and
- *  tables scroll inside their own wrapper, images never exceed the column. */
+ *  tables scroll inside their own wrapper (with a fade affordance), images never exceed the column.
+ *  Headings are demoted one level (a README's `# title` renders as an <h2>) so the page keeps a single
+ *  top-level <h1> — the item/page title above the rendered body. */
 export function Markdown({ children, className }: { children: string; className?: string }) {
   return (
     <div className={cn("kosh-md min-w-0 break-words text-[14px] leading-relaxed text-foreground [overflow-wrap:anywhere]", className)}>
@@ -13,9 +52,9 @@ export function Markdown({ children, className }: { children: string; className?
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeSanitize]}
         components={{
-          h1: ({ node, ...p }) => <h1 className="mt-6 mb-3 font-display text-xl font-semibold first:mt-0" {...p} />,
-          h2: ({ node, ...p }) => <h2 className="mt-6 mb-2.5 font-display text-lg font-semibold first:mt-0" {...p} />,
-          h3: ({ node, ...p }) => <h3 className="mt-5 mb-2 font-display text-base font-semibold first:mt-0" {...p} />,
+          h1: ({ node, ...p }) => <h2 className="mt-6 mb-3 font-display text-xl font-semibold first:mt-0" {...p} />,
+          h2: ({ node, ...p }) => <h3 className="mt-6 mb-2.5 font-display text-lg font-semibold first:mt-0" {...p} />,
+          h3: ({ node, ...p }) => <h4 className="mt-5 mb-2 font-display text-base font-semibold first:mt-0" {...p} />,
           p: ({ node, ...p }) => <p className="my-3 first:mt-0" {...p} />,
           a: ({ node, ...p }) => <a className="font-medium text-primary underline decoration-primary/30 underline-offset-2 [overflow-wrap:anywhere] hover:decoration-primary" target="_blank" rel="noreferrer noopener" {...p} />,
           ul: ({ node, ...p }) => <ul className="my-3 ml-5 list-disc space-y-1.5 marker:text-faint" {...p} />,
@@ -39,16 +78,19 @@ export function Markdown({ children, className }: { children: string; className?
               </code>
             );
           },
-          // Blocks keep their line structure and scroll sideways inside the card instead of pushing it.
+          // Blocks keep their line structure and scroll sideways inside the card instead of pushing it;
+          // a right-edge fade signals more content when it overflows.
           pre: ({ node, ...p }) => (
-            <pre className="my-3 max-w-full overflow-x-auto rounded-[var(--radius-control)] border border-border bg-surface-2 p-3.5 [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]" {...p} />
+            <OverflowScroller className="rounded-[var(--radius-control)] border border-border bg-surface-2">
+              <pre className="p-3.5" {...p} />
+            </OverflowScroller>
           ),
           // Cells wrap at spaces only (never mid-word), so a wide table scrolls in its wrapper rather than
           // collapsing into one-character columns.
           table: ({ node, ...p }) => (
-            <div className="my-3 max-w-full overflow-x-auto rounded-lg border border-border [-webkit-overflow-scrolling:touch] [scrollbar-width:thin]">
+            <OverflowScroller className="rounded-lg border border-border">
               <table className="w-full border-collapse text-[13px] [overflow-wrap:normal]" {...p} />
-            </div>
+            </OverflowScroller>
           ),
           th: ({ node, ...p }) => <th className="border-b border-border bg-surface-2 px-3 py-2 text-left font-semibold" {...p} />,
           td: ({ node, ...p }) => <td className="border-b border-border px-3 py-2" {...p} />,

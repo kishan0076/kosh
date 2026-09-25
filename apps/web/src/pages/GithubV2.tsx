@@ -214,7 +214,7 @@ function RepoList() {
         <div className="grid grid-cols-2 gap-2 sm:flex sm:w-auto sm:items-center">
           <Button variant="ghost" size="sm" className="border-border sm:border-transparent" onClick={() => navigate("/github/health")}><Activity size={15} /> Health</Button>
           <Button variant={selectMode ? "secondary" : "ghost"} size="sm" className={cn(!selectMode && "border-border sm:border-transparent")} onClick={() => (selectMode ? exitSelect() : setSelectMode(true))}><CheckSquare size={15} /> {selectMode ? "Done" : "Select"}</Button>
-          <Button variant="outline" size="sm" onClick={() => navigate("/github/upload")}><Upload size={15} /> Upload folder</Button>
+          <Button variant="outline" size="sm" className="col-span-2 sm:col-span-1" onClick={() => navigate("/github/upload")}><Upload size={15} /> Upload folder</Button>
           <Button variant="primary" size="sm" className="col-span-2 sm:col-span-1" onClick={() => navigate("/github/new")}><Plus size={15} /> New repository</Button>
         </div>
       </header>
@@ -292,7 +292,7 @@ function SelectionBar({ repos, onAction, onClear }: { repos: RepoSummary[]; onAc
               <Button variant="ghost" size="sm" className={cn(actionCls, "text-danger hover:bg-danger-soft")} onClick={() => onAction("delete")} aria-label="Delete"><Trash2 size={15} /> <span className="hidden sm:inline">Delete</span></Button>
             </>
           ) : (
-            <span className="min-w-0 truncate px-1 text-[12px] text-muted">Some selected repos aren't yours to manage</span>
+            <span className="min-w-0 line-clamp-2 px-1 text-[12px] leading-tight text-muted sm:line-clamp-1">Some selected repos aren't yours to manage</span>
           )}
         </div>
         <span className="hidden h-4 w-px bg-border sm:block" />
@@ -335,16 +335,21 @@ function BulkModal({ action, repos, onClose, onDone }: { action: BulkAction; rep
     await Promise.all(Array.from({ length: Math.min(4, repos.length) }, worker));
     setBusy(false);
     const failed = out.filter((o) => !o.ok);
-    ghToast(`${meta.verb}: ${out.length - failed.length} succeeded${failed.length ? `, ${failed.length} failed` : ""}`, failed.length ? "warn" : "ok");
-    if (failed.length === 0) onDone();
+    // On a partial failure keep the sheet open and let the results list carry the report — don't fire a
+    // toast that would stack directly over those rows. Only the full-success path toasts and closes.
+    if (failed.length === 0) { ghToast(`${meta.verb}: ${out.length} succeeded`, "ok"); onDone(); }
     else setResults(out);
   }
+
+  // The title count is snapshotted from the results once they land: the live `repos` prop shrinks as
+  // deleted repos leave the store, which would otherwise read "Delete 1 repository" over 3 result rows.
+  const count = results?.length ?? repos.length;
 
   return (
     <Modal open onClose={busy ? () => {} : onClose} className="w-full max-w-md" labelledBy="bulk-title">
       {/* body scrolls, footer stays visible (the Modal panel is a flex column / bottom sheet on phones) */}
       <div className="min-h-0 flex-1 overflow-y-auto p-5 pb-2">
-        <h2 id="bulk-title" className={cn("flex items-center gap-2 text-[16px] font-semibold", meta.danger && "text-danger")}><meta.icon size={17} /> {meta.verb} {repos.length} {repos.length === 1 ? "repository" : "repositories"}</h2>
+        <h2 id="bulk-title" className={cn("flex items-center gap-2 text-[16px] font-semibold", meta.danger && "text-danger")}><meta.icon size={17} /> {meta.verb} {count} {count === 1 ? "repository" : "repositories"}</h2>
         {results ? (
           <div className="mt-3 space-y-1">
             {results.map((o) => (
@@ -526,7 +531,7 @@ function RepoDetail() {
           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary"><GitHubMark size={20} /></span>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener" className="min-w-0 max-w-full truncate py-0.5 text-lg font-semibold hover:text-primary">{detail.owner}/{detail.name}</a>
+              <a href={detail.htmlUrl} target="_blank" rel="noreferrer noopener" className="min-w-0 max-w-full py-0.5 text-lg font-semibold leading-tight [overflow-wrap:anywhere] hover:text-primary sm:truncate">{detail.owner}/{detail.name}</a>
               <VisBadge repo={detail} />
               {detail.archived && <Badge tone="warn" className="shrink-0"><Archive size={10} /> Archived</Badge>}
               {detail.fork && <Badge className="shrink-0"><GitFork size={10} /> Fork</Badge>}
@@ -562,13 +567,17 @@ function TabStrip({ tab, onChange }: { tab: Tab; onChange: (k: Tab) => void }) {
     if (el) setAtEnd(el.scrollLeft + el.clientWidth >= el.scrollWidth - 2);
   }, []);
   useEffect(() => {
-    stripRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    // Scroll the active tab to the strip's center explicitly: snapping used to re-snap programmatic
+    // scrolls back to the previous tab's start, leaving a deep-linked tab clipped under the fade.
+    const el = stripRef.current;
+    const t = el?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (el && t) el.scrollTo({ left: t.offsetLeft - (el.clientWidth - t.offsetWidth) / 2 });
     syncEnd();
   }, [tab, syncEnd]);
 
   return (
     <div className="relative">
-      <div ref={stripRef} role="tablist" onScroll={syncEnd} className="flex snap-x gap-1 overflow-x-auto rounded-[var(--radius-card)] border border-border bg-surface p-1 [scrollbar-width:none]">
+      <div ref={stripRef} role="tablist" onScroll={syncEnd} className="flex gap-1 overflow-x-auto scroll-px-10 rounded-[var(--radius-card)] border border-border bg-surface p-1 [scrollbar-width:none]">
         {TABS.map(({ k, label, icon: Icon }) => (
           <button
             key={k}
@@ -576,7 +585,7 @@ function TabStrip({ tab, onChange }: { tab: Tab; onChange: (k: Tab) => void }) {
             aria-selected={tab === k}
             onClick={() => onChange(k)}
             className={cn(
-              "pressable inline-flex shrink-0 snap-start items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium transition-colors [@media(pointer:coarse)]:min-h-10",
+              "pressable inline-flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-3 py-1.5 text-[13px] font-medium transition-colors [@media(pointer:coarse)]:min-h-10",
               tab === k ? "bg-primary-soft text-primary" : "text-muted hover:bg-surface-2 hover:text-foreground",
             )}
           >

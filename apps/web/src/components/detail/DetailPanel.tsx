@@ -254,13 +254,13 @@ function MetaRail({ item }: { item: Item }) {
                 key={c.id}
                 onClick={() => toggleItemCollection(item.id, c.id)}
                 className={cn(
-                  "pressable inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors [@media(pointer:coarse)]:h-9",
+                  "pressable inline-flex h-8 max-w-full items-center gap-1.5 rounded-full border px-2.5 text-[12px] font-medium transition-colors [@media(pointer:coarse)]:h-9",
                   inC ? "border-transparent bg-primary-soft text-primary" : "border-border text-muted hover:bg-surface-2",
                 )}
               >
-                <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: c.color }} />
-                {c.name}
-                {inC && <Check size={11} />}
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
+                <span className="truncate">{c.name}</span>
+                {inC && <Check size={11} className="shrink-0" />}
               </button>
             );
           })}
@@ -527,7 +527,7 @@ function ItemBody({ item }: { item: Item }) {
                           size="sm"
                           onClick={() => onSnapshot(s.path, s.name)}
                           loading={busy === s.path}
-                          className="-mr-1 shrink-0 text-primary hover:bg-primary-soft hover:text-primary"
+                          className="-mr-1 min-w-[7.75rem] shrink-0 justify-center text-primary hover:bg-primary-soft hover:text-primary"
                         >
                           Keep a copy
                         </Button>

@@ -99,7 +99,9 @@ export function Menu({
   // available space either way and let the list scroll inside — so a long menu never runs off-screen.
   const spaceBelow = rect ? window.innerHeight - rect.bottom - GAP - MARGIN : 0;
   const spaceAbove = rect ? rect.top - GAP - MARGIN : 0;
-  const openUp = rect ? spaceBelow < 240 && spaceAbove > spaceBelow : false;
+  // Flip up when the space below is tight (a 7-item filter menu below a tall phone header would otherwise
+  // scroll its last row under the viewport edge) — but only ever toward the side with more room.
+  const openUp = rect ? spaceBelow < 320 && spaceAbove > spaceBelow : false;
   const maxHeight = Math.max(160, openUp ? spaceAbove : spaceBelow);
   const top = rect && !openUp ? rect.bottom + GAP : undefined;
   const bottom = rect && openUp ? window.innerHeight - rect.top + GAP : undefined;
@@ -338,6 +340,19 @@ export function Tooltip({ label, children, side: preferred = "top" }: { label: R
 }
 
 /* ── Modal ──────────────────────────────────────────────────── */
+/** Ref-counted `<html data-sheet-open>` flag. While a phone bottom-sheet is open the Toaster moves its
+ *  toasts to the top (Toaster.tsx) so they never land under the sheet's own footer buttons. Ref-counted
+ *  so two stacked sheets both have to close before the flag clears. */
+let sheetOpenCount = 0;
+function acquireSheetFlag() {
+  sheetOpenCount += 1;
+  if (typeof document !== "undefined") document.documentElement.setAttribute("data-sheet-open", "");
+}
+function releaseSheetFlag() {
+  sheetOpenCount = Math.max(0, sheetOpenCount - 1);
+  if (sheetOpenCount === 0 && typeof document !== "undefined") document.documentElement.removeAttribute("data-sheet-open");
+}
+
 /** Under `sm` the dialog is a bottom sheet: full width, rounded top, a drag handle, safe-area padding at
  *  the bottom, slide-up enter/exit. Desktop keeps the centered scale-in. The panel is `flex-col min-h-0`,
  *  so a body with `min-h-0 flex-1 overflow-y-auto` scrolls while header/footer siblings stay pinned. */
@@ -376,6 +391,13 @@ export function Modal({
   const dialogRef = useRef<HTMLDivElement>(null);
   const phone = useMediaQuery(PHONE_QUERY);
   const asSheet = sheet === "always" || (sheet === "auto" && phone);
+
+  // Tell the Toaster a bottom-sheet is up so it lifts toasts to the top instead of hiding the sheet's footer.
+  useEffect(() => {
+    if (!open || !asSheet) return;
+    acquireSheetFlag();
+    return () => releaseSheetFlag();
+  }, [open, asSheet]);
 
   useEffect(() => {
     if (!open) return;

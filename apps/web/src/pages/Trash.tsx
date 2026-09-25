@@ -85,7 +85,7 @@ function TrashRow({ item, index, onRestore, onPurge }: { item: Item; index: numb
       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted">
         {item.linkType === "repo" ? <GitHubMark size={16} /> : <Icon size={16} />}
       </span>
-      <div className="min-w-0 flex-1 basis-40">
+      <div className="min-w-0 flex-1 basis-24">
         <div className="truncate text-[13.5px] font-medium">{item.title}</div>
         <div className="truncate text-[11.5px] text-faint">deleted {ago(item.deletedAt)}</div>
       </div>

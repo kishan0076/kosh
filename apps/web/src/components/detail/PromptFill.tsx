@@ -55,12 +55,13 @@ export function PromptFill({ item, open, onClose }: { item: Item; open: boolean;
           </div>
         </div>
       </div>
-      {/* Stacked full-width on phones (primary on top), a right-aligned row from sm up. */}
-      <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-border px-5 py-3.5 sm:flex-row sm:justify-end">
-        <Button variant="ghost" className="w-full sm:w-auto" onClick={onClose}>
+      {/* Stacked full-width on phones (primary on top), a right-aligned row from sm up — and also a single
+          row on a short (keyboard-open) viewport so the buttons don't cover the focused field. */}
+      <div className="flex shrink-0 flex-col-reverse gap-2 border-t border-border px-5 py-3.5 sm:flex-row sm:justify-end [@media(max-height:480px)]:flex-row [@media(max-height:480px)]:justify-end">
+        <Button variant="ghost" className="w-full sm:w-auto [@media(max-height:480px)]:w-auto" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" className="w-full sm:w-auto" onClick={copy}>
+        <Button variant="primary" className="w-full sm:w-auto [@media(max-height:480px)]:w-auto" onClick={copy}>
           <Copy size={15} />
           Copy filled prompt
         </Button>

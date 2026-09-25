@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import {
@@ -63,6 +64,24 @@ export function Sidebar({
   const skillCount = live(items).filter((i) => i.kind === "skill").length;
   const promptCount = live(items).filter((i) => i.kind === "prompt").length;
 
+  // Bottom scroll-fade so an overflowing drawer nav reads as scrollable (otherwise "All collections" /
+  // "Trash" sit at a clean cut with nothing peeking). Shown only while there's more to scroll to below.
+  const navRef = useRef<HTMLElement>(null);
+  const [navFade, setNavFade] = useState(false);
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+    const check = () => setNavFade(el.scrollHeight - el.scrollTop - el.clientHeight > 4);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    el.addEventListener("scroll", check, { passive: true });
+    return () => {
+      ro.disconnect();
+      el.removeEventListener("scroll", check);
+    };
+  }, [collections.length, collapsed, mobileOpen]);
+
   const main: NavItem[] = [
     { to: "/", label: "Home", icon: Home, end: true },
     { to: "/add", label: "Add", icon: Plus },
@@ -111,7 +130,14 @@ export function Sidebar({
         </div>
 
         {/* nav */}
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
+        <nav
+          ref={navRef}
+          className={cn(
+            "flex-1 space-y-1 overflow-y-auto px-3 py-2",
+            navFade &&
+              "[mask-image:linear-gradient(to_bottom,#000_calc(100%_-_28px),transparent)] [-webkit-mask-image:linear-gradient(to_bottom,#000_calc(100%_-_28px),transparent)]",
+          )}
+        >
           {main.map((item) => (
             <NavRow key={item.to} item={item} collapsed={collapsed} onClick={onCloseMobile} />
           ))}

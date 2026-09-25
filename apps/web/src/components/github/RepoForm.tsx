@@ -41,14 +41,16 @@ export function RepoNameField({
   return (
     <div>
       <label htmlFor={id} className="mb-1.5 block text-[12px] font-medium text-muted">{label}</label>
+      {/* phones: the owner sits above the field so the name input keeps the full width */}
+      {ownerPrefix && <span className="mb-1 block max-w-full truncate font-mono text-[12px] text-faint sm:hidden">{ownerPrefix}/</span>}
       <div
         className={cn(
           "flex items-center overflow-hidden rounded-[var(--radius-control)] border bg-surface focus-within:ring-focus",
           bad ? "border-danger focus-within:border-danger" : "border-border focus-within:border-primary",
         )}
       >
-        {/* a long org login must not size the field: cap the prefix and let the input take the rest */}
-        {ownerPrefix && <span className="max-w-[45%] shrink-0 truncate border-r border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-faint">{ownerPrefix}/</span>}
+        {/* sm+: the prefix stays in-field; a long org login is capped so the input takes the rest */}
+        {ownerPrefix && <span className="hidden max-w-[45%] shrink-0 truncate border-r border-border bg-surface-2 px-2.5 py-2 font-mono text-[12px] text-faint sm:block">{ownerPrefix}/</span>}
         <input
           id={id}
           value={value}

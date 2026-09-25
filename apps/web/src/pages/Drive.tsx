@@ -35,6 +35,7 @@ import { Badge, Button, Input, Progress, Skeleton } from "@/components/ui";
 import { Menu, MenuItem, MenuLabel, MenuSeparator, useMenuClose } from "@/components/overlays";
 import { EmptyState } from "@/components/common";
 import { PageSkeleton } from "@/components/PageSkeleton";
+import { revealClass, revealStyle } from "@/lib/motion";
 
 /* ── recursive folder read for drag-and-dropped folders ── */
 async function readEntry(entry: FileSystemEntry, path: string, out: { file: File; relPath: string }[]): Promise<void> {
@@ -112,7 +113,7 @@ export function Drive() {
 
   if (!backend) return <Gate icon={UploadCloud} title="Google Drive needs the backend" body="This module talks to Google through the Kosh API. Run the API and set VITE_API_URL to use it — see docs/GOOGLE_DRIVE.md." />;
   // Same silhouette AppShell shows for /drive while the vault hydrates, so the two loading phases don't flip shape.
-  if (status === "loading") return <PageSkeleton variant="cards" />;
+  if (status === "loading") return <PageSkeleton variant="drive" />;
   if (status === "error") return <Gate icon={AlertTriangle} title="Couldn't reach Google Drive" body="The Drive service didn't respond. Check the API is running and try again." action={<Button variant="primary" onClick={() => init()}>Retry</Button>} />;
   if (!configured) return <SetupGate />;
   if (!accountId || !accounts.length) return <ConnectGate />;
@@ -333,7 +334,8 @@ function FolderBrowser() {
           ref={crumbsRef}
           className="order-last flex basis-full items-center gap-0.5 overflow-x-auto whitespace-nowrap py-0.5 text-[13px] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:order-none sm:ml-1 sm:min-w-0 sm:flex-1 sm:basis-0 sm:flex-wrap sm:overflow-visible sm:whitespace-normal"
         >
-          <button onClick={() => breadcrumbTo(-1)} aria-current={path.length === 0 ? "location" : undefined} className={cn(crumb, "font-medium")}>My Drive</button>
+          {/* Pin the root so a deep path (which auto-scrolls to the current folder) never hides the way back. */}
+          <button onClick={() => breadcrumbTo(-1)} aria-current={path.length === 0 ? "location" : undefined} className={cn(crumb, "sticky left-0 z-10 bg-surface font-medium sm:static sm:bg-transparent")}>My Drive</button>
           {path.map((f, i) => (
             <span key={f.id} className="flex shrink-0 items-center gap-0.5">
               <ChevronRight size={13} className="shrink-0 text-faint" />
@@ -356,7 +358,9 @@ function FolderBrowser() {
             className="min-w-0 flex-1 [@media(pointer:coarse)]:h-10"
           />
           <Button variant="primary" onClick={create} loading={busy} disabled={!newName.trim()}>Create</Button>
-          <Button variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>
+          {/* Phones: icon-only Cancel so the name field isn't squeezed to ~9 characters. */}
+          <Button variant="ghost" size="icon" aria-label="Cancel" className="sm:hidden" onClick={() => setCreating(false)}><X size={15} /></Button>
+          <Button variant="ghost" className="hidden sm:inline-flex" onClick={() => setCreating(false)}>Cancel</Button>
         </div>
       )}
 
@@ -519,14 +523,14 @@ function Queue() {
       {stats.dups > 0 && (
         <div className="flex flex-wrap items-center gap-2 border-b border-warn/30 bg-warn-soft px-4 py-2.5 text-[13px]">
           <AlertTriangle size={15} className="shrink-0 text-warn" />
-          <span className="min-w-0 flex-1">{stats.dups} file{stats.dups === 1 ? "" : "s"} already exist in this folder. Uploading keeps both copies.</span>
+          <span className="min-w-0 flex-1">{stats.dups === 1 ? "1 file already exists" : `${stats.dups} files already exist`} in this folder. Uploading keeps both copies.</span>
           <Button variant="ghost" size="sm" className="ml-auto" onClick={skipDuplicates}>Skip duplicates</Button>
         </div>
       )}
 
       {/* The page scrolls on phones; the box only caps its height where it shares the viewport with the aside. */}
       <div className="max-h-none divide-y divide-border overflow-y-auto lg:max-h-[420px]">
-        {queue.map((item) => <QueueRow key={item.id} item={item} />)}
+        {queue.map((item, index) => <QueueRow key={item.id} item={item} index={index} />)}
       </div>
     </section>
   );
@@ -544,8 +548,10 @@ const STATUS_META: Record<DriveItemStatus, { label: string; tone: string }> = {
 
 // Memoized: a progress tick patches one item (the others keep their reference), so only that row
 // re-renders instead of the whole list. `.reveal-in` runs once on mount — rows are prepended when
-// enqueued and keyed by id, so later patches never replay it.
-const QueueRow = memo(function QueueRow({ item }: { item: DriveQueueItem }) {
+// enqueued and keyed by id, so later patches never replay it. `revealClass(index)` caps the stagger to
+// the first rows and `content-visibility:auto` skips layout for off-screen rows, so a 300-file bulk add
+// no longer mounts as one long main-thread task.
+const QueueRow = memo(function QueueRow({ item, index }: { item: DriveQueueItem; index: number }) {
   const pauseItem = useDrive((s) => s.pauseItem);
   const resumeItem = useDrive((s) => s.resumeItem);
   const cancelItem = useDrive((s) => s.cancelItem);
@@ -557,7 +563,7 @@ const QueueRow = memo(function QueueRow({ item }: { item: DriveQueueItem }) {
   const name = item.relPath.includes("/") ? item.relPath : item.name;
 
   return (
-    <div className="flex items-center gap-3 px-4 py-2.5 reveal-in">
+    <div className={cn("flex items-center gap-3 px-4 py-2.5 [content-visibility:auto] [contain-intrinsic-size:auto_64px]", revealClass(index))} style={revealStyle(index)}>
       <Thumb item={item} />
       <div className="min-w-0 flex-1">
         {/* The name owns the full width (two lines max); status moved into the meta row below. */}
@@ -672,7 +678,8 @@ function History() {
           ))}
         </div>
       ) : history.length === 0 ? (
-        <div className="p-3">
+        // Match the 5-row skeleton's footprint so the aside doesn't jump when history lands empty.
+        <div className="grid min-h-[260px] place-items-center p-3">
           <EmptyState size="sm" icon={Clock} title="No uploads yet" description="Files you upload appear here." />
         </div>
       ) : (
