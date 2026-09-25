@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { uid } from "@/lib/ids";
 import { API_BASE, ApiError } from "./api";
-import { driveApi, resumableUpload, CanceledError, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
+import { driveApi, resumableUpload, CanceledError, PausedError, type DriveAccount, type DriveQuota, type ResumableControl } from "./driveApi";
 import { startConnect } from "@/lib/connect";
 import { isNative } from "@/lib/native";
 import { driveV2Api, filterBucket, hasFullDrive, type DriveChange, type DriveNode, type SearchParams, type SharedDrive } from "./driveV2Api";
@@ -50,7 +50,7 @@ export interface UploadTask {
   name: string;
   size: number;
   uploaded: number;
-  status: "uploading" | "done" | "error" | "canceled";
+  status: "uploading" | "paused" | "done" | "error" | "canceled";
   error?: string;
 }
 
@@ -212,10 +212,14 @@ interface DriveV2State {
   /** Upload a dropped/picked folder tree — recreates the folder structure in Drive, then uploads each
    *  file into its correct parent (preserving subfolders and empty folders). */
   uploadDropped: (items: UploadItem[]) => Promise<void>;
-  /** Cancel one in-flight upload (aborts the transfer at the next chunk boundary). */
+  /** Cancel one in-flight (or paused) upload (aborts the transfer at the next chunk boundary). */
   cancelUpload: (id: string) => void;
-  /** Cancel every in-flight upload. */
+  /** Cancel every in-flight and paused upload. */
   cancelAllUploads: () => void;
+  /** Pause one in-flight upload — it stops at the next chunk boundary and can be resumed where it left off. */
+  pauseUpload: (id: string) => void;
+  /** Resume a paused upload from its saved offset, or restart a failed one from scratch (retry). */
+  resumeUpload: (id: string) => void;
   /** Remove one finished/canceled/failed row from the tray (cancels it first if somehow still running). */
   dismissUpload: (id: string) => void;
   /** Clear every non-active row from the tray (leaves in-flight uploads running). */
@@ -249,6 +253,10 @@ let tokenCache: { accountId: string; token: string; exp: number } | null = null;
 let loadSeq = 0; // bumped on every navigation/load so slow mutations never clobber newer views
 let nodesKey: string | null = null; // cacheKey the currently-shown `nodes` belong to — gates stale-while-revalidate
 const uploadControls = new Map<string, ResumableControl>();
+// Pause/resume + retry state, keyed by upload-tray row id. `uploadJobs` holds what's needed to (re)start
+// an upload; `uploadResumes` holds where a paused upload left off (Google's session URI + byte offset).
+const uploadJobs = new Map<string, { accountId: string; file: File; folderId: string }>();
+const uploadResumes = new Map<string, { sessionUri: string; uploaded: number }>();
 
 /* Live-sync controller (module-level so it survives re-renders; driven by the page's mount effect). */
 const SYNC_INTERVAL = 12_000; // poll cadence when the tab is visible
@@ -381,33 +389,52 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     return accessToken;
   }
 
-  /** Upload one file into `folderId`, tracking it as a tray task. Mints a fresh (cached) token per file so
-   *  a long multi-file / folder upload survives token expiry. Shared by uploadFiles + uploadDropped. */
-  async function uploadOneFile(accountId: string, file: File, folderId: string): Promise<void> {
-    const id = uid("up");
+  /** Run (or resume/retry) the transfer for an EXISTING tray row `id`. A fresh control is created each run
+   *  so pause→resume works. Mints a fresh (cached) token so a long upload survives token expiry. On pause it
+   *  records the resume offset and stops without erroring; cancel → "canceled"; anything else → "error". */
+  async function runUpload(id: string, accountId: string, file: File, folderId: string, resumeFrom?: { sessionUri: string; uploaded: number }): Promise<void> {
     const control: ResumableControl = { paused: false, canceled: false };
     uploadControls.set(id, control);
-    set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "uploading" }, ...s.uploads] }));
+    set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "uploading" } : u)) }));
     try {
-      const token = await ensureToken(accountId);
       await resumableUpload({
-        accessToken: token,
+        accessToken: await ensureToken(accountId),
         file,
         name: file.name,
         mimeType: file.type || "application/octet-stream",
         folderId,
         control,
+        resumeFrom,
         onProgress: (b) => set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: b } : u)) })),
         getFreshToken: () => ensureToken(accountId),
       });
+      uploadJobs.delete(id);
+      uploadResumes.delete(id);
       set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: u.size, status: "done" } : u)) }));
     } catch (err) {
-      // A user cancel surfaces as CanceledError — mark it "canceled", not "error" (no red "Failed" row).
-      const canceled = err instanceof CanceledError;
-      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: canceled ? "canceled" : "error", error: canceled ? undefined : err instanceof Error ? err.message : "Upload failed" } : u)) }));
+      if (err instanceof PausedError) {
+        // Keep the row + job so it can be resumed; remember where Google left off.
+        uploadResumes.set(id, { sessionUri: err.sessionUri, uploaded: err.uploaded });
+        set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: err.uploaded, status: "paused" } : u)) }));
+      } else {
+        // A user cancel surfaces as CanceledError — mark it "canceled", not a red "error". A cancel is
+        // terminal (drop the job); an error keeps the job so the tray's Retry can restart it from scratch.
+        const canceled = err instanceof CanceledError;
+        uploadResumes.delete(id);
+        if (canceled) uploadJobs.delete(id);
+        set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: canceled ? "canceled" : "error", error: canceled ? undefined : err instanceof Error ? err.message : "Upload failed" } : u)) }));
+      }
     } finally {
       uploadControls.delete(id);
     }
+  }
+
+  /** Create a tray row for a new file and upload it into `folderId`. Shared by uploadFiles + uploadDropped. */
+  async function uploadOneFile(accountId: string, file: File, folderId: string): Promise<void> {
+    const id = uid("up");
+    uploadJobs.set(id, { accountId, file, folderId });
+    set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "uploading" }, ...s.uploads] }));
+    await runUpload(id, accountId, file, folderId);
   }
 
   function selectedAccount(): DriveAccount | undefined {
@@ -1566,23 +1593,46 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
 
     cancelUpload: (id) => {
       const control = uploadControls.get(id);
-      if (control) control.canceled = true; // resumableUpload aborts at the next chunk → uploadOneFile marks it canceled
+      if (control) control.canceled = true; // in-flight: resumableUpload aborts at the next chunk → runUpload marks it canceled
+      else { uploadJobs.delete(id); uploadResumes.delete(id); } // paused/queued: no live control, so mark it here
       // Reflect it immediately (the abort + catch may lag a chunk); the catch then sets the same status.
-      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id && u.status === "uploading" ? { ...u, status: "canceled" } : u)) }));
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id && (u.status === "uploading" || u.status === "paused") ? { ...u, status: "canceled" } : u)) }));
     },
 
     cancelAllUploads: () => {
       for (const c of uploadControls.values()) c.canceled = true;
-      set((s) => ({ uploads: s.uploads.map((u) => (u.status === "uploading" ? { ...u, status: "canceled" } : u)) }));
+      // Paused uploads have no live control — drop their resume state so they can't be resumed after cancel.
+      for (const u of get().uploads) if (u.status === "paused") { uploadJobs.delete(u.id); uploadResumes.delete(u.id); }
+      set((s) => ({ uploads: s.uploads.map((u) => (u.status === "uploading" || u.status === "paused" ? { ...u, status: "canceled" } : u)) }));
+    },
+
+    pauseUpload: (id) => {
+      const control = uploadControls.get(id);
+      if (control) control.paused = true; // resumableUpload throws PausedError → runUpload records the offset + marks it paused
+    },
+
+    resumeUpload: (id) => {
+      if (uploadControls.has(id)) return; // still winding down from a pause/cancel — ignore a double-click
+      const job = uploadJobs.get(id);
+      if (!job) return;
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "uploading" } : u)) }));
+      // resumeFrom present → continue from the saved offset (paused); absent → restart from scratch (retry).
+      void runUpload(id, job.accountId, job.file, job.folderId, uploadResumes.get(id));
     },
 
     dismissUpload: (id) => {
       const control = uploadControls.get(id);
       if (control) control.canceled = true; // defensive: if the row is somehow still uploading, stop it too
+      uploadJobs.delete(id);
+      uploadResumes.delete(id);
       set((s) => ({ uploads: s.uploads.filter((u) => u.id !== id) }));
     },
 
-    clearFinishedUploads: () => set((s) => ({ uploads: s.uploads.filter((u) => u.status === "uploading") })),
+    clearFinishedUploads: () => {
+      // Keep in-flight AND paused rows; clear the terminal ones (done/error/canceled) and their job state.
+      for (const u of get().uploads) if (u.status !== "uploading" && u.status !== "paused") { uploadJobs.delete(u.id); uploadResumes.delete(u.id); }
+      set((s) => ({ uploads: s.uploads.filter((u) => u.status === "uploading" || u.status === "paused") }));
+    },
 
     downloadRevision: async (fileId, revId, filename) => {
       const accountId = get().accountId;

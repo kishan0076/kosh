@@ -25,7 +25,9 @@ import {
   Rows3,
   Menu as MenuIcon,
   Palette,
+  Pause,
   Pencil,
+  Play,
   Plug,
   RefreshCw,
   RotateCcw,
@@ -245,19 +247,8 @@ function Shell() {
     })();
   }, [store]);
 
-  // Track the lg breakpoint so the inspector renders ONCE — docked as a third column on desktop, an
-  // overlay drawer on narrow — instead of mounting two copies (one hidden per breakpoint).
-  const [isLg, setIsLg] = useState(() => typeof window !== "undefined" && window.matchMedia("(min-width: 1024px)").matches);
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const on = () => setIsLg(mq.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
-  // Dock on lg+ whenever details are open — including while Activity/Insights occupy the main column
-  // (the inspector is a separate third column, so it must not vanish when a panel opens).
-  const dockInspector = isLg && !!detailsId;
-  // Under sm the overlay inspector is a bottom sheet (slides up) rather than a right drawer.
+  // The inspector always opens as a slide-in drawer (a right panel on desktop/tablet, a bottom sheet on
+  // phones) rather than reflowing the grid into a third column — one instance, portaled to <body>.
   const phone = useMediaQuery(PHONE_QUERY);
 
   // Global ⌘K / Ctrl+K opens the command palette; "?" opens the shortcuts sheet.
@@ -423,8 +414,9 @@ function Shell() {
         }}
       />
       {/* `grid-cols-1` pins the phone track to minmax(0,1fr): without it the implicit `auto` track sizes
-          to the widest unbreakable child (a long e-mail in the mobile bar) and the whole page scrolls sideways. */}
-      <div className={cn("grid grid-cols-1 gap-4 lg:h-full lg:min-h-0 lg:gap-6", dockInspector ? "lg:grid-cols-[auto_minmax(0,1fr)_360px]" : "lg:grid-cols-[auto_minmax(0,1fr)]")}>
+          to the widest unbreakable child (a long e-mail in the mobile bar) and the whole page scrolls sideways.
+          The inspector is an overlay drawer (below), so the grid stays two columns regardless. */}
+      <div className="grid grid-cols-1 gap-4 lg:h-full lg:min-h-0 lg:gap-6 lg:grid-cols-[auto_minmax(0,1fr)]">
         {/* Mobile: a compact bar with a hamburger that opens the rail as a drawer (the full rail below
             would otherwise bury the file list under the fold on a phone). */}
         <MobileDriveBar onOpenNav={() => setMobileNavOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
@@ -480,13 +472,6 @@ function Shell() {
           </div>
           )}
         </FadeSwap>
-        {/* Docked inspector (lg+): a non-modal third column, so browsing file-by-file isn't a
-            click-scrim-click loop. On narrow screens the overlay drawer below is used instead. */}
-        {dockInspector && (
-          <aside className="hidden min-w-0 overflow-hidden rounded-[var(--radius-panel)] border border-border bg-surface lg:flex lg:h-full lg:min-h-0 lg:flex-col">
-            {inspectorEl}
-          </aside>
-        )}
       </div>
 
       <MobileRailDrawer
@@ -497,12 +482,11 @@ function Shell() {
         onUploadFolder={() => { setMobileNavOpen(false); folderInputRef.current?.click(); }}
       />
 
-      {/* Inspector on narrow screens — a right drawer on tablets, a bottom sheet on phones, both with a
-          light scrim and safe-area padding. On lg+ the docked column above is used instead (isLg gate ⇒
-          exactly one inspector instance mounts). Portaled to <body>, like Modal/ContextMenu: the route
-          transition transforms the page for a moment, and a transformed ancestor would drag every
-          `fixed` layer along with it. */}
-      {!isLg && createPortal(
+      {/* The inspector is a slide-in drawer at every size — a right panel on desktop/tablet, a bottom
+          sheet on phones — both with a scrim and safe-area padding. Portaled to <body>, like
+          Modal/ContextMenu: the route transition transforms the page for a moment, and a transformed
+          ancestor would drag every `fixed` layer along with it. */}
+      {createPortal(
         <AnimatePresence>
           {detailsId && (
             <>
@@ -513,7 +497,7 @@ function Shell() {
                 exit={{ opacity: 0 }}
                 transition={{ duration: DUR.base }}
                 onClick={() => void store.getState().loadDetails(null)}
-                className="fixed inset-0 z-40 bg-black/25 backdrop-blur-[1px]"
+                className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px]"
               />
               <motion.aside
                 key={phone ? "inspector-sheet" : "inspector-panel"}
@@ -525,7 +509,7 @@ function Shell() {
                   "fixed z-40 flex flex-col border-border bg-surface shadow-[var(--shadow-pop)]",
                   phone
                     ? "inset-x-0 bottom-0 top-[calc(var(--safe-top)+2.5rem)] rounded-t-[var(--radius-panel)] border-t pb-safe"
-                    : "inset-y-0 right-0 w-[88vw] max-w-[380px] border-l pb-safe pt-safe",
+                    : "inset-y-0 right-0 w-[92vw] max-w-[420px] border-l pb-safe pt-safe",
                 )}
               >
                 {phone && (
@@ -1429,26 +1413,47 @@ function VirtualGrid({ scrollRef, getScrollEl, visible, rowProps, focusIdx, focu
 }
 
 /* ── upload tray (per-file + aggregate real-time progress) ── */
+/** A compact upload-row control (pause / resume / retry / cancel / dismiss) with a tone-colored hover. */
+function UploadRowBtn({ onClick, label, title, tone = "muted", children }: { onClick: () => void; label: string; title: string; tone?: "muted" | "primary" | "danger"; children: ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      title={title}
+      className={cn(
+        "pressable grid h-8 w-8 place-items-center rounded-md text-faint transition-colors hover:bg-surface-3 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10",
+        tone === "danger" ? "hover:text-danger" : tone === "primary" ? "hover:text-primary" : "hover:text-foreground",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
 function UploadTray() {
   const uploads = useDriveV2((s) => s.uploads);
   const [open, setOpen] = useState(true);
   const active = uploads.filter((u) => u.status === "uploading");
+  const paused = uploads.filter((u) => u.status === "paused").length;
   const done = uploads.filter((u) => u.status === "done").length;
   const failed = uploads.filter((u) => u.status === "error").length;
   const canceled = uploads.filter((u) => u.status === "canceled").length;
   const total = uploads.length;
+  // "In progress" = still uploading OR paused (a paused upload isn't finished — it's waiting to resume).
+  const inProgress = active.length > 0 || paused > 0;
   // Aggregate progress across everything in the tray (uploaded bytes / total bytes).
   const totalBytes = uploads.reduce((a, u) => a + u.size, 0);
   const doneBytes = uploads.reduce((a, u) => a + (u.status === "done" ? u.size : u.uploaded), 0);
   const aggPct = totalBytes ? Math.round((doneBytes / totalBytes) * 100) : 0;
   // Header: a real count, not a truncated "…". In-flight files while uploading, else a summary of the
-  // final tallies (complete / failed / canceled).
+  // final tallies (complete / failed / canceled), noting anything paused.
   const heading =
     active.length > 0
-      ? `Uploading ${active.length} file${active.length === 1 ? "" : "s"}${total > active.length ? ` · ${done}/${total} done` : ""}`
-      : [done && `${done} complete`, failed && `${failed} failed`, canceled && `${canceled} canceled`].filter(Boolean).join(" · ") || "Uploads";
-  const headerIcon = active.length > 0 ? <Spinner size={14} className="text-primary" /> : done > 0 ? <Check size={15} className="text-ok" /> : <X size={15} className="text-muted" />;
-  const uploading = active.length > 0;
+      ? `Uploading ${active.length} file${active.length === 1 ? "" : "s"}${total > active.length ? ` · ${done}/${total} done` : ""}${paused ? ` · ${paused} paused` : ""}`
+      : paused > 0
+        ? `${paused} paused${done ? ` · ${done} complete` : ""}`
+        : [done && `${done} complete`, failed && `${failed} failed`, canceled && `${canceled} canceled`].filter(Boolean).join(" · ") || "Uploads";
+  const headerIcon = active.length > 0 ? <Spinner size={14} className="text-primary" /> : paused > 0 ? <Pause size={14} className="text-muted" /> : done > 0 ? <Check size={15} className="text-ok" /> : <X size={15} className="text-muted" />;
 
   // Lives in the BottomStack (which owns the fixed position, the safe-area padding and the z-index).
   return (
@@ -1459,12 +1464,12 @@ function UploadTray() {
           <span className="min-w-0 flex-1 truncate text-left" title={heading}>{heading}</span>
           <ChevronRight size={15} className={cn("shrink-0 text-muted transition-transform duration-[var(--motion-base)]", open && "rotate-90")} />
         </button>
-        {/* While uploading this cancels everything in flight; once finished it clears the tray. */}
+        {/* While anything is in progress this cancels it all; once finished it clears the tray. */}
         <button
-          onClick={() => (uploading ? useDriveV2.getState().cancelAllUploads() : useDriveV2.getState().clearFinishedUploads())}
-          aria-label={uploading ? "Cancel all uploads" : "Clear completed"}
-          title={uploading ? "Cancel all" : "Clear"}
-          className={cn("pressable grid h-10 w-10 shrink-0 place-items-center border-l border-border text-muted hover:text-foreground [@media(pointer:coarse)]:w-11", uploading && "hover:text-danger")}
+          onClick={() => (inProgress ? useDriveV2.getState().cancelAllUploads() : useDriveV2.getState().clearFinishedUploads())}
+          aria-label={inProgress ? "Cancel all uploads" : "Clear completed"}
+          title={inProgress ? "Cancel all" : "Clear"}
+          className={cn("pressable grid h-10 w-10 shrink-0 place-items-center border-l border-border text-muted hover:text-foreground [@media(pointer:coarse)]:w-11", inProgress && "hover:text-danger")}
         >
           <X size={16} />
         </button>
@@ -1484,35 +1489,33 @@ function UploadTray() {
             <div key={u.id} className="flex items-center gap-2.5 border-b border-border px-3.5 py-2 last:border-0">
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[12.5px] font-medium">{u.name}</div>
-                {u.status === "uploading" ? (
+                {u.status === "uploading" || u.status === "paused" ? (
                   <>
-                    <Progress value={u.size ? Math.round((u.uploaded / u.size) * 100) : 0} className="mt-1" />
-                    <div className="mt-0.5 font-mono text-[11.5px] tabular text-faint">{formatBytes(u.uploaded)} / {formatBytes(u.size)}</div>
+                    <Progress value={u.size ? Math.round((u.uploaded / u.size) * 100) : 0} className="mt-1" tone={u.status === "paused" ? "warn" : "primary"} />
+                    <div className="mt-0.5 font-mono text-[11.5px] tabular text-faint">{u.status === "paused" ? "Paused · " : ""}{formatBytes(u.uploaded)} / {formatBytes(u.size)}</div>
                   </>
                 ) : (
                   <div className={cn("text-[11px]", u.status === "done" ? "text-ok" : u.status === "error" ? "text-danger" : "text-muted")}>{u.status === "done" ? formatBytes(u.size) + " · Done" : u.status === "error" ? u.error ?? "Failed" : "Canceled"}</div>
                 )}
               </div>
-              {/* An in-flight row can be canceled; a finished/failed/canceled row can be dismissed. */}
-              {u.status === "uploading" ? (
-                <button
-                  onClick={() => useDriveV2.getState().cancelUpload(u.id)}
-                  aria-label={`Cancel upload of ${u.name}`}
-                  title="Cancel"
-                  className="pressable grid h-8 w-8 shrink-0 place-items-center rounded-md text-muted transition-colors hover:bg-surface-3 hover:text-danger [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
-                >
-                  <X size={14} />
-                </button>
-              ) : (
-                <button
-                  onClick={() => useDriveV2.getState().dismissUpload(u.id)}
-                  aria-label={`Dismiss ${u.name}`}
-                  title="Dismiss"
-                  className="pressable grid h-8 w-8 shrink-0 place-items-center rounded-md text-faint transition-colors hover:bg-surface-3 hover:text-foreground [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
-                >
-                  <X size={14} />
-                </button>
-              )}
+              {/* Controls by state: uploading → pause + cancel · paused → resume + cancel · error → retry +
+                  dismiss · done/canceled → dismiss. */}
+              <div className="flex shrink-0 items-center gap-0.5">
+                {u.status === "uploading" && (
+                  <UploadRowBtn onClick={() => useDriveV2.getState().pauseUpload(u.id)} label={`Pause ${u.name}`} title="Pause"><Pause size={14} /></UploadRowBtn>
+                )}
+                {u.status === "paused" && (
+                  <UploadRowBtn onClick={() => useDriveV2.getState().resumeUpload(u.id)} label={`Resume ${u.name}`} title="Resume" tone="primary"><Play size={14} /></UploadRowBtn>
+                )}
+                {u.status === "error" && (
+                  <UploadRowBtn onClick={() => useDriveV2.getState().resumeUpload(u.id)} label={`Retry ${u.name}`} title="Retry" tone="primary"><RefreshCw size={14} /></UploadRowBtn>
+                )}
+                {u.status === "uploading" || u.status === "paused" ? (
+                  <UploadRowBtn onClick={() => useDriveV2.getState().cancelUpload(u.id)} label={`Cancel upload of ${u.name}`} title="Cancel" tone="danger"><X size={14} /></UploadRowBtn>
+                ) : (
+                  <UploadRowBtn onClick={() => useDriveV2.getState().dismissUpload(u.id)} label={`Dismiss ${u.name}`} title="Dismiss"><X size={14} /></UploadRowBtn>
+                )}
+              </div>
             </div>
           ))}
         </div>
