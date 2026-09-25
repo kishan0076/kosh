@@ -100,7 +100,7 @@ interface DataState {
   initBackend: () => Promise<void>;
   retryBackend: () => void;
   /** Native app: store the Bearer session token handed back by the login flow, then hydrate. */
-  completeLogin: (token: string) => Promise<void>;
+  completeLogin: (token?: string | null) => Promise<void>;
   signOut: () => Promise<void>;
   upsertItem: (item: Item) => void;
   upsertSkill: (skill: Skill) => void;
@@ -200,17 +200,20 @@ export const useData = create<DataState>()(
           try {
             await withTimeout(api.me());
           } catch (err) {
-            if (isNative) {
-              // A phone never auto-signs-in as a dev user. No/expired token → the sign-in screen;
-              // anything else (API unreachable) → the offline banner via the outer catch.
-              if (err instanceof ApiError && err.status === 401) {
+            // Not signed in (401): native and production web both show the sign-in screen (GitHub /
+            // email+password). Only a local dev BUILD auto-signs-in as the demo user for convenience.
+            if (err instanceof ApiError && err.status === 401) {
+              if (isNative || !import.meta.env.DEV) {
                 await setSessionToken(null);
                 set({ hydrated: true, needsLogin: true, backendError: null });
                 return;
               }
+              await withTimeout(api.devLogin("darshan", "Darshan"));
+            } else if (isNative) {
+              throw err; // API unreachable on native → offline banner via the outer catch
+            } else {
               throw err;
             }
-            await withTimeout(api.devLogin("darshan", "Darshan"));
           }
           const [me, items, trash, skills, collections] = await withTimeout(
             Promise.all([api.me(), api.listItems(), api.listTrash(), api.listSkills(), api.listCollections()]),
@@ -238,7 +241,8 @@ export const useData = create<DataState>()(
         void get().initBackend();
       },
       completeLogin: async (token) => {
-        await setSessionToken(token);
+        // Native passes the Bearer token to store; web passes nothing (the session is a cookie).
+        await setSessionToken(token ?? null);
         set({ needsLogin: false, hydrated: false, backendError: null });
         await get().initBackend();
       },

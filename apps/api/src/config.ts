@@ -50,6 +50,15 @@ export const config = {
     .filter(Boolean),
   devLogin: bool(env.DEV_LOGIN, !env.NODE_ENV || env.NODE_ENV !== "production"),
   cookieSecure: bool(env.COOKIE_SECURE, env.NODE_ENV === "production"),
+  // Env-configured admin email+password login (works on web AND the mobile app, no OAuth needed).
+  // Password is either a scrypt hash (ADMIN_PASSWORD_HASH, recommended) or plaintext (ADMIN_PASSWORD).
+  // Only active when both an email and a secret are set; the credential never lives in the repo.
+  admin: {
+    email: (env.ADMIN_EMAIL || "").trim().toLowerCase() || null,
+    password: env.ADMIN_PASSWORD || null,
+    passwordHash: env.ADMIN_PASSWORD_HASH || null,
+    name: env.ADMIN_NAME || "Admin",
+  },
 
   github: {
     clientId: env.GITHUB_CLIENT_ID || null,
@@ -123,9 +132,13 @@ export const config = {
   // Secure Vault: admin-only, end-to-end-encrypted. Stored SEPARATELY from the main app data
   // (its own directory, or its own R2 bucket) and never in MongoDB.
   vault: {
-    // Which login may access the vault. Falls back to the first allowlisted login; in dev-login
-    // mode with neither set, any authenticated user is treated as admin (document this!).
-    adminLogin: env.KOSH_ADMIN_LOGIN || (env.ALLOWED_GITHUB_LOGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean)[0] || null,
+    // Which login may access the vault. Falls back to the configured admin-login email, then the first
+    // allowlisted login; in dev-login mode with none set, any authenticated user is treated as admin.
+    adminLogin:
+      env.KOSH_ADMIN_LOGIN ||
+      (env.ADMIN_EMAIL || "").trim().toLowerCase() ||
+      (env.ALLOWED_GITHUB_LOGINS ?? "").split(",").map((s) => s.trim()).filter(Boolean)[0] ||
+      null,
     // A directory dedicated to the vault, separate from DATA_DIR — only ever holds ciphertext.
     dir: env.VAULT_DIR ?? ".vault-data",
     // Optional: route vault ciphertext to its own R2/S3 bucket instead of the local dir.

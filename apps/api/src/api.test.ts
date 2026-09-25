@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { safeFetch } from "./integrations/safe-fetch.js";
 import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
-import { encryptSecret, decryptSecret } from "./auth/crypto.js";
+import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from "./auth/crypto.js";
 
 describe("safeFetch SSRF guard", () => {
   it("blocks localhost", async () => {
@@ -30,6 +30,24 @@ describe("secret encryption", () => {
   it("tolerates legacy plaintext and undefined", () => {
     expect(decryptSecret("plain")).toBe("plain");
     expect(decryptSecret(undefined)).toBeUndefined();
+  });
+});
+
+describe("admin password verification", () => {
+  it("verifies a scrypt hash and rejects a wrong password", () => {
+    const hash = hashPassword("s3cret-pass");
+    expect(hash.startsWith("scrypt:")).toBe(true);
+    expect(verifyPassword("s3cret-pass", hash)).toBe(true);
+    expect(verifyPassword("wrong", hash)).toBe(false);
+    expect(verifyPassword("s3cret-pas", hash)).toBe(false); // one char short
+  });
+  it("supports a plaintext stored password (constant-time compare)", () => {
+    expect(verifyPassword("hunter2", "hunter2")).toBe(true);
+    expect(verifyPassword("hunter3", "hunter2")).toBe(false);
+    expect(verifyPassword("hunter2 ", "hunter2")).toBe(false); // length-sensitive
+  });
+  it("distinct passwords produce distinct hashes (random salt)", () => {
+    expect(hashPassword("same")).not.toBe(hashPassword("same"));
   });
 });
 

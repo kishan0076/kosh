@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { config } from "../config.js";
 
 // 32-byte key derived from ENCRYPTION_KEY.
@@ -26,4 +26,48 @@ export function decryptSecret(value: string | undefined): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/* ── Admin password (env-configured login) ──────────────────────────────────────────────────────
+ * The admin credential lives ONLY in env, never in the repo. A password may be stored either as a
+ * scrypt hash ("scrypt:<saltB64url>:<hashB64url>", recommended) or as plaintext (convenient for a
+ * self-hosted single admin). Verification is always constant-time to avoid leaking via timing. */
+const SCRYPT_PREFIX = "scrypt:";
+const SCRYPT_KEYLEN = 32;
+
+/** Produce a storable scrypt hash of a password (for ADMIN_PASSWORD_HASH). */
+export function hashPassword(plain: string): string {
+  const salt = randomBytes(16);
+  const hash = scryptSync(plain, salt, SCRYPT_KEYLEN);
+  return `${SCRYPT_PREFIX}${salt.toString("base64url")}.${hash.toString("base64url")}`;
+}
+
+/** Constant-time compare of two strings (length-safe — never short-circuits on differing length). */
+function safeEqualStr(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  // timingSafeEqual requires equal length; hash both to a fixed 32 bytes so length never leaks.
+  const ah = createHash("sha256").update(ab).digest();
+  const bh = createHash("sha256").update(bb).digest();
+  return timingSafeEqual(ah, bh) && ab.length === bb.length;
+}
+
+/**
+ * Verify a password against the stored value. `stored` is either a scrypt hash (preferred) or a
+ * plaintext password. Always runs the full comparison (constant-time) so a wrong password and a
+ * wrong-length password take the same path.
+ */
+export function verifyPassword(plain: string, stored: string): boolean {
+  if (stored.startsWith(SCRYPT_PREFIX)) {
+    const [saltB64, hashB64] = stored.slice(SCRYPT_PREFIX.length).split(".");
+    if (!saltB64 || !hashB64) return false;
+    try {
+      const expected = Buffer.from(hashB64, "base64url");
+      const actual = scryptSync(plain, Buffer.from(saltB64, "base64url"), expected.length || SCRYPT_KEYLEN);
+      return actual.length === expected.length && timingSafeEqual(actual, expected);
+    } catch {
+      return false;
+    }
+  }
+  return safeEqualStr(plain, stored);
 }

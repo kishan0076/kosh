@@ -175,6 +175,10 @@ export async function uploadObjects(inputs: UploadInput[]): Promise<UploadedRef[
 export const api = {
   devLogin: (login: string, name?: string, client?: "mobile") =>
     req<{ user: User; token?: string }>("/auth/dev-login", { method: "POST", body: JSON.stringify({ login, name, client }) }),
+  // Admin email+password login (env-configured on the server). Works on web (cookie) and the mobile
+  // app (Bearer token via the returned `token`), no OAuth needed.
+  passwordLogin: (email: string, password: string, client?: "mobile") =>
+    req<{ user: User; token?: string }>("/auth/password", { method: "POST", body: JSON.stringify({ email, password, client }) }),
   me: () => req<{ user: User }>("/me"),
   logout: () => req<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   // Native app auth: the GitHub login runs in the system browser and returns a one-time code via the

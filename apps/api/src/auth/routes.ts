@@ -6,7 +6,7 @@ import { getStore, type ServerUser } from "../db/index.js";
 import { ah, badRequest, forbidden, unauthorized } from "../errors.js";
 import { getOrCreateUser, newEmailToken, publicUser } from "./users.js";
 import { requireUser, requireWrite } from "./middleware.js";
-import { encryptSecret } from "./crypto.js";
+import { encryptSecret, verifyPassword } from "./crypto.js";
 import { isProviderId } from "../integrations/aiProviders.js";
 import { githubGrantPatch } from "../integrations/githubToken.js";
 import { SESSION_COOKIE, signSession, signState, verifyState } from "./jwt.js";
@@ -46,6 +46,35 @@ authRouter.post(
     const token = await signSession(user.id);
     res.cookie(SESSION_COOKIE, token, cookieOpts());
     // The native app can't rely on the cookie — hand it the session token to send as a Bearer header.
+    res.json(client === "mobile" ? { user: publicUser(user), token } : { user: publicUser(user) });
+  }),
+);
+
+/**
+ * Admin email + password login (env-configured). Works on web (cookie) and the mobile app (Bearer
+ * token), with no OAuth app or dev-login needed — ideal for the packaged APK. Only active when both
+ * ADMIN_EMAIL and a secret (ADMIN_PASSWORD or ADMIN_PASSWORD_HASH) are set. Rate-limited by the shared
+ * /auth bucket (30/min/IP). Failures are generic (never reveal which of email/password was wrong) and
+ * the password check is constant-time.
+ */
+authRouter.post(
+  "/auth/password",
+  ah(async (req, res) => {
+    const secret = config.admin.passwordHash || config.admin.password;
+    if (!config.admin.email || !secret) throw forbidden("Password login isn't configured on this server.");
+    const { email, password, client } = z
+      .object({ email: z.string().min(1).max(320), password: z.string().min(1).max(200), client: z.enum(["web", "mobile"]).optional() })
+      .parse(req.body);
+    // Always run the password check (constant-time) even on an email mismatch, so response timing can't
+    // be used to probe the admin email.
+    const emailOk = email.trim().toLowerCase() === config.admin.email;
+    const pwOk = verifyPassword(password, secret);
+    if (!emailOk || !pwOk) throw unauthorized("Invalid email or password.");
+    // The admin identity's login is the email (which config.vault.adminLogin defaults to), so this user is
+    // the vault admin.
+    const user = await getOrCreateUser({ login: config.admin.email, name: config.admin.name });
+    const token = await signSession(user.id);
+    res.cookie(SESSION_COOKIE, token, cookieOpts());
     res.json(client === "mobile" ? { user: publicUser(user), token } : { user: publicUser(user) });
   }),
 );
