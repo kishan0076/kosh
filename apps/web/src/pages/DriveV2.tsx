@@ -1486,7 +1486,7 @@ function UploadTray() {
       <Collapse open={open}>
         <div className="max-h-64 overflow-y-auto">
           {uploads.slice(0, 30).map((u) => (
-            <div key={u.id} className="flex items-center gap-2.5 border-b border-border px-3.5 py-2 last:border-0">
+            <div key={u.id} className="group/uprow flex items-center gap-2.5 border-b border-border px-3.5 py-2 last:border-0">
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[12.5px] font-medium">{u.name}</div>
                 {u.status === "uploading" || u.status === "paused" ? (
@@ -1499,7 +1499,7 @@ function UploadTray() {
                 )}
               </div>
               {/* Controls by state: uploading → pause + cancel · paused → resume + cancel · error → retry +
-                  dismiss · done/canceled → dismiss. */}
+                  dismiss · canceled → dismiss · done → a green check (a subtle remove appears on hover). */}
               <div className="flex shrink-0 items-center gap-0.5">
                 {u.status === "uploading" && (
                   <UploadRowBtn onClick={() => useDriveV2.getState().pauseUpload(u.id)} label={`Pause ${u.name}`} title="Pause"><Pause size={14} /></UploadRowBtn>
@@ -1511,8 +1511,21 @@ function UploadTray() {
                   <UploadRowBtn onClick={() => useDriveV2.getState().resumeUpload(u.id)} label={`Retry ${u.name}`} title="Retry" tone="primary"><RefreshCw size={14} /></UploadRowBtn>
                 )}
                 {u.status === "uploading" || u.status === "paused" ? (
+                  // In-flight: a real cancel (destructive).
                   <UploadRowBtn onClick={() => useDriveV2.getState().cancelUpload(u.id)} label={`Cancel upload of ${u.name}`} title="Cancel" tone="danger"><X size={14} /></UploadRowBtn>
+                ) : u.status === "done" ? (
+                  // Success: show a check, NOT a cancel-looking X. The X (remove from list) only appears on hover.
+                  <button
+                    onClick={() => useDriveV2.getState().dismissUpload(u.id)}
+                    aria-label={`Remove ${u.name} from the list`}
+                    title="Remove from list"
+                    className="pressable grid h-8 w-8 place-items-center rounded-md transition-colors hover:bg-surface-3 [@media(pointer:coarse)]:h-10 [@media(pointer:coarse)]:w-10"
+                  >
+                    <Check size={15} className="text-ok group-hover/uprow:hidden" />
+                    <X size={14} className="hidden text-muted group-hover/uprow:block" />
+                  </button>
                 ) : (
+                  // Failed / canceled: a dismiss (remove the entry).
                   <UploadRowBtn onClick={() => useDriveV2.getState().dismissUpload(u.id)} label={`Dismiss ${u.name}`} title="Dismiss"><X size={14} /></UploadRowBtn>
                 )}
               </div>
