@@ -9,6 +9,7 @@ import { ingest, toClientItem } from "../modules/ingest.js";
 import { enqueue } from "../modules/queue.js";
 import { enrichItem } from "../modules/enrich.js";
 import { archiveItem } from "../modules/archive.js";
+import { askTreasury } from "../modules/ask.js";
 import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
@@ -119,6 +120,17 @@ itemsRouter.get(
     const items = await getStore().items.find({ userId: uid, deletedAt: null });
     const hits = searchItems(items, q, { limit });
     res.json({ results: hits.map((h) => ({ item: toClientItem(h.item), score: h.score })), total: hits.length });
+  }),
+);
+
+/* POST /ask — natural-language question answered from the user's saved items (RAG over the vault) */
+itemsRouter.post(
+  "/ask",
+  actionLimiter,
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const { q } = z.object({ q: z.string().min(1).max(1000) }).parse(req.body);
+    res.json(await askTreasury(uid, q));
   }),
 );
 

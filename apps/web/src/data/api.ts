@@ -191,6 +191,11 @@ export const api = {
 
   listItems: () => req<{ items: Item[]; total: number }>("/items?limit=500"),
   search: (q: string, limit = 25) => req<{ results: { item: Item; score: number }[]; total: number }>(`/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+  ask: (q: string) =>
+    req<{ answer: string | null; aiAvailable: boolean; capReached?: boolean; citations: { n: number; itemId: string; title: string }[]; results: Item[] }>("/ask", {
+      method: "POST",
+      body: JSON.stringify({ q }),
+    }),
   listTrash: () => req<{ items: Item[] }>("/trash"),
   listSkills: () => req<{ skills: Skill[] }>("/skills"),
   listCollections: () => req<{ collections: Collection[] }>("/collections"),

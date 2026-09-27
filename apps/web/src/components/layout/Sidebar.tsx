@@ -14,6 +14,7 @@ import {
   PanelLeftClose,
   Plus,
   Quote,
+  Search,
   Settings,
   Trash2,
   UploadCloud,
@@ -85,6 +86,7 @@ export function Sidebar({
   const main: NavItem[] = [
     { to: "/", label: "Home", icon: Home, end: true },
     { to: "/add", label: "Add", icon: Plus },
+    { to: "/search", label: "Search & Ask", icon: Search },
     { to: "/inbox", label: "Inbox", icon: Inbox, badge: inboxCount },
     { to: "/library", label: "Library", icon: LibraryBig },
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },

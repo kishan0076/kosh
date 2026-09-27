@@ -23,6 +23,7 @@ import { Collections, CollectionDetail } from "@/pages/Collections";
 import { Settings } from "@/pages/Settings";
 import { Share } from "@/pages/Share";
 import { Add } from "@/pages/Add";
+import { SearchPage } from "@/pages/Search";
 import { NotFound } from "@/pages/NotFound";
 
 initTheme();
@@ -47,6 +48,7 @@ createRoot(document.getElementById("root")!).render(
         <Route element={<AppShell />}>
           <Route index element={<Home />} />
           <Route path="add" element={<Add />} />
+          <Route path="search" element={<SearchPage />} />
           <Route path="items/:id" element={<ItemPage />} />
           {/* The old folder→new-repo page folded into /github/new (Start from a folder). */}
           <Route path="publish" element={<Navigate to="/github/new" replace />} />

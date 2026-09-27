@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSearchQuery, searchItems, type SearchableItem } from "./search.js";
+import { parseSearchQuery, retrieveItems, searchItems, type SearchableItem } from "./search.js";
 
 const mk = (p: Partial<SearchableItem>): SearchableItem => ({ kind: "link", tags: [], ...p });
 
@@ -55,5 +55,42 @@ describe("searchItems", () => {
 
   it("matches a tag via tag: filter case-insensitively", () => {
     expect(searchItems(vault, "tag:PDF").length).toBe(2);
+  });
+
+  it("scores archived excerpt text", () => {
+    const withArchive = [mk({ title: "Untitled", archive: { excerpt: "a deep dive into webhook signing" } })];
+    expect(searchItems(withArchive, "webhook")).toHaveLength(1);
+  });
+});
+
+describe("retrieveItems (recall-first, for Ask)", () => {
+  it("ignores stopwords in a natural-language question and matches on content words", () => {
+    // searchItems (strict AND) finds nothing because most words are stopwords with no match…
+    expect(searchItems(vault, "what did I save about pdf")).toHaveLength(0);
+    // …but retrieveItems strips stopwords and OR-matches the meaningful term "pdf".
+    const hits = retrieveItems(vault, "what did I save about pdf");
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.map((h) => h.item.title)).toContain("pdf-tools");
+  });
+
+  it("OR-matches: an item matching any content term is retrieved", () => {
+    const hits = retrieveItems(vault, "react or blog");
+    const titles = hits.map((h) => h.item.title);
+    expect(titles).toContain("React Router");
+    expect(titles).toContain("Some blog post");
+  });
+
+  it("falls back to all items (pinned, then recency) when the question has no content terms", () => {
+    const hits = retrieveItems(vault, "what did I do?");
+    expect(hits).toHaveLength(vault.length);
+    expect(hits.every((h) => h.score <= 1)).toBe(true); // 0, plus the +1 pinned tie-break
+    expect(hits[0]!.item.pinned).toBe(true); // pinned wins the tie-break over pure recency
+    // among the non-pinned (score 0) items, the newest sorts first
+    expect(hits.filter((h) => !h.item.pinned)[0]!.item.updatedAt).toBe("2026-04-01");
+  });
+
+  it("honors filters and the limit", () => {
+    expect(retrieveItems(vault, "pdf kind:prompt")).toHaveLength(1);
+    expect(retrieveItems(vault, "pdf", { limit: 1 })).toHaveLength(1);
   });
 });

@@ -19,6 +19,7 @@ export interface SearchableItem {
   ai?: { summary?: string };
   prompt?: { body?: string };
   github?: { repoKind?: string };
+  archive?: { excerpt?: string };
   updatedAt?: string;
 }
 
@@ -86,6 +87,7 @@ function scoreTerm(item: SearchableItem, term: string): number {
   if (item.url?.toLowerCase().includes(term)) score += 2;
   if (item.description?.toLowerCase().includes(term)) score += 2;
   if (item.ai?.summary?.toLowerCase().includes(term)) score += 2;
+  if (item.archive?.excerpt?.toLowerCase().includes(term)) score += 2;
   if (item.note?.toLowerCase().includes(term)) score += 1;
   if (item.prompt?.body?.toLowerCase().includes(term)) score += 1;
   return score;
@@ -111,6 +113,43 @@ export function searchItems<T extends SearchableItem>(items: T[], rawQuery: stri
     if (!allMatched) continue;
     if (item.pinned) total += 1; // gentle tie-break toward pinned
     hits.push({ item, score: total });
+  }
+  hits.sort((a, b) => b.score - a.score || (b.item.updatedAt ?? "").localeCompare(a.item.updatedAt ?? ""));
+  return opts.limit ? hits.slice(0, opts.limit) : hits;
+}
+
+/* ── recall-oriented retrieval (for "Ask your treasury" RAG grounding) ────────
+ * searchItems is precision-first: every term must match (AND), which is right for a search box but wrong
+ * for a natural-language QUESTION full of stopwords ("what did I save about SSRF?" → only "ssrf" matters).
+ * retrieveItems strips stopwords + short words and OR-matches the remaining content terms, so a question
+ * surfaces every item that mentions any of its meaningful words — the candidate set the model then reads. */
+
+const STOPWORDS = new Set([
+  "the", "a", "an", "and", "or", "but", "if", "of", "to", "in", "on", "for", "with", "about", "into", "from",
+  "is", "are", "was", "were", "be", "been", "being", "do", "does", "did", "done", "have", "has", "had",
+  "i", "me", "my", "we", "our", "you", "your", "it", "its", "this", "that", "these", "those", "there", "here",
+  "what", "which", "who", "whom", "whose", "when", "where", "why", "how", "can", "could", "should", "would",
+  "will", "shall", "may", "might", "must", "not", "no", "yes", "any", "all", "some", "more", "most", "other",
+  "as", "at", "by", "so", "than", "then", "too", "very", "just", "up", "out", "over", "again", "once", "get",
+  "got", "find", "show", "tell", "give", "saved", "save", "link", "links", "item", "items", "thing", "things",
+]);
+
+/** Retrieve candidate items for a natural-language question: stopword-stripped, OR-matched, recall-first.
+ *  With no meaningful content terms (all stopwords) it returns items scored 0 so the caller can fall back
+ *  to recency. Honors the same field:value / is: filters as searchItems. */
+export function retrieveItems<T extends SearchableItem>(items: T[], rawQuery: string, opts: { limit?: number } = {}): SearchHit<T>[] {
+  const q = parseSearchQuery(rawQuery);
+  // Strip punctuation ("do?" → "do") so a trailing "?" can't leak a stopword through as a fake content term.
+  const terms = [...new Set(q.terms.map((t) => t.replace(/[^\p{L}\p{N}]/gu, "")).filter((t) => t.length >= 3 && !STOPWORDS.has(t)))];
+  const hits: SearchHit<T>[] = [];
+  for (const item of items) {
+    if (!matchesFilters(item, q)) continue;
+    let total = 0;
+    for (const term of terms) total += scoreTerm(item, term); // OR: sum every term's contribution
+    if (terms.length === 0 || total > 0) {
+      if (item.pinned) total += 1;
+      hits.push({ item, score: total });
+    }
   }
   hits.sort((a, b) => b.score - a.score || (b.item.updatedAt ?? "").localeCompare(a.item.updatedAt ?? ""));
   return opts.limit ? hits.slice(0, opts.limit) : hits;
