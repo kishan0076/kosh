@@ -95,4 +95,26 @@ describe("memory store", () => {
     expect((await store.items.find({ kind: { $in: ["link", "prompt"] } })).length).toBe(2);
     await store.close();
   });
+
+  it("wires the contextPacks collection (create, per-user sort, persistence)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kosh-"));
+    const store = createMemoryStore(dir);
+    await store.contextPacks.create({ userId: "u1", name: "Old", itemIds: ["i1"], version: 1, createdAt: "2026-01-01", updatedAt: "2026-01-01" } as never);
+    const newer = await store.contextPacks.create({ userId: "u1", name: "New", itemIds: [], version: 1, createdAt: "2026-02-01", updatedAt: "2026-02-01" } as never);
+    await store.contextPacks.create({ userId: "u2", name: "Other", itemIds: [], version: 1, createdAt: "2026-03-01", updatedAt: "2026-03-01" } as never);
+
+    // Scoped to the user, newest-first (the route's list contract).
+    const mine = await store.contextPacks.find({ userId: "u1" }, { sort: { updatedAt: -1 } });
+    expect(mine.map((p) => (p as { name: string }).name)).toEqual(["New", "Old"]);
+
+    await store.contextPacks.updateById(newer.id, { itemIds: ["a", "b"], version: 2 } as never);
+    await store.close();
+
+    // Survives a reload from disk (COLLECTIONS wiring persists it).
+    const reopened = createMemoryStore(dir);
+    const again = await reopened.contextPacks.findById(newer.id);
+    expect((again as unknown as { version: number }).version).toBe(2);
+    expect((again as unknown as { itemIds: string[] }).itemIds).toEqual(["a", "b"]);
+    await reopened.close();
+  });
 });

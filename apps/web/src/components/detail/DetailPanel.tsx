@@ -16,8 +16,10 @@ import {
   FileText,
   GitBranch,
   Maximize2,
+  Package,
   Pencil,
   Pin,
+  Plus,
   RefreshCw,
   Sparkles,
   Star,
@@ -45,8 +47,9 @@ import { useSetStage } from "@/lib/useSetStage";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
+import { api, type PackListEntry } from "@/data/api";
 import { Badge, Button, Divider, Input, Textarea, Toggle } from "../ui";
-import { Menu, MenuItem } from "../overlays";
+import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../overlays";
 import { EmptyState, StageChip, StarRating, TrustBadge } from "../common";
 import { Markdown } from "../markdown";
 import { CodeViewer } from "../CodeViewer";
@@ -331,6 +334,110 @@ function MetaRail({ item }: { item: Item }) {
   );
 }
 
+/* ── Add-to-pack menu ───────────────────────────────────────── */
+/** Drop this item into a Context Pack — lists the user's packs (checked = already in it, click to toggle)
+ *  and creates a new one inline. Backend-only; packs live on the API, not in the local store. */
+function AddToPackMenu({ item }: { item: Item }) {
+  const backend = useData((s) => s.backend);
+  const toast = useUi((s) => s.toast);
+  const [packs, setPacks] = useState<PackListEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (!backend) return null;
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.listPacks();
+      setPacks(r.packs);
+    } catch (err) {
+      toast({ message: "Couldn't load packs", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+      setPacks([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Optimistically flip membership, then persist; roll back on failure.
+  const flip = (id: string, add: boolean) =>
+    setPacks((prev) => prev?.map((x) => (x.id === id ? { ...x, itemIds: add ? [...x.itemIds, item.id] : x.itemIds.filter((i) => i !== item.id), itemCount: x.itemCount + (add ? 1 : -1) } : x)) ?? null);
+
+  const toggle = async (p: PackListEntry) => {
+    const add = !p.itemIds.includes(item.id);
+    flip(p.id, add);
+    try {
+      if (add) await api.addPackItem(p.id, item.id);
+      else await api.removePackItem(p.id, item.id);
+      toast({ message: add ? `Added to ${p.name}` : `Removed from ${p.name}`, tone: "ok" });
+    } catch (err) {
+      flip(p.id, !add);
+      toast({ message: "Couldn't update pack", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    }
+  };
+
+  const create = async () => {
+    const name = newName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    try {
+      const { pack } = await api.createPack({ name, itemIds: [item.id] });
+      setPacks((prev) => [{ ...pack, itemCount: pack.itemIds.length }, ...(prev ?? [])]);
+      setNewName("");
+      toast({ message: `Created ${pack.name}`, description: "Added this item", tone: "ok" });
+    } catch (err) {
+      toast({ message: "Couldn't create pack", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Menu
+      width={264}
+      trigger={({ toggle: t, ref }) => (
+        <Button ref={ref} variant="ghost" size="sm" onClick={() => { if (packs === null && !loading) void load(); t(); }}>
+          <Package size={15} /> Add to pack
+        </Button>
+      )}
+    >
+      <MenuLabel>Add to a context pack</MenuLabel>
+      {loading && <div className="px-2.5 py-2 text-[12px] text-muted">Loading…</div>}
+      {packs && packs.length === 0 && !loading && <div className="px-2.5 py-1.5 text-[12px] text-muted">No packs yet — name one below.</div>}
+      {packs?.map((p) => {
+        const inPack = p.itemIds.includes(item.id);
+        return (
+          <button
+            key={p.id}
+            role="menuitem"
+            onClick={() => void toggle(p)}
+            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] text-foreground transition-colors hover:bg-surface-2 active:bg-surface-2 [@media(pointer:coarse)]:min-h-10"
+          >
+            <Package size={15} className="shrink-0 text-muted" />
+            <span className="min-w-0 flex-1 truncate">{p.name}</span>
+            {inPack && <Check size={14} className="shrink-0 text-primary" />}
+          </button>
+        );
+      })}
+      <MenuSeparator />
+      <div className="flex items-center gap-1.5 p-1.5">
+        <Input
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void create(); } }}
+          placeholder="New pack name…"
+          aria-label="New pack name"
+          className="h-8 flex-1 sm:text-[13px]"
+        />
+        <Button variant="primary" size="icon-sm" onClick={() => void create()} disabled={!newName.trim()} loading={busy} aria-label="Create pack">
+          <Plus size={15} />
+        </Button>
+      </div>
+    </Menu>
+  );
+}
+
 /* ── Non-skill body ─────────────────────────────────────────── */
 function ItemBody({ item }: { item: Item }) {
   const readmes = useData((s) => s.readmes);
@@ -438,6 +545,7 @@ function ItemBody({ item }: { item: Item }) {
         <Button variant="ghost" size="sm" onClick={() => toggleFavorite(item.id)} aria-label={item.favorite ? "Remove favorite" : "Favorite"}>
           <Bookmark size={15} className={cn(item.favorite && "fill-primary text-primary")} /> {item.favorite ? "Favorited" : "Favorite"}
         </Button>
+        <AddToPackMenu item={item} />
       </div>
 
       {/* install command block */}
@@ -709,6 +817,7 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
           <Button variant="ghost" size="sm" onClick={() => { toggleSkillPublic(skill.id); toast({ message: skill.public ? "Made private" : "Made public", tone: "ok" }); }}>
             {skill.public ? "Public" : "Make public"}
           </Button>
+          <AddToPackMenu item={item} />
         </div>
       )}
 

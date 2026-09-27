@@ -294,6 +294,24 @@ export interface Collection {
   filter?: Record<string, unknown>;
 }
 
+/**
+ * A Context Pack — a named, ordered bundle of saved items (links, repos, skills, prompts, files) plus an
+ * optional instruction preamble, that an AI agent loads in one shot (via the MCP server) as ready-to-use
+ * context. `version` bumps on every content change so an agent can cache by it.
+ */
+export interface ContextPack {
+  id: string;
+  name: string;
+  description?: string;
+  /** Optional preamble the agent should read first (goals, how to use these items). */
+  instructions?: string;
+  /** Item ids, in the order they should appear in the assembled context. */
+  itemIds: string[];
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ApiKey {
   id: string;
   name: string;

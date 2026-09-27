@@ -1,5 +1,18 @@
-import type { Collection, Item, LinkArchive, Skill, User } from "@kosh/shared";
+import type { Collection, ContextPack, Item, LinkArchive, Skill, User } from "@kosh/shared";
 import { getSessionTokenSync, isNative } from "@/lib/native";
+
+/** A Context Pack in list form, with a resolved item count. */
+export type PackListEntry = ContextPack & { itemCount: number };
+/** The assembled, grounded Markdown an agent loads for a pack. */
+export interface ResolvedPackContext {
+  markdown: string;
+  version: number;
+  itemCount: number;
+  includedCount: number;
+  skippedCount: number;
+  truncated: boolean;
+  bytes: number;
+}
 
 /** Base URL of the Kosh API, e.g. "http://localhost:8788/api". Empty → mock mode. */
 export const API_BASE: string = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
@@ -232,6 +245,19 @@ export const api = {
   patchSkill: (id: string, patch: Record<string, unknown>) => req<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   createCollection: (name: string) => req<{ collection: Collection }>("/collections", { method: "POST", body: JSON.stringify({ name }) }),
+
+  // Context Packs — named, versioned bundles of saved items an AI agent loads in one shot via MCP.
+  listPacks: () => req<{ packs: PackListEntry[] }>("/packs"),
+  getPack: (id: string) => req<{ pack: ContextPack; items: Item[] }>(`/packs/${id}`),
+  getPackContext: (id: string) => req<ResolvedPackContext>(`/packs/${id}/context`),
+  createPack: (input: { name: string; description?: string; instructions?: string; itemIds?: string[] }) =>
+    req<{ pack: ContextPack }>("/packs", { method: "POST", body: JSON.stringify(input) }),
+  updatePack: (id: string, patch: { name?: string; description?: string | null; instructions?: string | null; itemIds?: string[] }) =>
+    req<{ pack: ContextPack }>(`/packs/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  addPackItem: (id: string, itemId: string) =>
+    req<{ pack: ContextPack; duplicate?: boolean }>(`/packs/${id}/items`, { method: "POST", body: JSON.stringify({ itemId }) }),
+  removePackItem: (id: string, itemId: string) => req<{ pack: ContextPack }>(`/packs/${id}/items/${itemId}`, { method: "DELETE" }),
+  deletePack: (id: string) => req<{ ok: boolean }>(`/packs/${id}`, { method: "DELETE" }),
 
   publishRepo: (input: PublishRepoInput) => req<{ item: Item; repo: PublishedRepo }>("/repos/publish", { method: "POST", body: JSON.stringify(input) }),
   githubStatus: () => req<{ connected: boolean }>("/settings/github-token"),

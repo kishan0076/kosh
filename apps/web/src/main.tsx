@@ -20,6 +20,7 @@ import { Prompts } from "@/pages/Prompts";
 import { Inbox } from "@/pages/Inbox";
 import { Trash } from "@/pages/Trash";
 import { Collections, CollectionDetail } from "@/pages/Collections";
+import { Packs, PackDetail } from "@/pages/Packs";
 import { Settings } from "@/pages/Settings";
 import { Share } from "@/pages/Share";
 import { Add } from "@/pages/Add";
@@ -64,6 +65,8 @@ createRoot(document.getElementById("root")!).render(
           <Route path="skills/new" element={<SkillEditor />} />
           <Route path="skills/:id/edit" element={<SkillEditor />} />
           <Route path="prompts" element={<Prompts />} />
+          <Route path="packs" element={<Packs />} />
+          <Route path="packs/:id" element={<PackDetail />} />
           <Route path="collections" element={<Collections />} />
           <Route path="collections/:slug" element={<CollectionDetail />} />
           <Route path="trash" element={<Trash />} />

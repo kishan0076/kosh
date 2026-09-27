@@ -1,4 +1,4 @@
-import type { ApiKey, Collection, Item, Skill, User } from "@kosh/shared";
+import type { ApiKey, Collection, ContextPack, Item, Skill, User } from "@kosh/shared";
 
 /** Server-side additions to the shared types. `aiKeys` is re-typed here: the client sees booleans
  *  (does a key exist?), the server stores the encrypted keys — so we omit it from User before extending. */
@@ -30,6 +30,9 @@ export interface ServerSkill extends Skill {
   searchText?: string;
 }
 export interface ServerCollection extends Collection {
+  userId: string;
+}
+export interface ServerContextPack extends ContextPack {
   userId: string;
 }
 export interface ServerApiKey extends ApiKey {
@@ -110,6 +113,7 @@ export interface Store {
   items: Coll<ServerItem>;
   skills: Coll<ServerSkill>;
   collections: Coll<ServerCollection>;
+  contextPacks: Coll<ServerContextPack>;
   apiKeys: Coll<ServerApiKey>;
   storageObjects: Coll<StorageObjectDoc>;
   uploadSessions: Coll<UploadSessionDoc>;
