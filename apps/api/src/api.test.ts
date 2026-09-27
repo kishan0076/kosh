@@ -6,6 +6,8 @@ import { safeFetch } from "./integrations/safe-fetch.js";
 import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from "./auth/crypto.js";
+import { listVersions, makeSnapshot, pickComposition, upsertSnapshot } from "./modules/packs.js";
+import type { ContextPack, ContextPackSnapshot } from "@kosh/shared";
 
 describe("safeFetch SSRF guard", () => {
   it("blocks localhost", async () => {
@@ -116,5 +118,64 @@ describe("memory store", () => {
     expect((again as unknown as { version: number }).version).toBe(2);
     expect((again as unknown as { itemIds: string[] }).itemIds).toEqual(["a", "b"]);
     await reopened.close();
+  });
+});
+
+describe("context pack version pinning", () => {
+  const comp = (version: number, itemIds: string[]) => ({ name: `P${version}`, itemIds, version });
+  const pack = (over: Partial<ContextPack>): ContextPack => ({
+    id: "p1", name: "Pack", itemIds: [], version: 1, createdAt: "2026-01-01", updatedAt: "2026-01-01", ...over,
+  });
+
+  it("upsertSnapshot adds versions, upserts in place preserving the cut time, and sorts", () => {
+    let snaps: ContextPackSnapshot[] | undefined;
+    snaps = upsertSnapshot(snaps, makeSnapshot(comp(1, ["a"]), "2026-01-01"));
+    snaps = upsertSnapshot(snaps, makeSnapshot(comp(2, ["a", "b"]), "2026-01-02"));
+    expect(snaps.map((s) => s.version)).toEqual([1, 2]);
+    // Re-saving v2 (e.g. a later touch) keeps its ORIGINAL createdAt but adopts new content.
+    snaps = upsertSnapshot(snaps, makeSnapshot(comp(2, ["a", "b", "c"]), "2026-06-06"));
+    expect(snaps).toHaveLength(2);
+    const v2 = snaps.find((s) => s.version === 2)!;
+    expect(v2.createdAt).toBe("2026-01-02");
+    expect(v2.itemIds).toEqual(["a", "b", "c"]);
+  });
+
+  it("upsertSnapshot retains only the most recent 30 versions", () => {
+    let snaps: ContextPackSnapshot[] | undefined;
+    for (let v = 1; v <= 35; v++) snaps = upsertSnapshot(snaps, makeSnapshot(comp(v, []), `2026-01-${v}`));
+    expect(snaps).toHaveLength(30);
+    expect(snaps![0]!.version).toBe(6); // 1–5 dropped
+    expect(snaps!.at(-1)!.version).toBe(35);
+  });
+
+  it("pickComposition returns the live pack for the current version and null for a dropped one", () => {
+    const p = pack({
+      version: 3,
+      name: "Live",
+      itemIds: ["x", "y"],
+      snapshots: [makeSnapshot(comp(1, ["old"]), "2026-01-01"), { version: 2, name: "V2", itemIds: ["a"], createdAt: "2026-01-02" }],
+    });
+    // Latest (no version) and the current version both resolve from the live pack.
+    expect(pickComposition(p)!.itemIds).toEqual(["x", "y"]);
+    expect(pickComposition(p, 3)!.name).toBe("Live");
+    // A retained past version resolves from its frozen snapshot.
+    expect(pickComposition(p, 2)!.itemIds).toEqual(["a"]);
+    // A version that was never cut / no longer retained → null (caller 404s).
+    expect(pickComposition(p, 99)).toBeNull();
+  });
+
+  it("listVersions is newest-first, flags the current version, and falls back when unsnapshotted", () => {
+    const p = pack({
+      version: 2,
+      itemIds: ["x"],
+      snapshots: [makeSnapshot(comp(1, ["a", "b"]), "2026-01-01"), { version: 2, name: "P2", itemIds: ["x"], createdAt: "2026-01-02" }],
+    });
+    const vs = listVersions(p);
+    expect(vs.map((v) => v.version)).toEqual([2, 1]);
+    expect(vs[0]).toMatchObject({ version: 2, itemCount: 1, current: true });
+    expect(vs[1]).toMatchObject({ version: 1, itemCount: 2, current: false });
+    // Legacy pack with no snapshots → a single synthesized current-version row.
+    const legacy = listVersions(pack({ version: 5, itemIds: ["a", "b", "c"], snapshots: undefined }));
+    expect(legacy).toEqual([{ version: 5, itemCount: 3, createdAt: "2026-01-01", current: true }]);
   });
 });

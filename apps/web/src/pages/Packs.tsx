@@ -7,7 +7,9 @@ import {
   ChevronUp,
   Copy,
   FileText,
+  History,
   Package,
+  Pin,
   Plus,
   Search as SearchIcon,
   Sparkles,
@@ -16,10 +18,11 @@ import {
 } from "lucide-react";
 import type { ContextPack, Item } from "@kosh/shared";
 import { searchItems } from "@kosh/shared";
-import { api, type PackListEntry, type ResolvedPackContext } from "@/data/api";
+import { api, type PackListEntry, type PackVersion, type ResolvedPackContext } from "@/data/api";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
+import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { GitHubMark, itemIcon } from "@/lib/icons";
 import { EmptyState, PageHeader } from "@/components/common";
@@ -128,6 +131,8 @@ function NewPackModal({ open, onClose, onCreated }: { open: boolean; onClose: ()
   const [busy, setBusy] = useState(false);
 
   const reset = () => { setName(""); setDescription(""); setInstructions(""); };
+  // Clear any abandoned draft when the modal is dismissed, so it doesn't persist into the next open.
+  const close = () => { reset(); onClose(); };
   const save = async () => {
     if (!name.trim() || busy) return;
     setBusy(true);
@@ -143,7 +148,7 @@ function NewPackModal({ open, onClose, onCreated }: { open: boolean; onClose: ()
   };
 
   return (
-    <Modal open={open} onClose={onClose} className="max-w-lg" labelledBy="new-pack-title">
+    <Modal open={open} onClose={close} className="max-w-lg" labelledBy="new-pack-title">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
         <Package size={18} className="text-primary" />
         <h2 id="new-pack-title" className="text-base font-semibold">New context pack</h2>
@@ -157,7 +162,7 @@ function NewPackModal({ open, onClose, onCreated }: { open: boolean; onClose: ()
         </div>
       </div>
       <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3.5">
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="ghost" onClick={close}>Cancel</Button>
         <Button variant="primary" onClick={() => void save()} disabled={!name.trim()} loading={busy}>Create pack</Button>
       </div>
     </Modal>
@@ -173,10 +178,11 @@ export function PackDetail() {
 
   const [pack, setPack] = useState<ContextPack | null>(null);
   const [items, setItems] = useState<Item[]>([]);
+  const [versions, setVersions] = useState<PackVersion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [preview, setPreview] = useState<{ version?: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = useCallback(async () => {
@@ -186,6 +192,7 @@ export function PackDetail() {
       const r = await api.getPack(id);
       setPack(r.pack);
       setItems(r.items);
+      setVersions(r.versions);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't load this pack.");
     } finally {
@@ -198,12 +205,21 @@ export function PackDetail() {
     else setLoading(false);
   }, [backend, load]);
 
+  // Reflect a freshly-saved version in the local history (a content change always cuts a new version).
+  const recordVersion = (fresh: ContextPack) =>
+    setVersions((prev) =>
+      prev[0]?.version === fresh.version
+        ? prev.map((v, i) => (i === 0 ? { ...v, itemCount: fresh.itemIds.length } : v))
+        : [{ version: fresh.version, itemCount: fresh.itemIds.length, createdAt: new Date().toISOString(), current: true }, ...prev.map((v) => ({ ...v, current: false }))],
+    );
+
   // Persist a field change (name/description/instructions/itemIds) and adopt the server's fresh version.
   const applyPatch = async (patch: { name?: string; description?: string | null; instructions?: string | null; itemIds?: string[] }) => {
     if (!pack) return;
     try {
       const { pack: next } = await api.updatePack(pack.id, patch);
       setPack(next);
+      recordVersion(next);
       return next;
     } catch (err) {
       toast({ message: "Couldn't save", description: err instanceof Error ? err.message : undefined, tone: "danger" });
@@ -213,14 +229,14 @@ export function PackDetail() {
 
   const move = async (index: number, dir: -1 | 1) => {
     if (!pack) return;
-    const next = [...pack.itemIds];
     const j = index + dir;
-    if (j < 0 || j >= next.length) return;
-    [next[index], next[j]] = [next[j]!, next[index]!];
-    // Optimistic: reorder the visible rows immediately, then persist.
-    const byId = new Map(items.map((it) => [it.id, it]));
-    setItems(next.map((x) => byId.get(x)).filter((x): x is Item => !!x));
-    await applyPatch({ itemIds: next });
+    if (j < 0 || j >= items.length) return;
+    // Reorder by the VISIBLE items — indexing pack.itemIds directly would mis-swap when it holds ids that
+    // no longer resolve. The server prunes any such dead refs on save (they'd be skipped at load anyway).
+    const nextItems = [...items];
+    [nextItems[index], nextItems[j]] = [nextItems[j]!, nextItems[index]!];
+    setItems(nextItems);
+    await applyPatch({ itemIds: nextItems.map((it) => it.id) });
   };
 
   const removeItem = async (itemId: string) => {
@@ -229,6 +245,7 @@ export function PackDetail() {
     try {
       const { pack: next } = await api.removePackItem(pack.id, itemId);
       setPack(next);
+      recordVersion(next);
     } catch (err) {
       toast({ message: "Couldn't remove item", description: err instanceof Error ? err.message : undefined, tone: "danger" });
       void load();
@@ -238,6 +255,7 @@ export function PackDetail() {
   const onAdded = (next: ContextPack, added: Item[]) => {
     setPack(next);
     setItems((prev) => [...prev, ...added.filter((a) => !prev.some((p) => p.id === a.id))]);
+    recordVersion(next);
   };
 
   const del = async () => {
@@ -295,7 +313,7 @@ export function PackDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setPreviewOpen(true)}><FileText size={15} /> Preview context</Button>
+          <Button variant="outline" size="sm" onClick={() => setPreview({})}><FileText size={15} /> Preview context</Button>
           <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}><Plus size={15} /> Add items</Button>
         </div>
       </div>
@@ -345,11 +363,46 @@ export function PackDetail() {
         </ol>
       )}
 
+      {/* version history — pin any retained version */}
+      <div className="mt-6">
+        <div className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-muted">
+          <History size={15} /> Version history
+        </div>
+        <div className="overflow-hidden rounded-[var(--radius-card)] border border-border">
+          {versions.map((v, i) => (
+            <div key={v.version} className={cn("flex items-center gap-3 bg-surface px-3 py-2.5", i > 0 && "border-t border-border")}>
+              <span className="w-12 shrink-0 text-[13px] font-semibold tabular">v{v.version}</span>
+              {v.current ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary-soft px-2 py-0.5 text-[11px] font-medium text-primary"><Pin size={11} /> current</span>
+              ) : (
+                <span className="text-[11px] text-faint">pinnable</span>
+              )}
+              <span className="ml-auto shrink-0 text-[12px] text-muted">{v.itemCount} item{v.itemCount === 1 ? "" : "s"}</span>
+              <span className="hidden shrink-0 text-[11.5px] text-faint sm:inline">{ago(v.createdAt)}</span>
+              <Button variant="ghost" size="icon-sm" aria-label={`Preview v${v.version}`} onClick={() => setPreview({ version: v.version })}><FileText size={15} /></Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Copy load call for v${v.version}`}
+                onClick={() => {
+                  navigator.clipboard?.writeText(`load_context_pack({ name: ${JSON.stringify(pack.name)}, version: ${v.version} })`)
+                    .then(() => toast({ message: `Copied load call for v${v.version}`, tone: "ok" }))
+                    .catch(() => toast({ message: "Copy failed", tone: "danger" }));
+                }}
+              >
+                <Copy size={15} />
+              </Button>
+            </div>
+          ))}
+        </div>
+        <p className="mt-1.5 text-[11.5px] text-faint">The 30 most recent versions are retained; item contents are always read live.</p>
+      </div>
+
       {/* MCP usage hint */}
       <div className="mt-6 rounded-[var(--radius-card)] border border-border bg-surface-2 p-4">
         <div className="mb-1.5 text-[12px] font-semibold text-muted">Load this pack from an agent</div>
-        <p className="mb-2 text-[12px] text-muted">Over the Kosh MCP server, call the <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11.5px]">load_context_pack</code> tool:</p>
-        <code className="block overflow-x-auto whitespace-pre rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[12px]">{`load_context_pack({ name: ${JSON.stringify(pack.name)} })`}</code>
+        <p className="mb-2 text-[12px] text-muted">Over the Kosh MCP server, call <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11.5px]">load_context_pack</code> — add <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11.5px]">version</code> to pin a specific version:</p>
+        <code className="block overflow-x-auto whitespace-pre rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[12px]">{`load_context_pack({ name: ${JSON.stringify(pack.name)} })            // latest\nload_context_pack({ name: ${JSON.stringify(pack.name)}, version: ${pack.version} })   // pinned`}</code>
       </div>
 
       {/* danger zone */}
@@ -368,7 +421,7 @@ export function PackDetail() {
       </div>
 
       {addOpen && <AddItemsModal open={addOpen} onClose={() => setAddOpen(false)} pack={pack} onAdded={onAdded} />}
-      {previewOpen && <PreviewModal open={previewOpen} onClose={() => setPreviewOpen(false)} packId={pack.id} packName={pack.name} />}
+      {preview && <PreviewModal open onClose={() => setPreview(null)} packId={pack.id} packName={pack.name} version={preview.version} latestVersion={pack.version} />}
     </div>
   );
 }
@@ -494,7 +547,7 @@ function AddItemsModal({ open, onClose, pack, onAdded }: { open: boolean; onClos
   );
 }
 
-function PreviewModal({ open, onClose, packId, packName }: { open: boolean; onClose: () => void; packId: string; packName: string }) {
+function PreviewModal({ open, onClose, packId, packName, version, latestVersion }: { open: boolean; onClose: () => void; packId: string; packName: string; version?: number; latestVersion: number }) {
   const toast = useUi((s) => s.toast);
   const [ctx, setCtx] = useState<ResolvedPackContext | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -503,22 +556,24 @@ function PreviewModal({ open, onClose, packId, packName }: { open: boolean; onCl
     let alive = true;
     setCtx(null);
     setError(null);
-    api.getPackContext(packId)
+    api.getPackContext(packId, version)
       .then((r) => { if (alive) setCtx(r); })
       .catch((err) => { if (alive) setError(err instanceof Error ? err.message : "Couldn't assemble the context."); });
     return () => { alive = false; };
-  }, [packId]);
+  }, [packId, version]);
 
   const copy = () => {
     if (!ctx) return;
     navigator.clipboard?.writeText(ctx.markdown).then(() => toast({ message: "Context copied", tone: "ok" })).catch(() => toast({ message: "Copy failed", tone: "danger" }));
   };
 
+  const pinnedLabel = version != null && version !== latestVersion ? ` · v${version} (pinned)` : "";
+
   return (
     <Modal open={open} onClose={onClose} className="max-w-2xl" labelledBy="preview-title">
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
         <FileText size={18} className="text-primary" />
-        <h2 id="preview-title" className="min-w-0 flex-1 truncate text-base font-semibold">Assembled context · {packName}</h2>
+        <h2 id="preview-title" className="min-w-0 flex-1 truncate text-base font-semibold">Assembled context · {packName}{pinnedLabel}</h2>
         <Button variant="outline" size="sm" onClick={copy} disabled={!ctx}><Copy size={14} /> Copy</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
@@ -529,7 +584,7 @@ function PreviewModal({ open, onClose, packId, packName }: { open: boolean; onCl
         ) : (
           <>
             <div className="mb-3 flex flex-wrap gap-2 text-[11.5px] text-muted">
-              <span className="rounded bg-surface-2 px-2 py-0.5">v{ctx.version}</span>
+              <span className={cn("rounded px-2 py-0.5", ctx.pinned ? "bg-primary-soft text-primary" : "bg-surface-2")}>v{ctx.version}{ctx.pinned ? ` · pinned (latest v${ctx.latestVersion})` : ""}</span>
               <span className="rounded bg-surface-2 px-2 py-0.5">{ctx.includedCount} item{ctx.includedCount === 1 ? "" : "s"} included</span>
               {ctx.skippedCount > 0 && <span className="rounded bg-warn-soft px-2 py-0.5 text-warn">{ctx.skippedCount} missing skipped</span>}
               {ctx.truncated && <span className="rounded bg-warn-soft px-2 py-0.5 text-warn">truncated to fit</span>}

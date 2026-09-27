@@ -295,9 +295,25 @@ export interface Collection {
 }
 
 /**
+ * An immutable snapshot of a Context Pack at one version — everything that shapes the assembled context
+ * (name, description, instructions, ordered item ids). Lets an agent pin a version and load a reproducible
+ * composition even after the pack keeps changing. Item *bodies* are always read from current storage.
+ */
+export interface ContextPackSnapshot {
+  version: number;
+  name: string;
+  description?: string;
+  instructions?: string;
+  itemIds: string[];
+  /** When this version was first cut. */
+  createdAt: string;
+}
+
+/**
  * A Context Pack — a named, ordered bundle of saved items (links, repos, skills, prompts, files) plus an
  * optional instruction preamble, that an AI agent loads in one shot (via the MCP server) as ready-to-use
- * context. `version` bumps on every content change so an agent can cache by it.
+ * context. `version` bumps on every content change (anything that appears in the assembled document —
+ * name, description, instructions, or the item set) so an agent can cache — and pin — by it.
  */
 export interface ContextPack {
   id: string;
@@ -308,6 +324,8 @@ export interface ContextPack {
   /** Item ids, in the order they should appear in the assembled context. */
   itemIds: string[];
   version: number;
+  /** Retained version snapshots (oldest→newest), so past versions can be pinned. Server-managed. */
+  snapshots?: ContextPackSnapshot[];
   createdAt: string;
   updatedAt: string;
 }

@@ -3,10 +3,19 @@ import { getSessionTokenSync, isNative } from "@/lib/native";
 
 /** A Context Pack in list form, with a resolved item count. */
 export type PackListEntry = ContextPack & { itemCount: number };
-/** The assembled, grounded Markdown an agent loads for a pack. */
+/** Compact version-history metadata for a pack (one row per retained version). */
+export interface PackVersion {
+  version: number;
+  itemCount: number;
+  createdAt: string;
+  current: boolean;
+}
+/** The assembled, grounded Markdown an agent loads for a pack (optionally a pinned past version). */
 export interface ResolvedPackContext {
   markdown: string;
-  version: number;
+  version: number; // the version actually assembled
+  latestVersion: number;
+  pinned: boolean;
   itemCount: number;
   includedCount: number;
   skippedCount: number;
@@ -248,8 +257,9 @@ export const api = {
 
   // Context Packs — named, versioned bundles of saved items an AI agent loads in one shot via MCP.
   listPacks: () => req<{ packs: PackListEntry[] }>("/packs"),
-  getPack: (id: string) => req<{ pack: ContextPack; items: Item[] }>(`/packs/${id}`),
-  getPackContext: (id: string) => req<ResolvedPackContext>(`/packs/${id}/context`),
+  getPack: (id: string) => req<{ pack: ContextPack; items: Item[]; versions: PackVersion[] }>(`/packs/${id}`),
+  getPackContext: (id: string, version?: number) =>
+    req<ResolvedPackContext>(`/packs/${id}/context${version != null ? `?version=${version}` : ""}`),
   createPack: (input: { name: string; description?: string; instructions?: string; itemIds?: string[] }) =>
     req<{ pack: ContextPack }>("/packs", { method: "POST", body: JSON.stringify(input) }),
   updatePack: (id: string, patch: { name?: string; description?: string | null; instructions?: string | null; itemIds?: string[] }) =>

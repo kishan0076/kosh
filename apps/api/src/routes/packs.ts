@@ -1,18 +1,20 @@
 import { Router } from "express";
 import { z } from "zod";
 import { getStore, type ServerContextPack } from "../db/index.js";
-import { ah, notFound } from "../errors.js";
+import { ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { toClientItem } from "../modules/ingest.js";
-import { resolvePack } from "../modules/packs.js";
+import { listVersions, makeSnapshot, nextSnapshots, resolvePack, type PackComposition } from "../modules/packs.js";
 
 export const packsRouter: Router = Router();
 
 const nowIso = () => new Date().toISOString();
 const MAX_ITEMS = 200; // hard ceiling on how many items one pack can reference
 
+/** Client shape: drop the owner id and the (potentially large) version history — the history is served
+ *  compactly via `versions`, and the full snapshots never need to reach the browser. */
 function toClient(p: ServerContextPack) {
-  const { userId: _u, ...rest } = p;
+  const { userId: _u, snapshots: _s, ...rest } = p;
   return rest;
 }
 
@@ -24,15 +26,12 @@ async function ownedPack(uid: string, id: string): Promise<ServerContextPack> {
 
 /** Keep only ids that reference an existing, non-deleted item this user owns — deduped, order preserved. */
 async function filterOwnedItemIds(uid: string, ids: string[]): Promise<string[]> {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const id of ids.slice(0, MAX_ITEMS)) {
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const item = await getStore().items.findById(id);
-    if (item && item.userId === uid && !item.deletedAt) out.push(id);
-  }
-  return out;
+  const unique = [...new Set(ids)].slice(0, MAX_ITEMS);
+  const found = await Promise.all(unique.map((id) => getStore().items.findById(id)));
+  return unique.filter((_id, i) => {
+    const item = found[i];
+    return item && item.userId === uid && !item.deletedAt;
+  });
 }
 
 /* GET /packs — list packs (with a resolved item count) */
@@ -45,7 +44,7 @@ packsRouter.get(
   }),
 );
 
-/* POST /packs — create a pack */
+/* POST /packs — create a pack (version 1, snapshotted) */
 packsRouter.post(
   "/packs",
   ah(async (req, res) => {
@@ -60,13 +59,11 @@ packsRouter.post(
       .parse(req.body);
     const itemIds = body.itemIds ? await filterOwnedItemIds(uid, body.itemIds) : [];
     const now = nowIso();
+    const comp: PackComposition = { name: body.name, description: body.description, instructions: body.instructions, itemIds, version: 1 };
     const pack = await getStore().contextPacks.create({
       userId: uid,
-      name: body.name,
-      description: body.description,
-      instructions: body.instructions,
-      itemIds,
-      version: 1,
+      ...comp,
+      snapshots: [makeSnapshot(comp, now)],
       createdAt: now,
       updatedAt: now,
     } as Omit<ServerContextPack, "id">);
@@ -74,32 +71,33 @@ packsRouter.post(
   }),
 );
 
-/* GET /packs/:id — a pack plus its resolved items (in order, missing ones dropped) for display */
+/* GET /packs/:id — a pack, its resolved items (in order), and its version history */
 packsRouter.get(
   "/packs/:id",
   ah(async (req, res) => {
     const uid = requireUser(req);
     const pack = await ownedPack(uid, String(req.params.id));
-    const items = [];
-    for (const id of pack.itemIds) {
-      const item = await getStore().items.findById(id);
-      if (item && item.userId === uid && !item.deletedAt) items.push(toClientItem(item));
-    }
-    res.json({ pack: toClient(pack), items });
+    const found = await Promise.all(pack.itemIds.map((id) => getStore().items.findById(id)));
+    const items = found.filter((it): it is NonNullable<typeof it> => !!it && it.userId === uid && !it.deletedAt).map(toClientItem);
+    res.json({ pack: toClient(pack), items, versions: listVersions(pack) });
   }),
 );
 
-/* GET /packs/:id/context — the assembled, grounded Markdown an agent loads */
+/* GET /packs/:id/context?version=N — the assembled, grounded Markdown an agent loads (pin with ?version) */
 packsRouter.get(
   "/packs/:id/context",
   ah(async (req, res) => {
     const uid = requireUser(req);
     const pack = await ownedPack(uid, String(req.params.id));
-    res.json(await resolvePack(uid, pack));
+    const version = req.query.version != null ? Number(req.query.version) : undefined;
+    if (version != null && !Number.isInteger(version)) throw badRequest("BAD_VERSION", "version must be an integer.");
+    const resolved = await resolvePack(uid, pack, { version });
+    if (!resolved) throw notFound(`Version ${version} of this pack is no longer available.`);
+    res.json(resolved);
   }),
 );
 
-/* PATCH /packs/:id — update fields; version bumps when the assembled content (items/instructions) changes */
+/* PATCH /packs/:id — update fields; any change to the assembled content bumps + snapshots the version */
 packsRouter.patch(
   "/packs/:id",
   ah(async (req, res) => {
@@ -114,24 +112,43 @@ packsRouter.patch(
       })
       .parse(req.body);
 
-    const patch: Partial<ServerContextPack> = { updatedAt: nowIso() };
-    let contentChanged = false;
-    if (body.name !== undefined) patch.name = body.name;
-    if (body.description !== undefined) patch.description = body.description ?? undefined;
-    if (body.instructions !== undefined) {
-      patch.instructions = body.instructions ?? undefined;
-      if ((body.instructions ?? undefined) !== pack.instructions) contentChanged = true;
+    // The resulting composition after this patch (name/description/instructions all appear in the
+    // assembled document, so a change to any of them — or to the item set — is a content change).
+    const next: PackComposition = {
+      name: body.name ?? pack.name,
+      description: body.description !== undefined ? (body.description ?? undefined) : pack.description,
+      instructions: body.instructions !== undefined ? (body.instructions ?? undefined) : pack.instructions,
+      itemIds: body.itemIds !== undefined ? await filterOwnedItemIds(uid, body.itemIds) : pack.itemIds,
+      version: pack.version,
+    };
+    const contentChanged =
+      next.name !== pack.name ||
+      next.description !== pack.description ||
+      next.instructions !== pack.instructions ||
+      next.itemIds.join(",") !== pack.itemIds.join(",");
+
+    const patch: Partial<ServerContextPack> = { updatedAt: nowIso(), name: next.name, description: next.description, instructions: next.instructions, itemIds: next.itemIds };
+    if (contentChanged) {
+      next.version = pack.version + 1;
+      patch.version = next.version;
+      patch.snapshots = nextSnapshots(pack, next, nowIso());
     }
-    if (body.itemIds !== undefined) {
-      patch.itemIds = await filterOwnedItemIds(uid, body.itemIds);
-      if (patch.itemIds.join(",") !== pack.itemIds.join(",")) contentChanged = true;
-    }
-    if (contentChanged) patch.version = pack.version + 1;
 
     const updated = await getStore().contextPacks.updateById(pack.id, patch);
-    res.json({ pack: toClient(updated!) });
+    if (!updated) throw notFound("Context pack not found.");
+    res.json({ pack: toClient(updated) });
   }),
 );
+
+/** Persist a new item set at a bumped version (shared by add/remove). */
+async function saveItemIds(pack: ServerContextPack, itemIds: string[]): Promise<ServerContextPack> {
+  const version = pack.version + 1;
+  const next: PackComposition = { name: pack.name, description: pack.description, instructions: pack.instructions, itemIds, version };
+  const now = nowIso();
+  const updated = await getStore().contextPacks.updateById(pack.id, { itemIds, version, snapshots: nextSnapshots(pack, next, now), updatedAt: now });
+  if (!updated) throw notFound("Context pack not found.");
+  return updated;
+}
 
 /* POST /packs/:id/items — append an item (idempotent); version bumps */
 packsRouter.post(
@@ -146,13 +163,8 @@ packsRouter.post(
       res.json({ pack: toClient(pack), duplicate: true });
       return;
     }
-    if (pack.itemIds.length >= MAX_ITEMS) throw notFound("This pack is full.");
-    const updated = await getStore().contextPacks.updateById(pack.id, {
-      itemIds: [...pack.itemIds, itemId],
-      version: pack.version + 1,
-      updatedAt: nowIso(),
-    });
-    res.json({ pack: toClient(updated!) });
+    if (pack.itemIds.length >= MAX_ITEMS) throw badRequest("PACK_FULL", `A pack can hold at most ${MAX_ITEMS} items.`);
+    res.json({ pack: toClient(await saveItemIds(pack, [...pack.itemIds, itemId])) });
   }),
 );
 
@@ -167,12 +179,7 @@ packsRouter.delete(
       res.json({ pack: toClient(pack) });
       return;
     }
-    const updated = await getStore().contextPacks.updateById(pack.id, {
-      itemIds: pack.itemIds.filter((x) => x !== itemId),
-      version: pack.version + 1,
-      updatedAt: nowIso(),
-    });
-    res.json({ pack: toClient(updated!) });
+    res.json({ pack: toClient(await saveItemIds(pack, pack.itemIds.filter((x) => x !== itemId))) });
   }),
 );
 
