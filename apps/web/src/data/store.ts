@@ -90,6 +90,8 @@ interface DataState {
   collections: Collection[];
   readmes: Record<string, string>;
   filePreviews: Record<string, string>;
+  /** Lazily-loaded archived-page Markdown, keyed by item id (anti-link-rot snapshots). */
+  archives: Record<string, string>;
   hydrated: boolean;
   backend: boolean;
   /** Set when backend mode is configured but the API couldn't be reached — drives the offline banner. */
@@ -129,6 +131,10 @@ interface DataState {
   saveSkillEdit: (input: { skillId?: string; name: string; content: string; tools?: Tool[]; note?: string }) => Item | undefined;
   extractLinks: (itemId: string) => Promise<{ found: number; saved: number; skipped: number }>;
   snapshotSkills: (itemId: string, dirs?: string[]) => Promise<number>;
+  /** Fetch (and cache) the archived Markdown snapshot for a link; null when there's no archive. */
+  loadArchive: (itemId: string) => Promise<string | null>;
+  /** (Re)capture a readable snapshot of a link; the result streams back over SSE (item.updated). */
+  archiveItem: (itemId: string) => Promise<void>;
   finalizeDrafts: (drafts: DropDraft[], source: ItemSource) => Item[];
 
   createCollection: (name: string) => Collection;
@@ -187,6 +193,7 @@ export const useData = create<DataState>()(
       collections: backendEnabled ? [] : seedCollections(),
       readmes: SEED_READMES,
       filePreviews: SEED_FILE_PREVIEWS,
+      archives: {},
       hydrated: !backendEnabled,
       backend: backendEnabled,
       backendError: null,
@@ -631,6 +638,35 @@ export const useData = create<DataState>()(
           get().patchItem(itemId, { github: { ...item.github, skillIndex: nextIndex, copiedCount } });
         }
         return targets.length;
+      },
+
+      loadArchive: async (itemId) => {
+        const cached = get().archives[itemId];
+        if (cached !== undefined) return cached;
+        const item = get().items.find((i) => i.id === itemId);
+        if (!get().backend || !item || isOptimistic(itemId) || item.archive?.status !== "ok") return null;
+        try {
+          const { markdown } = await api.getArchive(itemId);
+          set((s) => ({ archives: { ...s.archives, [itemId]: markdown } }));
+          return markdown;
+        } catch {
+          return null;
+        }
+      },
+
+      archiveItem: async (itemId) => {
+        const item = get().items.find((i) => i.id === itemId);
+        if (!item || item.kind !== "link") return;
+        // Drop any stale cached copy so the fresh snapshot is refetched once it lands over SSE.
+        set((s) => { const { [itemId]: _drop, ...rest } = s.archives; return { archives: rest }; });
+        if (get().backend && !isOptimistic(itemId)) {
+          await api.archiveItem(itemId); // result streams back as item.updated (item.archive)
+          return;
+        }
+        // Mock mode: no fetch backend — mark a best-effort archived state so the UI is demonstrable.
+        get().patchItem(itemId, {
+          archive: { status: "failed", capturedAt: nowIso(), error: "Archiving needs the API backend." },
+        });
       },
 
       finalizeDrafts: (drafts, source) => {

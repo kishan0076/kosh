@@ -124,6 +124,25 @@ export interface LinkMeta {
   favicon?: string;
 }
 
+/** A saved, readable snapshot of a link's content — the anti-link-rot archive.
+ *  The extracted article is stored as Markdown in the object store (objectId); the small fields here
+ *  live on the item so a card can show the archive state without fetching the body. */
+export interface LinkArchive {
+  status: "ok" | "failed";
+  /** Content-addressed object id (sha256) of the stored Markdown snapshot; absent when status is "failed". */
+  objectId?: string;
+  contentType?: string; // e.g. "text/markdown"
+  title?: string;
+  byline?: string;
+  excerpt?: string;
+  siteName?: string;
+  wordCount?: number;
+  length?: number; // bytes of the stored Markdown
+  finalUrl?: string; // the URL actually fetched (after redirects)
+  capturedAt: string;
+  error?: string; // human-readable reason when status is "failed"
+}
+
 export interface PromptVariable {
   name: string;
   default?: string;
@@ -161,6 +180,7 @@ export interface Item {
   parentItemId?: string;
   subPath?: string;
   meta?: LinkMeta;
+  archive?: LinkArchive;
 
   // skill / prompt / file
   skillId?: string;

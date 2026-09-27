@@ -25,9 +25,8 @@ function decode(s: string): string {
     .replace(/&#x27;/gi, "'");
 }
 
-/** Fetch Open Graph / basic metadata for a URL via safeFetch. */
-export async function fetchOpenGraph(url: string): Promise<OgResult> {
-  const { body, url: finalUrl } = await safeFetch(url, { maxBytes: 1_500_000, timeoutMs: 8000 });
+/** Parse Open Graph / basic metadata from already-fetched HTML (no network). */
+export function parseOpenGraph(body: string, finalUrl: string): OgResult {
   const title =
     meta(body, [
       /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i,
@@ -43,4 +42,10 @@ export async function fetchOpenGraph(url: string): Promise<OgResult> {
     meta(body, [/<meta[^>]+property=["']og:site_name["'][^>]+content=["']([^"']+)["']/i]) ??
     new URL(finalUrl).hostname.replace(/^www\./, "");
   return { title, description, image, siteName };
+}
+
+/** Fetch Open Graph / basic metadata for a URL via safeFetch. */
+export async function fetchOpenGraph(url: string): Promise<OgResult> {
+  const { body, url: finalUrl } = await safeFetch(url, { maxBytes: 1_500_000, timeoutMs: 8000 });
+  return parseOpenGraph(body, finalUrl);
 }

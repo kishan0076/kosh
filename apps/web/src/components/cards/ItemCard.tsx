@@ -2,6 +2,7 @@ import { useState, type AnimationEvent } from "react";
 import { motion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import {
+  Archive,
   Bookmark,
   Copy,
   Eye,
@@ -264,6 +265,9 @@ export function ItemCard({ item, index = 0 }: { item: Item; index?: number }) {
           <StageChip stage={item.stage} onChange={(s) => setStage(item.id, s)} size="sm" />
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-[12px] text-muted">
+          {item.kind === "link" && item.archive?.status === "ok" && (
+            <Archive size={12} className="shrink-0 text-muted" aria-label="Archived copy saved" />
+          )}
           {item.foundVia && <span className="min-w-0 line-clamp-1 break-all">via {item.foundVia.label}</span>}
           {item.foundVia && <span aria-hidden>·</span>}
           <span className="shrink-0 text-faint">{ago(item.updatedAt)}</span>

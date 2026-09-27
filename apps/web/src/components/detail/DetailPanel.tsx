@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import {
+  Archive,
   ArrowUpRight,
   Bookmark,
+  BookOpen,
   Check,
   ChevronDown,
   Copy,
@@ -16,6 +18,7 @@ import {
   Maximize2,
   Pencil,
   Pin,
+  RefreshCw,
   Sparkles,
   Star,
   Terminal,
@@ -569,6 +572,14 @@ function ItemBody({ item }: { item: Item }) {
         </>
       )}
 
+      {/* archived copy (anti-link-rot) — links only */}
+      {item.kind === "link" && (
+        <>
+          <Divider className="my-1" />
+          <ArchiveSection item={item} />
+        </>
+      )}
+
       {/* README */}
       {readme && (
         <>
@@ -762,6 +773,90 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
 
       <Divider className="my-1" />
       <MetaRail item={item} />
+    </div>
+  );
+}
+
+/* ── archived copy (anti-link-rot readable snapshot) ────────── */
+function ArchiveSection({ item }: { item: Item }) {
+  const archives = useData((s) => s.archives);
+  const loadArchive = useData((s) => s.loadArchive);
+  const archiveItem = useData((s) => s.archiveItem);
+  const toast = useUi((s) => s.toast);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const a = item.archive;
+  const md = archives[item.id];
+  const archiving = item.status === "enriching" && !a;
+
+  const onRead = async () => {
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    setOpen(true);
+    if (md === undefined) {
+      setLoading(true);
+      await loadArchive(item.id);
+      setLoading(false);
+    }
+  };
+
+  const onArchive = async () => {
+    setBusy(true);
+    try {
+      await archiveItem(item.id);
+      toast({ message: "Archiving…", description: "Capturing a readable copy in the background.", tone: "default" });
+    } catch (err) {
+      toast({ message: "Couldn't start archiving", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const readingTime = a?.wordCount ? Math.max(1, Math.round(a.wordCount / 200)) : 0;
+
+  return (
+    <div className="px-4 py-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h4 className="flex items-center gap-1.5 text-[13px] font-semibold">
+          <Archive size={14} className="text-muted" /> Archived copy
+        </h4>
+        {a?.status === "ok" && (
+          <Button variant="ghost" size="sm" onClick={onArchive} loading={busy} aria-label="Re-archive this page">
+            <RefreshCw size={13} /> Re-archive
+          </Button>
+        )}
+      </div>
+
+      {a?.status === "ok" ? (
+        <>
+          <p className="text-[12px] text-muted">
+            Saved {shortDate(a.capturedAt)}
+            {a.wordCount ? ` · ${a.wordCount.toLocaleString()} words · ${readingTime} min read` : ""}
+          </p>
+          <Button variant="outline" size="sm" className="mt-2 w-full" onClick={onRead}>
+            <BookOpen size={14} /> {open ? "Hide archived copy" : "Read archived copy"}
+          </Button>
+          {open && (
+            <div className="mt-3 rounded-[var(--radius-control)] border border-border bg-surface-2 p-4">
+              {loading ? <SkeletonText lines={8} /> : md ? <Markdown>{md}</Markdown> : <p className="text-[12.5px] text-muted">Couldn't load the archived copy.</p>}
+            </div>
+          )}
+        </>
+      ) : archiving ? (
+        <p className="text-[12.5px] text-muted">Archiving this page — a readable copy will appear here shortly.</p>
+      ) : (
+        <>
+          <p className="text-[12.5px] text-muted">
+            {a?.status === "failed" ? (a.error ?? "This page couldn't be archived.") : "Keep a readable snapshot so this survives link rot."}
+          </p>
+          <Button variant="outline" size="sm" className="mt-2" onClick={onArchive} loading={busy}>
+            <Archive size={14} /> {a?.status === "failed" ? "Try again" : "Archive this page"}
+          </Button>
+        </>
+      )}
     </div>
   );
 }

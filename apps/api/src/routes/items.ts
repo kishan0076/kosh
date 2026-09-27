@@ -8,6 +8,8 @@ import { requireUser, requireWrite } from "../auth/middleware.js";
 import { ingest, toClientItem } from "../modules/ingest.js";
 import { enqueue } from "../modules/queue.js";
 import { enrichItem } from "../modules/enrich.js";
+import { archiveItem } from "../modules/archive.js";
+import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
 import { tryGithubToken } from "../integrations/githubToken.js";
@@ -270,6 +272,32 @@ itemsRouter.post(
     }
     const copied = await snapshotRepoSkills(item, r.data, { token, dirs: body.dirs });
     res.json({ copied });
+  }),
+);
+
+/* GET /items/:id/archive — the stored readable Markdown snapshot (anti-link-rot) */
+itemsRouter.get(
+  "/items/:id/archive",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const item = await ownedItem(uid, String(req.params.id));
+    if (item.archive?.status !== "ok" || !item.archive.objectId) throw notFound("No archived copy for this item.");
+    const buf = await getObject(uid, item.archive.objectId);
+    if (!buf) throw notFound("Archived copy is missing from storage.");
+    res.json({ markdown: buf.toString("utf8"), archive: item.archive });
+  }),
+);
+
+/* POST /items/:id/archive — (re)capture a readable snapshot of the link */
+itemsRouter.post(
+  "/items/:id/archive",
+  actionLimiter,
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const item = await ownedItem(uid, String(req.params.id));
+    if (item.kind !== "link" || !item.url) throw notFound("Only saved links can be archived.");
+    enqueue(`archive:${item.id}`, () => archiveItem(uid, item.id).then(() => undefined), 3);
+    res.status(202).json({ ok: true });
   }),
 );
 

@@ -5,7 +5,9 @@ import { publish } from "../events.js";
 import { logger } from "../logger.js";
 import { enrichGithub, type GithubEnrichment } from "../integrations/github.js";
 import { tryGithubToken } from "../integrations/githubToken.js";
-import { fetchOpenGraph } from "../integrations/opengraph.js";
+import { parseOpenGraph } from "../integrations/opengraph.js";
+import { safeFetch } from "../integrations/safe-fetch.js";
+import { archiveFromHtml } from "./archive.js";
 import { lookupPackage, parsePackageUrl } from "../integrations/registries.js";
 import { summarizeForUser } from "../integrations/claude.js";
 
@@ -89,19 +91,23 @@ async function computePatch(item: ServerItem, token: string | null): Promise<Par
     };
   }
 
-  // Everything else → Open Graph
+  // Everything else → one fetch, then Open Graph metadata + a readable archive snapshot from the same HTML
+  // (anti-link-rot: the saved copy survives even if the page later 404s or changes).
   try {
-    const og = await fetchOpenGraph(url);
+    const { body, url: finalUrl } = await safeFetch(url, { maxBytes: 2_000_000, timeoutMs: 10_000 });
+    const og = parseOpenGraph(body, finalUrl);
+    const archive = await archiveFromHtml(item.userId, body, finalUrl, { title: og.title, siteName: og.siteName });
     const ai = await summarizeForUser(item.userId, { title: og.title, url, text: og.description || og.title || "", existingTags: item.tags });
     return {
       status: "ready",
       title: og.title ?? item.title ?? siteNameFromUrl(url),
       description: og.description ?? item.description,
       meta: { siteName: og.siteName ?? siteNameFromUrl(url), image: og.image },
+      archive,
       ai: ai ?? undefined,
     };
   } catch (err) {
-    logger.warn({ err, url }, "opengraph failed");
+    logger.warn({ err, url }, "enrich fetch failed");
     return { status: "ready", title: item.title ?? siteNameFromUrl(url), meta: { siteName: siteNameFromUrl(url) } };
   }
 }
