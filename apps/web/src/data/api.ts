@@ -10,6 +10,28 @@ export interface PackVersion {
   createdAt: string;
   current: boolean;
 }
+/** What changed between two versions of a pack (item ids, order, and metadata). */
+export interface PackDiff {
+  from: number;
+  to: number;
+  addedItemIds: string[];
+  removedItemIds: string[];
+  reordered: boolean;
+  nameChanged: boolean;
+  descriptionChanged: boolean;
+  instructionsChanged: boolean;
+  items: Record<string, { title: string; kind: string; linkType?: string; url?: string }>;
+}
+/** A read-only public view of a shared pack (no auth). */
+export interface PublicPackView {
+  name: string;
+  description?: string;
+  instructions?: string;
+  version: number;
+  updatedAt: string;
+  items: { title: string; kind: string; linkType?: string; url?: string; tags: string[]; summary?: string }[];
+  context: string;
+}
 /** The assembled, grounded Markdown an agent loads for a pack (optionally a pinned past version). */
 export interface ResolvedPackContext {
   markdown: string;
@@ -268,6 +290,9 @@ export const api = {
     req<{ pack: ContextPack; duplicate?: boolean }>(`/packs/${id}/items`, { method: "POST", body: JSON.stringify({ itemId }) }),
   removePackItem: (id: string, itemId: string) => req<{ pack: ContextPack }>(`/packs/${id}/items/${itemId}`, { method: "DELETE" }),
   deletePack: (id: string) => req<{ ok: boolean }>(`/packs/${id}`, { method: "DELETE" }),
+  diffPack: (id: string, from: number, to: number) => req<PackDiff>(`/packs/${id}/diff?from=${from}&to=${to}`),
+  sharePack: (id: string, isPublic: boolean) => req<{ pack: ContextPack }>(`/packs/${id}/share`, { method: "POST", body: JSON.stringify({ public: isPublic }) }),
+  getPublicPack: (slug: string) => req<PublicPackView>(`/packs/public/${encodeURIComponent(slug)}`),
 
   publishRepo: (input: PublishRepoInput) => req<{ item: Item; repo: PublishedRepo }>("/repos/publish", { method: "POST", body: JSON.stringify(input) }),
   githubStatus: () => req<{ connected: boolean }>("/settings/github-token"),

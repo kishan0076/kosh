@@ -326,6 +326,9 @@ export interface ContextPack {
   version: number;
   /** Retained version snapshots (oldest→newest), so past versions can be pinned. Server-managed. */
   snapshots?: ContextPackSnapshot[];
+  /** Read-only public sharing: when `public`, anyone with the unguessable `publicSlug` link can view it. */
+  public?: boolean;
+  publicSlug?: string;
   createdAt: string;
   updatedAt: string;
 }

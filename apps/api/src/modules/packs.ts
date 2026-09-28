@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { ContextPack, ContextPackSnapshot } from "@kosh/shared";
 import { getStore, type ServerContextPack, type ServerItem, type Store } from "../db/index.js";
 import { badRequest, notFound } from "../errors.js";
@@ -305,4 +306,71 @@ export async function addItemToPack(store: Store, userId: string, pack: ServerCo
 export async function removeItemFromPack(store: Store, pack: ServerContextPack, itemId: string): Promise<ServerContextPack> {
   if (!pack.itemIds.includes(itemId)) return pack;
   return setPackItemIds(store, pack, pack.itemIds.filter((x) => x !== itemId));
+}
+
+/* ── Version diff ─────────────────────────────────────────────── */
+
+export interface PackDiff {
+  from: number;
+  to: number;
+  addedItemIds: string[]; // in `to`, not in `from`
+  removedItemIds: string[]; // in `from`, not in `to`
+  reordered: boolean; // items common to both appear in a different order
+  nameChanged: boolean;
+  descriptionChanged: boolean;
+  instructionsChanged: boolean;
+}
+
+/** Diff two compositions (a = older, b = newer). Pure. */
+export function diffCompositions(a: PackComposition, b: PackComposition): PackDiff {
+  const aSet = new Set(a.itemIds);
+  const bSet = new Set(b.itemIds);
+  const addedItemIds = b.itemIds.filter((id) => !aSet.has(id));
+  const removedItemIds = a.itemIds.filter((id) => !bSet.has(id));
+  // Survivors (present in both) — reordered if their relative order differs between the two versions.
+  const survivorsA = a.itemIds.filter((id) => bSet.has(id)).join(",");
+  const survivorsB = b.itemIds.filter((id) => aSet.has(id)).join(",");
+  return {
+    from: a.version,
+    to: b.version,
+    addedItemIds,
+    removedItemIds,
+    reordered: survivorsA !== survivorsB,
+    nameChanged: a.name !== b.name,
+    descriptionChanged: (a.description ?? "") !== (b.description ?? ""),
+    instructionsChanged: (a.instructions ?? "") !== (b.instructions ?? ""),
+  };
+}
+
+/** Diff two of a pack's versions. Returns null if either version is no longer retained. */
+export function diffPackVersions(pack: ContextPack, from: number, to: number): PackDiff | null {
+  const a = pickComposition(pack, from);
+  const b = pickComposition(pack, to);
+  if (!a || !b) return null;
+  return diffCompositions(a, b);
+}
+
+/* ── Public sharing ───────────────────────────────────────────── */
+
+/** An unguessable slug for a share link ("anyone with the link can view"). */
+function randomSlug(): string {
+  return randomUUID().replace(/-/g, "").slice(0, 22);
+}
+
+/** Toggle read-only public sharing. Enabling mints an unguessable slug; disabling revokes it (a re-share
+ *  mints a fresh link, so a leaked URL stays dead). Never bumps the content version. */
+export async function setPackSharing(store: Store, pack: ServerContextPack, isPublic: boolean): Promise<ServerContextPack> {
+  const patch: Partial<ServerContextPack> = isPublic
+    ? { public: true, publicSlug: pack.publicSlug ?? randomSlug(), updatedAt: nowIso() }
+    : { public: false, publicSlug: undefined, updatedAt: nowIso() };
+  const updated = await store.contextPacks.updateById(pack.id, patch);
+  if (!updated) throw notFound("Context pack not found.");
+  return updated;
+}
+
+/** Fetch a shared pack by its public slug (only while it is public), or null. */
+export async function findPublicPack(store: Store, slug: string): Promise<ServerContextPack | null> {
+  if (!slug) return null;
+  const pack = await store.contextPacks.findOne({ publicSlug: slug, public: true });
+  return pack ?? null;
 }

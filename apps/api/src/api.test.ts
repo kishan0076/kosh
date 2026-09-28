@@ -6,7 +6,7 @@ import { safeFetch } from "./integrations/safe-fetch.js";
 import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from "./auth/crypto.js";
-import { addItemToPack, createPack, listVersions, makeSnapshot, pickComposition, removeItemFromPack, updatePackFields, upsertSnapshot } from "./modules/packs.js";
+import { addItemToPack, createPack, diffCompositions, findPublicPack, listVersions, makeSnapshot, pickComposition, removeItemFromPack, setPackSharing, updatePackFields, upsertSnapshot } from "./modules/packs.js";
 import type { ContextPack, ContextPackSnapshot } from "@kosh/shared";
 
 describe("safeFetch SSRF guard", () => {
@@ -235,6 +235,54 @@ describe("context pack mutations (shared helpers)", () => {
     expect(renamed.snapshots).toHaveLength(2);
     const noop = await updatePackFields(store, "u1", renamed, { name: "P2" });
     expect(noop.version).toBe(2); // identical → no bump
+    await store.close();
+  });
+});
+
+describe("context pack diff", () => {
+  const comp = (over: Partial<{ name: string; description?: string; instructions?: string; itemIds: string[]; version: number }>) =>
+    ({ name: "P", itemIds: [], version: 1, ...over });
+
+  it("detects added / removed items", () => {
+    const d = diffCompositions(comp({ itemIds: ["x", "y", "z"], version: 1 }), comp({ itemIds: ["x", "z", "w"], version: 2 }));
+    expect(d.addedItemIds).toEqual(["w"]);
+    expect(d.removedItemIds).toEqual(["y"]);
+    expect(d.reordered).toBe(false); // surviving x,z keep their order
+    expect(d).toMatchObject({ from: 1, to: 2 });
+  });
+
+  it("detects reordering of surviving items", () => {
+    const d = diffCompositions(comp({ itemIds: ["x", "y"], version: 1 }), comp({ itemIds: ["y", "x"], version: 2 }));
+    expect(d.addedItemIds).toEqual([]);
+    expect(d.removedItemIds).toEqual([]);
+    expect(d.reordered).toBe(true);
+  });
+
+  it("detects metadata changes", () => {
+    const d = diffCompositions(comp({ name: "A", description: "d", instructions: "i" }), comp({ name: "B", description: "d", instructions: "i2" }));
+    expect(d.nameChanged).toBe(true);
+    expect(d.descriptionChanged).toBe(false);
+    expect(d.instructionsChanged).toBe(true);
+  });
+});
+
+describe("context pack sharing", () => {
+  it("mints an unguessable link on share and revokes it on unshare", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "kosh-"));
+    const store = createMemoryStore(dir);
+    const pack = await createPack(store, "u1", { name: "P" });
+
+    const shared = await setPackSharing(store, pack, true);
+    expect(shared.public).toBe(true);
+    expect(shared.publicSlug && shared.publicSlug.length).toBeGreaterThanOrEqual(16);
+    expect(await findPublicPack(store, shared.publicSlug!)).toMatchObject({ id: pack.id });
+    // A private pack is never served, even by a correct id-guess.
+    expect(await findPublicPack(store, "not-a-real-slug")).toBeNull();
+
+    const unshared = await setPackSharing(store, shared, false);
+    expect(unshared.public).toBe(false);
+    expect(unshared.publicSlug).toBeUndefined();
+    expect(await findPublicPack(store, shared.publicSlug!)).toBeNull(); // link revoked
     await store.close();
   });
 });

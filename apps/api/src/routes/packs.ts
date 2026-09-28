@@ -8,12 +8,16 @@ import {
   MAX_PACK_ITEMS,
   addItemToPack,
   createPack,
+  diffPackVersions,
+  findPublicPack,
   listVersions,
   ownedPack,
   removeItemFromPack,
   resolvePack,
+  setPackSharing,
   updatePackFields,
 } from "../modules/packs.js";
+import type { ServerItem } from "../db/index.js";
 
 export const packsRouter: Router = Router();
 
@@ -24,6 +28,18 @@ function toClient(p: ServerContextPack) {
   return rest;
 }
 
+/** Lightweight, read-only item view for the public share page (no ids / owner data beyond what's shown). */
+function publicItem(it: ServerItem) {
+  return {
+    title: it.title ?? it.url ?? "Untitled",
+    kind: it.kind,
+    linkType: it.linkType,
+    url: it.url,
+    tags: it.tags,
+    summary: it.ai?.summary ?? it.description,
+  };
+}
+
 /* GET /packs — list packs (with a resolved item count) */
 packsRouter.get(
   "/packs",
@@ -31,6 +47,29 @@ packsRouter.get(
     const uid = requireUser(req);
     const packs = await getStore().contextPacks.find({ userId: uid }, { sort: { updatedAt: -1 } });
     res.json({ packs: packs.map((p) => ({ ...toClient(p), itemCount: p.itemIds.length })) });
+  }),
+);
+
+/* GET /packs/public/:slug — a shared pack, rendered read-only for anyone with the link (NO auth). */
+packsRouter.get(
+  "/packs/public/:slug",
+  ah(async (req, res) => {
+    const pack = await findPublicPack(getStore(), String(req.params.slug));
+    if (!pack) throw notFound("This shared pack isn't available.");
+    const found = await Promise.all(pack.itemIds.map((id) => getStore().items.findById(id)));
+    const items = found
+      .filter((it): it is ServerItem => !!it && it.userId === pack.userId && !it.deletedAt)
+      .map(publicItem);
+    const resolved = await resolvePack(pack.userId, pack);
+    res.json({
+      name: pack.name,
+      description: pack.description,
+      instructions: pack.instructions,
+      version: pack.version,
+      updatedAt: pack.updatedAt,
+      items,
+      context: resolved?.markdown ?? "",
+    });
   }),
 );
 
@@ -75,6 +114,41 @@ packsRouter.get(
     const resolved = await resolvePack(uid, pack, { version });
     if (!resolved) throw notFound(`Version ${version} of this pack is no longer available.`);
     res.json(resolved);
+  }),
+);
+
+/* GET /packs/:id/diff?from=N&to=M — what changed between two retained versions */
+packsRouter.get(
+  "/packs/:id/diff",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const pack = await ownedPack(getStore(), uid, String(req.params.id));
+    const from = Number(req.query.from);
+    const to = Number(req.query.to);
+    if (!Number.isInteger(from) || !Number.isInteger(to)) throw badRequest("BAD_VERSION", "from and to must be integer versions.");
+    const diff = diffPackVersions(pack, from, to);
+    if (!diff) throw notFound("One of those versions is no longer retained.");
+    // Resolve labels for the added/removed ids (best-effort; a deleted item just shows its id).
+    const ids = [...new Set([...diff.addedItemIds, ...diff.removedItemIds])];
+    const found = await Promise.all(ids.map((id) => getStore().items.findById(id)));
+    const items: Record<string, { title: string; kind: string; linkType?: string; url?: string }> = {};
+    ids.forEach((id, i) => {
+      const it = found[i];
+      if (it && it.userId === uid) items[id] = { title: it.title ?? it.url ?? "Untitled", kind: it.kind, linkType: it.linkType, url: it.url };
+    });
+    res.json({ ...diff, items });
+  }),
+);
+
+/* POST /packs/:id/share — toggle read-only public sharing ({ public: boolean }) */
+packsRouter.post(
+  "/packs/:id/share",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const pack = await ownedPack(getStore(), uid, String(req.params.id));
+    const { public: isPublic } = z.object({ public: z.boolean() }).parse(req.body);
+    const updated = await setPackSharing(getStore(), pack, isPublic);
+    res.json({ pack: toClient(updated) });
   }),
 );
 

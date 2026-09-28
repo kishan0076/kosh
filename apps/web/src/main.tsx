@@ -21,6 +21,7 @@ import { Inbox } from "@/pages/Inbox";
 import { Trash } from "@/pages/Trash";
 import { Collections, CollectionDetail } from "@/pages/Collections";
 import { Packs, PackDetail } from "@/pages/Packs";
+import { PublicPack } from "@/pages/PublicPack";
 import { Settings } from "@/pages/Settings";
 import { Share } from "@/pages/Share";
 import { Add } from "@/pages/Add";
@@ -46,6 +47,8 @@ createRoot(document.getElementById("root")!).render(
           around the Outlet, which keeps the shell intact. */}
       <ErrorBoundary>
       <Routes>
+        {/* Public, unauthenticated pack view — outside AppShell so it renders without login. */}
+        <Route path="/p/:slug" element={<PublicPack />} />
         <Route element={<AppShell />}>
           <Route index element={<Home />} />
           <Route path="add" element={<Add />} />

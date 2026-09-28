@@ -7,18 +7,22 @@ import {
   ChevronUp,
   Copy,
   FileText,
+  GitCompare,
+  Globe,
   History,
+  Minus,
   Package,
   Pin,
   Plus,
   Search as SearchIcon,
+  Share2,
   Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import type { ContextPack, Item } from "@kosh/shared";
 import { searchItems } from "@kosh/shared";
-import { api, type PackListEntry, type PackVersion, type ResolvedPackContext } from "@/data/api";
+import { api, type PackDiff, type PackListEntry, type PackVersion, type ResolvedPackContext } from "@/data/api";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
@@ -26,8 +30,8 @@ import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { GitHubMark, itemIcon } from "@/lib/icons";
 import { EmptyState, PageHeader } from "@/components/common";
-import { Button, Input, Textarea, Spinner } from "@/components/ui";
-import { Modal } from "@/components/overlays";
+import { Button, Input, Textarea, Spinner, Toggle } from "@/components/ui";
+import { Modal, SelectMenu } from "@/components/overlays";
 import { Markdown } from "@/components/markdown";
 
 const KIND_LABEL: Record<string, string> = { link: "Link", skill: "Skill", prompt: "Prompt", file: "File" };
@@ -183,6 +187,8 @@ export function PackDetail() {
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [preview, setPreview] = useState<{ version?: number } | null>(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [compare, setCompare] = useState<{ from: number; to: number } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const load = useCallback(async () => {
@@ -313,6 +319,9 @@ export function PackDetail() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
+            {pack.public ? <Globe size={15} className="text-ok" /> : <Share2 size={15} />} {pack.public ? "Shared" : "Share"}
+          </Button>
           <Button variant="outline" size="sm" onClick={() => setPreview({})}><FileText size={15} /> Preview context</Button>
           <Button variant="primary" size="sm" onClick={() => setAddOpen(true)}><Plus size={15} /> Add items</Button>
         </div>
@@ -365,8 +374,15 @@ export function PackDetail() {
 
       {/* version history — pin any retained version */}
       <div className="mt-6">
-        <div className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-muted">
-          <History size={15} /> Version history
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 text-[13px] font-semibold text-muted">
+            <History size={15} /> Version history
+          </div>
+          {versions.length >= 2 && (
+            <Button variant="ghost" size="sm" onClick={() => setCompare({ from: versions[1]!.version, to: versions[0]!.version })}>
+              <GitCompare size={15} /> Compare
+            </Button>
+          )}
         </div>
         <div className="overflow-hidden rounded-[var(--radius-card)] border border-border">
           {versions.map((v, i) => (
@@ -423,6 +439,8 @@ export function PackDetail() {
 
       {addOpen && <AddItemsModal open={addOpen} onClose={() => setAddOpen(false)} pack={pack} onAdded={onAdded} />}
       {preview && <PreviewModal open onClose={() => setPreview(null)} packId={pack.id} packName={pack.name} version={preview.version} latestVersion={pack.version} />}
+      {shareOpen && <ShareModal open onClose={() => setShareOpen(false)} pack={pack} onChange={setPack} />}
+      {compare && <CompareModal open onClose={() => setCompare(null)} packId={pack.id} versions={versions} initial={compare} />}
     </div>
   );
 }
@@ -596,6 +614,140 @@ function PreviewModal({ open, onClose, packId, packName, version, latestVersion 
             </div>
           </>
         )}
+      </div>
+    </Modal>
+  );
+}
+
+function ShareModal({ open, onClose, pack, onChange }: { open: boolean; onClose: () => void; pack: ContextPack; onChange: (p: ContextPack) => void }) {
+  const toast = useUi((s) => s.toast);
+  const [busy, setBusy] = useState(false);
+  const shareUrl = pack.publicSlug ? `${window.location.origin}/p/${pack.publicSlug}` : "";
+
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    try {
+      const { pack: updated } = await api.sharePack(pack.id, next);
+      onChange(updated);
+      toast({ message: next ? "Pack shared" : "Sharing stopped", tone: "ok" });
+    } catch (err) {
+      toast({ message: "Couldn't update sharing", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = () =>
+    navigator.clipboard?.writeText(shareUrl).then(() => toast({ message: "Link copied", tone: "ok" })).catch(() => toast({ message: "Copy failed", tone: "danger" }));
+
+  return (
+    <Modal open={open} onClose={onClose} className="max-w-md" labelledBy="share-title">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
+        <Share2 size={18} className="text-primary" />
+        <h2 id="share-title" className="min-w-0 flex-1 truncate text-base font-semibold">Share “{pack.name}”</h2>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+        <div className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+          <div className="min-w-0">
+            <div className="text-[13.5px] font-medium">Public link</div>
+            <div className="text-[12px] text-muted">Anyone with the link can view this pack read-only.</div>
+          </div>
+          <Toggle checked={!!pack.public} onChange={(next) => void toggle(next)} disabled={busy} label="Public link" />
+        </div>
+        {pack.public && pack.publicSlug && (
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-muted"><Globe size={13} className="text-ok" /> Live link</div>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={shareUrl} onFocus={(e) => e.currentTarget.select()} className="flex-1 font-mono text-[12px]" aria-label="Public link" />
+              <Button variant="outline" size="sm" onClick={copy}><Copy size={14} /> Copy</Button>
+            </div>
+            <p className="mt-2 text-[11.5px] text-faint">Items load live and the latest version is always shown. Turning sharing off revokes this link — re-sharing mints a new one.</p>
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 justify-end border-t border-border px-5 py-3.5">
+        <Button variant="primary" onClick={onClose}>Done</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function CompareModal({ open, onClose, packId, versions, initial }: { open: boolean; onClose: () => void; packId: string; versions: PackVersion[]; initial: { from: number; to: number } }) {
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const [diff, setDiff] = useState<PackDiff | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError(null);
+    setDiff(null);
+    api.diffPack(packId, from, to)
+      .then((d) => { if (alive) setDiff(d); })
+      .catch((err) => { if (alive) setError(err instanceof Error ? err.message : "Couldn't compare these versions."); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [packId, from, to]);
+
+  const opts = versions.map((v) => ({ value: String(v.version), label: `v${v.version}${v.current ? " (current)" : ""}` }));
+  const label = (id: string) => diff?.items[id]?.title ?? id;
+  const metaChanges = diff ? ([diff.nameChanged && "name", diff.descriptionChanged && "description", diff.instructionsChanged && "instructions"].filter(Boolean) as string[]) : [];
+  const empty = diff && !diff.addedItemIds.length && !diff.removedItemIds.length && !diff.reordered && !metaChanges.length;
+
+  return (
+    <Modal open={open} onClose={onClose} className="max-w-lg" labelledBy="compare-title">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
+        <GitCompare size={18} className="text-primary" />
+        <h2 id="compare-title" className="text-base font-semibold">Compare versions</h2>
+      </div>
+      <div className="flex shrink-0 items-center gap-2 border-b border-border p-3">
+        <SelectMenu value={String(from)} options={opts} onChange={(v) => setFrom(Number(v))} ariaLabel="From version" width={150} />
+        <span className="shrink-0 text-faint">→</span>
+        <SelectMenu value={String(to)} options={opts} onChange={(v) => setTo(Number(v))} ariaLabel="To version" width={150} />
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+        {loading ? (
+          <div className="grid place-items-center py-10 text-muted"><Spinner size={20} /></div>
+        ) : error ? (
+          <div className="py-8 text-center text-[13px] text-danger">{error}</div>
+        ) : empty ? (
+          <div className="py-8 text-center text-[13px] text-muted">No differences between v{from} and v{to}.</div>
+        ) : diff ? (
+          <div className="space-y-4 text-[13px]">
+            {metaChanges.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-muted">Changed:</span>
+                {metaChanges.map((m) => <span key={m} className="rounded-full bg-primary-soft px-2 py-0.5 text-[11.5px] font-medium text-primary">{m}</span>)}
+              </div>
+            )}
+            {diff.reordered && <div className="text-[12.5px] text-muted">Items were reordered.</div>}
+            {diff.addedItemIds.length > 0 && (
+              <div>
+                <div className="mb-1.5 text-[12px] font-semibold text-ok">Added ({diff.addedItemIds.length})</div>
+                <ul className="space-y-1">
+                  {diff.addedItemIds.map((id) => (
+                    <li key={id} className="flex items-center gap-2 rounded-[var(--radius-control)] border border-ok/30 bg-ok-soft/30 px-2.5 py-1.5"><Plus size={14} className="shrink-0 text-ok" /><span className="min-w-0 truncate">{label(id)}</span></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {diff.removedItemIds.length > 0 && (
+              <div>
+                <div className="mb-1.5 text-[12px] font-semibold text-danger">Removed ({diff.removedItemIds.length})</div>
+                <ul className="space-y-1">
+                  {diff.removedItemIds.map((id) => (
+                    <li key={id} className="flex items-center gap-2 rounded-[var(--radius-control)] border border-danger/30 bg-danger-soft/30 px-2.5 py-1.5"><Minus size={14} className="shrink-0 text-danger" /><span className="min-w-0 truncate">{label(id)}</span></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 justify-end border-t border-border px-5 py-3.5">
+        <Button variant="primary" onClick={onClose}>Done</Button>
       </div>
     </Modal>
   );

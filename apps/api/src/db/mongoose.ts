@@ -116,7 +116,10 @@ export async function createMongoStore(uri: string): Promise<Store> {
     ),
     skills: mongoose.model("Skill", flexSchema((s) => s.index({ userId: 1, name: 1 }))),
     collections: mongoose.model("Collection", flexSchema((s) => s.index({ userId: 1, slug: 1 }))),
-    contextPacks: mongoose.model("ContextPack", flexSchema((s) => s.index({ userId: 1, updatedAt: -1 }))),
+    contextPacks: mongoose.model("ContextPack", flexSchema((s) => {
+      s.index({ userId: 1, updatedAt: -1 });
+      s.index({ publicSlug: 1 }, { sparse: true }); // public-share lookups (only shared packs carry a slug)
+    })),
     apiKeys: mongoose.model("ApiKey", flexSchema((s) => s.index({ keyHash: 1 }, { unique: true }))),
     storageObjects: mongoose.model("StorageObject", flexSchema((s) => s.index({ userId: 1, sha256: 1 }, { unique: true }))),
     uploadSessions: mongoose.model("UploadSession", flexSchema((s) => s.index({ expiresAt: 1 }))),
