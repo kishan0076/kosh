@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Copy, Plus, Quote } from "lucide-react";
+import { Copy, FlaskConical, Plus, Quote } from "lucide-react";
 import { extractVariables, type Item, type Stage } from "@kosh/shared";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
@@ -12,6 +12,7 @@ import { EmptyState, PageHeader, StageChip } from "@/components/common";
 import { Button, Input, Textarea } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { PromptFill } from "@/components/detail/PromptFill";
+import { PromptPlayground } from "@/components/detail/PromptPlayground";
 import { useReveal } from "@/components/cards/ItemCard";
 
 export function Prompts() {
@@ -21,6 +22,8 @@ export function Prompts() {
   const [params, setParams] = useSearchParams();
   const [newOpen, setNewOpen] = useState(params.get("new") === "1");
   const [fill, setFill] = useState<Item | null>(null);
+  const [play, setPlay] = useState<Item | null>(null);
+  const backend = useData((s) => s.backend);
 
   const prompts = useMemo(
     () => live(items).filter((i) => i.kind === "prompt").sort((a, b) => (b.prompt?.usedCount ?? 0) - (a.prompt?.usedCount ?? 0)),
@@ -54,18 +57,19 @@ export function Prompts() {
       ) : (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           {prompts.map((p, i) => (
-            <PromptCard key={p.id} p={p} index={i} onOpen={() => openItem(p.id)} onFill={() => setFill(p)} onStage={(s) => setStage(p.id, s)} />
+            <PromptCard key={p.id} p={p} index={i} onOpen={() => openItem(p.id)} onFill={() => setFill(p)} onTest={backend ? () => setPlay(p) : undefined} onStage={(s) => setStage(p.id, s)} />
           ))}
         </div>
       )}
 
       {fill && <PromptFill item={fill} open={!!fill} onClose={() => setFill(null)} />}
+      {play && <PromptPlayground item={play} open={!!play} onClose={() => setPlay(null)} />}
       <NewPromptModal open={newOpen} onClose={() => { setNewOpen(false); const n = new URLSearchParams(params); n.delete("new"); setParams(n, { replace: true }); }} />
     </div>
   );
 }
 
-function PromptCard({ p, index, onOpen, onFill, onStage }: { p: Item; index: number; onOpen: () => void; onFill: () => void; onStage: (s: Stage) => void }) {
+function PromptCard({ p, index, onOpen, onFill, onTest, onStage }: { p: Item; index: number; onOpen: () => void; onFill: () => void; onTest?: () => void; onStage: (s: Stage) => void }) {
   const reveal = useReveal(index);
   return (
     <article
@@ -93,9 +97,16 @@ function PromptCard({ p, index, onOpen, onFill, onStage }: { p: Item; index: num
       </div>
       <div className="mt-3 flex items-center justify-between gap-2 border-t border-border pt-3">
         <span className="min-w-0 truncate text-[11.5px] text-faint">used {p.prompt?.usedCount ?? 0}× · {ago(p.updatedAt)}</span>
-        <Button variant="secondary" size="sm" className="shrink-0" onClick={onFill}>
-          <Copy size={14} /> Fill & copy
-        </Button>
+        <div className="flex shrink-0 gap-1.5">
+          {onTest && (
+            <Button variant="ghost" size="sm" onClick={onTest} aria-label="Test in playground">
+              <FlaskConical size={14} /> Test
+            </Button>
+          )}
+          <Button variant="secondary" size="sm" onClick={onFill}>
+            <Copy size={14} /> Fill & copy
+          </Button>
+        </div>
       </div>
     </article>
   );

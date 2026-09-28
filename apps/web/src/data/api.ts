@@ -304,6 +304,8 @@ export const api = {
     req<{ copied: number }>(`/items/${id}/snapshot-skills`, { method: "POST", body: JSON.stringify({ dirs }) }),
 
   createPrompt: (input: { title: string; body: string; tags?: string[] }) => req<{ item: Item }>("/prompts", { method: "POST", body: JSON.stringify(input) }),
+  complete: (prompt: string, system?: string) =>
+    req<{ output: string | null; aiAvailable: boolean; capReached?: boolean }>("/ai/complete", { method: "POST", body: JSON.stringify({ prompt, system }) }),
   usePrompt: (id: string) => req<{ item: Item }>(`/prompts/${id}/use`, { method: "POST" }),
 
   initUpload: (files: { path: string; sha256: string; size: number; mime: string }[]) =>

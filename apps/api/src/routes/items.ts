@@ -12,6 +12,7 @@ import { archiveItem } from "../modules/archive.js";
 import { askTreasury } from "../modules/ask.js";
 import { checkAllLinks, checkLink } from "../modules/linkcheck.js";
 import { buildDigest, markWatchedSeen } from "../modules/digest.js";
+import { runCompletion } from "../modules/complete.js";
 import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
@@ -124,6 +125,17 @@ itemsRouter.get(
     const items = await getStore().items.find({ userId: uid, deletedAt: null });
     const hits = searchItems(items, q, { limit });
     res.json({ results: hits.map((h) => ({ item: toClientItem(h.item), score: h.score })), total: hits.length });
+  }),
+);
+
+/* POST /ai/complete — run an arbitrary prompt against the user's provider (Prompt Playground) */
+itemsRouter.post(
+  "/ai/complete",
+  actionLimiter,
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const { prompt, system } = z.object({ prompt: z.string().min(1).max(20_000), system: z.string().max(4000).optional() }).parse(req.body);
+    res.json(await runCompletion(uid, prompt, system));
   }),
 );
 
