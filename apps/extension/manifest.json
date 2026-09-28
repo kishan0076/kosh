@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Kosh — Save to your treasury",
+  "version": "0.1.0",
+  "description": "One-click save the current page (and text highlights) to your private Kosh vault.",
+  "permissions": ["activeTab", "storage", "contextMenus", "scripting"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Save to Kosh"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

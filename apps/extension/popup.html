@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root { color-scheme: light dark; --bg: #fff; --fg: #0b0d12; --muted: #5b6472; --border: #e4e7ec; --surface: #f6f7f9; --primary: #4f46e5; --primary-fg: #fff; --ok: #16a34a; --danger: #dc2626; }
+      @media (prefers-color-scheme: dark) { :root { --bg: #0f1115; --fg: #e8eaed; --muted: #98a1b0; --border: #262b33; --surface: #171a20; } }
+      * { box-sizing: border-box; }
+      body { width: 320px; margin: 0; font: 13px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+      header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 600; }
+      .dot { width: 20px; height: 20px; border-radius: 6px; background: color-mix(in oklab, var(--primary) 16%, transparent); color: var(--primary); display: grid; place-items: center; font-weight: 700; }
+      main { padding: 14px; display: grid; gap: 10px; }
+      .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .url { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      textarea, input { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--fg); font: inherit; }
+      textarea { resize: vertical; min-height: 56px; }
+      button { padding: 9px 12px; border: 0; border-radius: 8px; background: var(--primary); color: var(--primary-fg); font: inherit; font-weight: 600; cursor: pointer; }
+      button.secondary { background: var(--surface); color: var(--fg); border: 1px solid var(--border); font-weight: 500; }
+      .row { display: flex; gap: 8px; }
+      .row button { flex: 1; }
+      .msg { font-size: 12px; min-height: 16px; }
+      .ok { color: var(--ok); } .err { color: var(--danger); }
+      details { border-top: 1px solid var(--border); padding-top: 10px; }
+      summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+      details .grid { display: grid; gap: 8px; margin-top: 8px; }
+      label { font-size: 11.5px; color: var(--muted); display: block; margin-bottom: 3px; }
+    </style>
+  </head>
+  <body>
+    <header><span class="dot">K</span> Save to Kosh</header>
+    <main>
+      <div><div class="title" id="title">…</div><div class="url" id="url"></div></div>
+      <textarea id="note" placeholder="Optional note or highlight…"></textarea>
+      <div class="row">
+        <button id="save">Save page</button>
+        <button id="open" class="secondary">Open Kosh</button>
+      </div>
+      <div class="msg" id="msg"></div>
+
+      <details id="settings">
+        <summary>Settings</summary>
+        <div class="grid">
+          <div><label for="apiUrl">Kosh API URL</label><input id="apiUrl" placeholder="https://your-kosh.example/api" /></div>
+          <div><label for="apiKey">API key (create one in Kosh → Settings)</label><input id="apiKey" type="password" placeholder="kosh_…" /></div>
+          <button id="saveSettings" class="secondary">Save settings</button>
+        </div>
+      </details>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
