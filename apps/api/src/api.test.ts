@@ -6,7 +6,7 @@ import { safeFetch } from "./integrations/safe-fetch.js";
 import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from "./auth/crypto.js";
-import { listVersions, makeSnapshot, pickComposition, upsertSnapshot } from "./modules/packs.js";
+import { addItemToPack, createPack, listVersions, makeSnapshot, pickComposition, removeItemFromPack, updatePackFields, upsertSnapshot } from "./modules/packs.js";
 import type { ContextPack, ContextPackSnapshot } from "@kosh/shared";
 
 describe("safeFetch SSRF guard", () => {
@@ -177,5 +177,64 @@ describe("context pack version pinning", () => {
     // Legacy pack with no snapshots → a single synthesized current-version row.
     const legacy = listVersions(pack({ version: 5, itemIds: ["a", "b", "c"], snapshots: undefined }));
     expect(legacy).toEqual([{ version: 5, itemCount: 3, createdAt: "2026-01-01", current: true }]);
+  });
+});
+
+describe("context pack mutations (shared helpers)", () => {
+  async function setup() {
+    const dir = mkdtempSync(join(tmpdir(), "kosh-"));
+    const store = createMemoryStore(dir);
+    const a = await store.items.create({ userId: "u1", kind: "link", tags: [] } as never);
+    const b = await store.items.create({ userId: "u1", kind: "prompt", tags: [] } as never);
+    const foreign = await store.items.create({ userId: "u2", kind: "link", tags: [] } as never);
+    return { store, a, b, foreign };
+  }
+
+  it("createPack seeds v1 with a snapshot and drops foreign/unknown item ids", async () => {
+    const { store, a, foreign } = await setup();
+    const pack = await createPack(store, "u1", { name: "P", itemIds: [a.id, foreign.id, "nope"] });
+    expect(pack.version).toBe(1);
+    expect(pack.itemIds).toEqual([a.id]); // foreign owner + unknown id dropped
+    expect(pack.snapshots).toHaveLength(1);
+    expect(pack.snapshots![0]).toMatchObject({ version: 1, itemIds: [a.id] });
+    await store.close();
+  });
+
+  it("addItemToPack bumps + snapshots, is idempotent, and rejects foreign items", async () => {
+    const { store, a, b, foreign } = await setup();
+    const pack = await createPack(store, "u1", { name: "P", itemIds: [a.id] });
+    const added = await addItemToPack(store, "u1", pack, b.id);
+    expect(added.duplicate).toBe(false);
+    expect(added.pack.version).toBe(2);
+    expect(added.pack.itemIds).toEqual([a.id, b.id]);
+    expect(added.pack.snapshots).toHaveLength(2);
+    const dup = await addItemToPack(store, "u1", added.pack, b.id); // already present → no bump
+    expect(dup.duplicate).toBe(true);
+    expect(dup.pack.version).toBe(2);
+    await expect(addItemToPack(store, "u1", added.pack, foreign.id)).rejects.toThrow(/not found/i);
+    await store.close();
+  });
+
+  it("removeItemFromPack bumps when present and no-ops when absent", async () => {
+    const { store, a, b } = await setup();
+    const seeded = (await addItemToPack(store, "u1", await createPack(store, "u1", { name: "P", itemIds: [a.id] }), b.id)).pack;
+    const removed = await removeItemFromPack(store, seeded, a.id);
+    expect(removed.version).toBe(3);
+    expect(removed.itemIds).toEqual([b.id]);
+    const noop = await removeItemFromPack(store, removed, "not-there");
+    expect(noop.version).toBe(3); // unchanged
+    await store.close();
+  });
+
+  it("updatePackFields bumps on a content change and leaves the version otherwise", async () => {
+    const { store, a } = await setup();
+    const pack = await createPack(store, "u1", { name: "P", itemIds: [a.id] });
+    const renamed = await updatePackFields(store, "u1", pack, { name: "P2" });
+    expect(renamed.name).toBe("P2");
+    expect(renamed.version).toBe(2); // name appears in the assembled doc → a content change
+    expect(renamed.snapshots).toHaveLength(2);
+    const noop = await updatePackFields(store, "u1", renamed, { name: "P2" });
+    expect(noop.version).toBe(2); // identical → no bump
+    await store.close();
   });
 });

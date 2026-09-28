@@ -9,8 +9,9 @@ import { getStore } from "../db/index.js";
 import { requireUser } from "../auth/middleware.js";
 import { ingest } from "../modules/ingest.js";
 import { createSkillVersion, type IncomingFile } from "../modules/skills.js";
-import { resolvePack } from "../modules/packs.js";
+import { addItemToPack, createPack, removeItemFromPack, resolvePack, updatePackFields } from "../modules/packs.js";
 import { askTreasury } from "../modules/ask.js";
+import { AppError } from "../errors.js";
 
 const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] });
 
@@ -18,6 +19,25 @@ const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON
 function buildServer(userId: string): McpServer {
   const server = new McpServer({ name: "kosh", version: "0.1.0" });
   const store = getStore();
+
+  // Resolve a pack by name for this user: exact match first, then substring; most-recently-updated wins
+  // so a duplicate name is deterministic. Returns null when nothing matches.
+  const findPackByName = async (name: string) => {
+    const q = name.toLowerCase();
+    const packs = await store.contextPacks.find({ userId }, { sort: { updatedAt: -1 } });
+    return packs.find((p) => p.name.toLowerCase() === q) ?? packs.find((p) => p.name.toLowerCase().includes(q)) ?? null;
+  };
+
+  // Run a write handler, turning a typed AppError (not found / pack full / …) into a clean tool error
+  // instead of a transport-level failure.
+  const guard = async (fn: () => Promise<ReturnType<typeof json>>): Promise<ReturnType<typeof json>> => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof AppError) return json({ error: err.message });
+      throw err;
+    }
+  };
 
   server.registerTool(
     "save_link",
@@ -160,10 +180,7 @@ function buildServer(userId: string): McpServer {
       inputSchema: { name: z.string(), version: z.number().int().optional() },
     },
     async ({ name, version }) => {
-      const q = name.toLowerCase();
-      // Most-recently-updated first, so a duplicate name resolves deterministically to the freshest pack.
-      const packs = (await store.contextPacks.find({ userId }, { sort: { updatedAt: -1 } }));
-      const pack = packs.find((p) => p.name.toLowerCase() === q) ?? packs.find((p) => p.name.toLowerCase().includes(q));
+      const pack = await findPackByName(name);
       if (!pack) return json({ error: `No context pack matching "${name}".` });
       const resolved = await resolvePack(userId, pack, { version });
       if (!resolved) return json({ error: `Version ${version} of "${pack.name}" is no longer available. Current version is ${pack.version}.` });
@@ -195,6 +212,85 @@ function buildServer(userId: string): McpServer {
         citations: r.citations.map((c) => ({ n: c.n, itemId: c.itemId, title: c.title })),
       });
     },
+  );
+
+  server.registerTool(
+    "create_context_pack",
+    {
+      description: "Create a Context Pack — a named, versioned bundle of saved items (+ an optional instruction preamble) you can later load in one shot. Returns the new pack's name and version.",
+      inputSchema: {
+        name: z.string().max(120),
+        description: z.string().max(500).optional(),
+        instructions: z.string().max(20_000).optional(),
+        itemIds: z.array(z.string()).max(200).optional(),
+      },
+    },
+    async ({ name, description, instructions, itemIds }) =>
+      guard(async () => {
+        const pack = await createPack(store, userId, { name, description, instructions, itemIds });
+        return json({ id: pack.id, name: pack.name, version: pack.version, itemCount: pack.itemIds.length, message: "Context pack created." });
+      }),
+  );
+
+  server.registerTool(
+    "add_to_pack",
+    {
+      description: "Add an item to a Context Pack by pack name — pass an existing `itemId`, or a `url` to save-and-add in one step. Creates the pack if it doesn't exist yet. Idempotent.",
+      inputSchema: { pack: z.string(), itemId: z.string().optional(), url: z.string().optional() },
+    },
+    async ({ pack: packName, itemId, url }) =>
+      guard(async () => {
+        let id = itemId;
+        let savedUrl: string | undefined;
+        if (!id) {
+          if (!url) return json({ error: "Provide either itemId or url." });
+          const { item } = await ingest(userId, url, { source: "mcp" });
+          id = item.id;
+          savedUrl = item.url;
+        }
+        const existing = await findPackByName(packName);
+        if (!existing) {
+          const created = await createPack(store, userId, { name: packName, itemIds: [id] });
+          return json({ pack: created.name, version: created.version, itemId: id, url: savedUrl, created: true, added: true });
+        }
+        const { pack: updated, duplicate } = await addItemToPack(store, userId, existing, id);
+        return json({ pack: updated.name, version: updated.version, itemId: id, url: savedUrl, created: false, added: !duplicate, duplicate });
+      }),
+  );
+
+  server.registerTool(
+    "remove_from_pack",
+    {
+      description: "Remove an item from a Context Pack by pack name. Idempotent (a no-op if the item isn't in the pack).",
+      inputSchema: { pack: z.string(), itemId: z.string() },
+    },
+    async ({ pack: packName, itemId }) =>
+      guard(async () => {
+        const existing = await findPackByName(packName);
+        if (!existing) return json({ error: `No context pack matching "${packName}".` });
+        const updated = await removeItemFromPack(store, existing, itemId);
+        return json({ pack: updated.name, version: updated.version, itemCount: updated.itemIds.length });
+      }),
+  );
+
+  server.registerTool(
+    "update_context_pack",
+    {
+      description: "Update a Context Pack's name, description, or instruction preamble (find it by its current name). Use add_to_pack / remove_from_pack to change its items.",
+      inputSchema: {
+        pack: z.string(),
+        name: z.string().min(1).max(120).optional(),
+        description: z.string().max(500).optional(),
+        instructions: z.string().max(20_000).optional(),
+      },
+    },
+    async ({ pack: packName, name, description, instructions }) =>
+      guard(async () => {
+        const existing = await findPackByName(packName);
+        if (!existing) return json({ error: `No context pack matching "${packName}".` });
+        const updated = await updatePackFields(store, userId, existing, { name, description, instructions });
+        return json({ name: updated.name, version: updated.version, message: "Context pack updated." });
+      }),
   );
 
   return server;

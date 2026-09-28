@@ -1,7 +1,10 @@
 import type { ContextPack, ContextPackSnapshot } from "@kosh/shared";
-import { getStore, type ServerItem } from "../db/index.js";
+import { getStore, type ServerContextPack, type ServerItem, type Store } from "../db/index.js";
+import { badRequest, notFound } from "../errors.js";
 import { getObject } from "../storage/objects.js";
 import { logger } from "../logger.js";
+
+export const MAX_PACK_ITEMS = 200; // hard ceiling on how many items one pack can reference
 
 /**
  * Context Packs — assemble a user's ordered saved items into a single, grounded Markdown "context" blob
@@ -207,4 +210,99 @@ export function listVersions(pack: ContextPack): PackVersionMeta[] {
   return snaps
     .map((s) => ({ version: s.version, itemCount: s.itemIds.length, createdAt: s.createdAt, current: s.version === pack.version }))
     .sort((a, b) => b.version - a.version);
+}
+
+/* ── Mutations (one code path shared by the REST routes and the MCP tools) ─────────────────────────── */
+
+const nowIso = () => new Date().toISOString();
+
+/** Keep only ids that reference an existing, non-deleted item this user owns — deduped, order preserved. */
+export async function filterOwnedItemIds(store: Store, userId: string, ids: string[]): Promise<string[]> {
+  const unique = [...new Set(ids)].slice(0, MAX_PACK_ITEMS);
+  const found = await Promise.all(unique.map((id) => store.items.findById(id)));
+  return unique.filter((_id, i) => {
+    const it = found[i];
+    return !!it && it.userId === userId && !it.deletedAt;
+  });
+}
+
+/** Fetch a pack the user owns, or throw 404. */
+export async function ownedPack(store: Store, userId: string, id: string): Promise<ServerContextPack> {
+  const p = await store.contextPacks.findById(id);
+  if (!p || p.userId !== userId) throw notFound("Context pack not found.");
+  return p;
+}
+
+export interface PackInput {
+  name: string;
+  description?: string;
+  instructions?: string;
+  itemIds?: string[];
+}
+
+/** Create a pack at version 1, with its first snapshot. Invalid/foreign item ids are dropped. */
+export async function createPack(store: Store, userId: string, input: PackInput): Promise<ServerContextPack> {
+  const itemIds = input.itemIds ? await filterOwnedItemIds(store, userId, input.itemIds) : [];
+  const now = nowIso();
+  const comp: PackComposition = { name: input.name, description: input.description, instructions: input.instructions, itemIds, version: 1 };
+  return store.contextPacks.create({ userId, ...comp, snapshots: [makeSnapshot(comp, now)], createdAt: now, updatedAt: now } as Omit<ServerContextPack, "id">);
+}
+
+export interface PackPatch {
+  name?: string;
+  description?: string | null;
+  instructions?: string | null;
+  itemIds?: string[];
+}
+
+/** Update a pack's fields. Any change to the assembled content (name/description/instructions/item set)
+ *  bumps the version and cuts a snapshot. `null` clears an optional field; `undefined` leaves it. */
+export async function updatePackFields(store: Store, userId: string, pack: ServerContextPack, input: PackPatch): Promise<ServerContextPack> {
+  const next: PackComposition = {
+    name: input.name ?? pack.name,
+    description: input.description !== undefined ? (input.description ?? undefined) : pack.description,
+    instructions: input.instructions !== undefined ? (input.instructions ?? undefined) : pack.instructions,
+    itemIds: input.itemIds !== undefined ? await filterOwnedItemIds(store, userId, input.itemIds) : pack.itemIds,
+    version: pack.version,
+  };
+  const contentChanged =
+    next.name !== pack.name ||
+    next.description !== pack.description ||
+    next.instructions !== pack.instructions ||
+    next.itemIds.join(",") !== pack.itemIds.join(",");
+
+  const patch: Partial<ServerContextPack> = { updatedAt: nowIso(), name: next.name, description: next.description, instructions: next.instructions, itemIds: next.itemIds };
+  if (contentChanged) {
+    next.version = pack.version + 1;
+    patch.version = next.version;
+    patch.snapshots = nextSnapshots(pack, next, nowIso());
+  }
+  const updated = await store.contextPacks.updateById(pack.id, patch);
+  if (!updated) throw notFound("Context pack not found.");
+  return updated;
+}
+
+/** Persist a new item set at a bumped version (shared by add/remove). */
+async function setPackItemIds(store: Store, pack: ServerContextPack, itemIds: string[]): Promise<ServerContextPack> {
+  const version = pack.version + 1;
+  const next: PackComposition = { name: pack.name, description: pack.description, instructions: pack.instructions, itemIds, version };
+  const now = nowIso();
+  const updated = await store.contextPacks.updateById(pack.id, { itemIds, version, snapshots: nextSnapshots(pack, next, now), updatedAt: now });
+  if (!updated) throw notFound("Context pack not found.");
+  return updated;
+}
+
+/** Append an owned item to a pack (idempotent). Returns whether it was already present. */
+export async function addItemToPack(store: Store, userId: string, pack: ServerContextPack, itemId: string): Promise<{ pack: ServerContextPack; duplicate: boolean }> {
+  const item = await store.items.findById(itemId);
+  if (!item || item.userId !== userId || item.deletedAt) throw notFound("Item not found.");
+  if (pack.itemIds.includes(itemId)) return { pack, duplicate: true };
+  if (pack.itemIds.length >= MAX_PACK_ITEMS) throw badRequest("PACK_FULL", `A pack can hold at most ${MAX_PACK_ITEMS} items.`);
+  return { pack: await setPackItemIds(store, pack, [...pack.itemIds, itemId]), duplicate: false };
+}
+
+/** Remove an item from a pack (idempotent — a no-op if it wasn't there). */
+export async function removeItemFromPack(store: Store, pack: ServerContextPack, itemId: string): Promise<ServerContextPack> {
+  if (!pack.itemIds.includes(itemId)) return pack;
+  return setPackItemIds(store, pack, pack.itemIds.filter((x) => x !== itemId));
 }

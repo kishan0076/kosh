@@ -403,6 +403,7 @@ export function PackDetail() {
         <div className="mb-1.5 text-[12px] font-semibold text-muted">Load this pack from an agent</div>
         <p className="mb-2 text-[12px] text-muted">Over the Kosh MCP server, call <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11.5px]">load_context_pack</code> — add <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11.5px]">version</code> to pin a specific version:</p>
         <code className="block overflow-x-auto whitespace-pre rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2 font-mono text-[12px]">{`load_context_pack({ name: ${JSON.stringify(pack.name)} })            // latest\nload_context_pack({ name: ${JSON.stringify(pack.name)}, version: ${pack.version} })   // pinned`}</code>
+        <p className="mt-2 text-[11.5px] text-faint">Agents can also curate packs themselves — <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">create_context_pack</code>, <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">add_to_pack</code> (by url or item), <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">remove_from_pack</code>, <code className="rounded bg-surface px-1 py-0.5 font-mono text-[11px]">update_context_pack</code>.</p>
       </div>
 
       {/* danger zone */}
