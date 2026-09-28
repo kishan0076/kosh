@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { FlaskConical, Play, Sparkles } from "lucide-react";
+import { Cpu, FlaskConical, Play, Sparkles } from "lucide-react";
 import { renderPrompt, type Item } from "@kosh/shared";
 import { api } from "@/data/api";
 import { useData } from "@/data/store";
@@ -9,6 +9,7 @@ import { cn } from "@/lib/cn";
 import { Button, Input, Textarea, Spinner } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { Markdown } from "@/components/markdown";
+import { localAiEnabled, localComplete } from "@/lib/localAi";
 
 /**
  * Prompt Playground — fill a prompt's {{variables}}, run it against the user's provider, and optionally
@@ -27,25 +28,35 @@ export function PromptPlayground({ item, open, onClose }: { item: Item; open: bo
   const [outB, setOutB] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  // On-device: run against the user's local model (zero cost, private). Needs no backend.
+  const [onDevice, setOnDevice] = useState(() => localAiEnabled());
+  const localAvailable = localAiEnabled();
+  const canRun = onDevice || backend;
 
   const renderedA = useMemo(() => renderPrompt(bodyA, values), [bodyA, values]);
   const renderedB = useMemo(() => renderPrompt(bodyB, values), [bodyB, values]);
 
   const run = async () => {
-    if (busy || !backend) return;
+    if (busy || !canRun) return;
     setBusy(true);
     setNote(null);
     setOutA(null);
     setOutB(null);
     try {
+      if (onDevice) {
+        const [a, b] = await Promise.all([localComplete({ prompt: renderedA }), ...(compare ? [localComplete({ prompt: renderedB })] : [])]);
+        setOutA(a ?? "(no output)");
+        if (compare) setOutB(b ?? "(no output)");
+        return;
+      }
       const results = await Promise.all([api.complete(renderedA), ...(compare ? [api.complete(renderedB)] : [])]);
       const a = results[0]!;
-      if (!a.aiAvailable) { setNote("AI isn't configured — add a provider key in Settings to run prompts."); return; }
-      if (a.capReached) { setNote("Daily AI limit reached — try again later."); return; }
+      if (!a.aiAvailable) { setNote("AI isn't configured — add a provider key in Settings, or enable On-device AI to run prompts."); return; }
+      if (a.capReached) { setNote("Daily AI limit reached — try again later, or switch to On-device."); return; }
       setOutA(a.output ?? "(no output)");
       if (compare) setOutB(results[1]?.output ?? "(no output)");
     } catch (err) {
-      toast({ message: "Run failed", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+      toast({ message: onDevice ? "On-device run failed" : "Run failed", description: err instanceof Error ? err.message : undefined, tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -56,6 +67,11 @@ export function PromptPlayground({ item, open, onClose }: { item: Item; open: bo
       <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
         <FlaskConical size={18} className="text-primary" />
         <h2 id="playground-title" className="min-w-0 flex-1 truncate text-base font-semibold">Playground · {item.title}</h2>
+        {localAvailable && (
+          <label className="flex cursor-pointer items-center gap-1.5 text-[12px] font-medium text-muted" title="Run on your local model — free & private">
+            <input type="checkbox" checked={onDevice} onChange={(e) => setOnDevice(e.target.checked)} className="accent-[var(--gold)]" /> <Cpu size={13} className="text-gold" /> On-device
+          </label>
+        )}
         <label className="flex cursor-pointer items-center gap-1.5 text-[12px] font-medium text-muted">
           <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} className="accent-[var(--primary)]" /> A/B compare
         </label>
@@ -104,10 +120,14 @@ export function PromptPlayground({ item, open, onClose }: { item: Item; open: bo
       </div>
 
       <div className="flex shrink-0 items-center justify-between gap-2 border-t border-border px-5 py-3.5">
-        {!backend ? <span className="text-[12px] text-muted">Running needs the API backend.</span> : <span />}
+        {onDevice ? (
+          <span className="inline-flex items-center gap-1.5 text-[12px] text-gold"><Cpu size={13} /> Runs on your device — free & private</span>
+        ) : !backend ? (
+          <span className="text-[12px] text-muted">Running needs the API backend{localAvailable ? " or On-device" : ""}.</span>
+        ) : <span />}
         <div className="flex gap-2">
           <Button variant="ghost" onClick={onClose}>Close</Button>
-          <Button variant="primary" onClick={() => void run()} disabled={!backend} loading={busy}><Play size={15} /> Run{compare ? " both" : ""}</Button>
+          <Button variant="primary" onClick={() => void run()} disabled={!canRun} loading={busy}><Play size={15} /> Run{compare ? " both" : ""}</Button>
         </div>
       </div>
     </Modal>

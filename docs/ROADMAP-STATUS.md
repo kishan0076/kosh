@@ -20,6 +20,7 @@ Tracks the strategic feature roadmap against what's actually implemented. Number
 | 13 | Public shareable pages (packs **and** collections) | `/p/:slug`, `/c/:slug` |
 | ★ | Security posture dashboard (skill risk + secret scan + public links + key hygiene → one score) | `packages/shared/security.ts`, `pages/Security.tsx` (`/security`) |
 | ★ | Agentic bulk ops (NL command → planned multi-step edit → preview diff → apply) | `packages/shared/bulk.ts`, `modules/bulk.ts`, `routes/bulk.ts`, `pages/Bulk.tsx` (`/bulk`) |
+| ★ | On-device AI (browser → local model, zero-cost & private; drives the Playground + Bulk planner) | `packages/shared/localai.ts`, `apps/web/src/lib/localAi.ts`, Settings → On-device AI |
 | — | Import bookmarks (Chrome/Pocket/Raindrop) | `packages/shared/bookmarks.ts`, Add page importer |
 | 9a | Google **multi-account** file federation | already supported (Drive space picker) |
 
@@ -46,7 +47,8 @@ Generalize the existing `DriveNode`/space abstraction behind a provider interfac
 Roles on collections, presence, and conflict handling. Needs an auth/membership model and a realtime layer (the Drive comments/presence code is a starting point). Deferred: an architectural change best done after the single-player moat, and it needs realtime infra to validate.
 
 ### Moonshots
-- **On-device / local AI** (WebGPU / Ollama): add a "local" provider to the existing multi-provider registry so summaries/tagging/embeddings run at zero marginal cost. Buildable incrementally once an embeddings surface exists.
 - **Skill registry / marketplace**: a discovery layer over the existing scan+trust model.
 
-(Shipped from this list: the **security posture dashboard** (`/security`) and **agentic bulk ops** (`/bulk`) — see the Shipped table above.)
+(Shipped from this list: the **security posture dashboard** (`/security`), **agentic bulk ops** (`/bulk`), and **on-device AI** (Settings → On-device AI) — see the Shipped table above.)
+
+Note on on-device AI: the server registry already carries an `ollama` provider for self-hosted API deployments, but a *hosted* API can't reach a user's `localhost` — so on-device runs **browser-direct** to the user's local model (Ollama/LM Studio/llama.cpp over the OpenAI `/v1` API). It's opt-in in Settings, and features that support it (Prompt Playground; the Bulk planner) prefer it when enabled, falling back to the cloud provider. The live localhost round-trip can only be exercised against a real local server; the request/response core is unit-tested (`localai.test.ts`).

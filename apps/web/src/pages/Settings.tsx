@@ -5,6 +5,7 @@ import {
   Bookmark,
   Check,
   Copy,
+  Cpu,
   Download,
   Github,
   GitMerge,
@@ -12,6 +13,7 @@ import {
   Mail,
   MessageCircle,
   Plus,
+  Plug,
   RefreshCw,
   Settings as SettingsIcon,
   Share2,
@@ -35,8 +37,10 @@ import { EmptyState, PageHeader, SectionCard } from "@/components/common";
 import { Collapse } from "@/components/motion";
 import { Modal, SelectMenu } from "@/components/overlays";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Avatar, Badge, Button, Input, Skeleton, Toggle } from "@/components/ui";
+import { Avatar, Badge, Button, Input, Skeleton, Spinner, Toggle } from "@/components/ui";
 import { useDriveV2 } from "@/data/driveV2";
+import { localAiConfig, setLocalAiConfig, probeLocalAi, type ProbeResult } from "@/lib/localAi";
+import { DEFAULT_LOCAL_AI_URL } from "@kosh/shared";
 
 // Demo keys for mock mode; real keys are loaded from the API when a backend is wired.
 const DEMO_KEYS: ApiKeyPublic[] = [
@@ -441,6 +445,9 @@ export function Settings() {
         {/* AI provider */}
         <AiProviderCard user={user} backend={backend} />
 
+        {/* on-device AI */}
+        <LocalAiCard />
+
         {/* tags */}
         <SectionCard
           title="Tag maintenance"
@@ -626,6 +633,98 @@ function EncryptedDriveCard() {
             toast({ message: on ? "Encrypted Drive folders enabled." : "Encrypted Drive folders disabled.", tone: on ? "ok" : "default" });
           }}
         />
+      </div>
+    </SectionCard>
+  );
+}
+
+/** On-device AI — point Kosh at a local model server (Ollama, LM Studio, llama.cpp) it talks to DIRECTLY
+ *  from the browser: zero cost, fully private, offline-capable. Config is per-device (localStorage). When on,
+ *  the Prompt Playground (and any client feature that opts in) can run on-device instead of a cloud provider. */
+function LocalAiCard() {
+  const toast = useUi((s) => s.toast);
+  const [cfg, setCfg] = useState(() => localAiConfig());
+  const [url, setUrl] = useState(cfg.baseUrl);
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [testing, setTesting] = useState(false);
+
+  const persist = (patch: Partial<{ enabled: boolean; baseUrl: string; model: string }>) => {
+    setLocalAiConfig(patch);
+    setCfg(localAiConfig());
+  };
+
+  const test = async () => {
+    setTesting(true);
+    setProbe(null);
+    try {
+      const r = await probeLocalAi(url);
+      setProbe(r);
+      if (r.ok) {
+        persist({ baseUrl: url });
+        // Default the model to the first available one if the current choice isn't served.
+        if (r.models.length && !r.models.includes(cfg.model)) persist({ model: r.models[0]! });
+        toast({ message: `Connected — ${r.models.length} model${r.models.length === 1 ? "" : "s"} available`, tone: "ok" });
+      } else {
+        toast({ message: "Couldn't reach a local model server", description: r.error, tone: "danger" });
+      }
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const models = probe?.models ?? (cfg.model ? [cfg.model] : []);
+
+  return (
+    <SectionCard
+      title={<span className="flex items-center gap-2"><Cpu size={16} className="text-gold" /> On-device AI</span>}
+      subtitle="Run a local model in your browser — free, private, offline. Nothing leaves this device."
+      className="lg:col-span-2"
+    >
+      <div className="space-y-3.5">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0 text-[12.5px] text-muted">
+            When enabled, features that support it run against your local server (
+            <a href="https://ollama.com" target="_blank" rel="noreferrer noopener" className="text-primary hover:underline">Ollama</a>,
+            {" "}LM Studio, llama.cpp) and never count toward your daily budget.
+          </div>
+          <Toggle
+            checked={cfg.enabled}
+            label="Enable on-device AI"
+            onChange={(on) => { persist({ enabled: on }); toast({ message: on ? "On-device AI enabled." : "On-device AI disabled.", tone: on ? "ok" : "default" }); }}
+          />
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
+          <div>
+            <label htmlFor="local-url" className="mb-1.5 block text-[12px] font-medium text-muted">Server URL</label>
+            <Input id="local-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder={DEFAULT_LOCAL_AI_URL} spellCheck={false} />
+          </div>
+          <div>
+            <span className="mb-1.5 block text-[12px] font-medium text-muted">Model</span>
+            {models.length > 0 ? (
+              <SelectMenu
+                value={cfg.model}
+                onChange={(v) => persist({ model: v })}
+                options={models.map((m) => ({ value: m, label: m }))}
+                ariaLabel="Local model"
+                className="w-full"
+              />
+            ) : (
+              <Input value={cfg.model} onChange={(e) => persist({ model: e.target.value })} placeholder="llama3.2" spellCheck={false} />
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" size="sm" onClick={test} loading={testing}><Plug size={15} /> Test connection</Button>
+          {probe?.ok && <span className="inline-flex items-center gap-1.5 text-[12.5px] text-ok"><Check size={14} /> Reachable · {probe.models.length} model{probe.models.length === 1 ? "" : "s"}</span>}
+          {probe && !probe.ok && <span className="inline-flex items-center gap-1.5 text-[12.5px] text-danger">Not reachable</span>}
+          {testing && !probe && <Spinner size={14} className="text-muted" />}
+        </div>
+
+        <p className="rounded-[var(--radius-control)] bg-surface-2 px-3 py-2 text-[11.5px] text-faint">
+          Tip: start Ollama with <code className="font-mono">OLLAMA_ORIGINS=*</code> (or your Kosh origin) so the browser may call it, then <code className="font-mono">ollama pull {cfg.model || "llama3.2"}</code>.
+        </p>
       </div>
     </SectionCard>
   );
