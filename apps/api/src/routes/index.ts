@@ -7,6 +7,7 @@ import { promptsRouter } from "./prompts.js";
 import { collectionsRouter } from "./collections.js";
 import { packsRouter } from "./packs.js";
 import { rulesRouter } from "./rules.js";
+import { bulkRouter } from "./bulk.js";
 import { tagsRouter } from "./tags.js";
 import { filesRouter } from "./files.js";
 import { uploadsRouter } from "./uploads.js";
@@ -31,6 +32,7 @@ export function mountRoutes(api: Router): void {
   api.use(collectionsRouter);
   api.use(packsRouter);
   api.use(rulesRouter);
+  api.use(bulkRouter);
   api.use(tagsRouter);
   api.use(filesRouter);
   api.use(uploadsRouter);

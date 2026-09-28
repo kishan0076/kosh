@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Trash2,
   UploadCloud,
+  Wand2,
   Workflow,
   X,
 } from "lucide-react";
@@ -99,6 +100,7 @@ export function Sidebar({
     { to: "/prompts", label: "Prompts", icon: Quote, badge: promptCount },
     { to: "/packs", label: "Context Packs", icon: Package },
     { to: "/automations", label: "Automations", icon: Workflow },
+    { to: "/bulk", label: "Bulk actions", icon: Wand2 },
     { to: "/security", label: "Security", icon: ShieldCheck },
     { to: "/github", label: "GitHub", icon: Github },
     { to: "/drive-v2", label: "Drive", icon: HardDrive },

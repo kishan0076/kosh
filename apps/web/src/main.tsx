@@ -30,6 +30,7 @@ import { SearchPage } from "@/pages/Search";
 import { Digest } from "@/pages/Digest";
 import { Automations } from "@/pages/Automations";
 import { Security } from "@/pages/Security";
+import { Bulk } from "@/pages/Bulk";
 import { NotFound } from "@/pages/NotFound";
 
 initTheme();
@@ -81,6 +82,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="collections/:slug" element={<CollectionDetail />} />
           <Route path="trash" element={<Trash />} />
           <Route path="security" element={<Security />} />
+          <Route path="bulk" element={<Bulk />} />
           <Route path="settings" element={<Settings />} />
           <Route path="share" element={<Share />} />
           <Route path="*" element={<NotFound />} />

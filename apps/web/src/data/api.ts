@@ -1,8 +1,17 @@
-import type { AutomationRule, Collection, ContextPack, Item, LinkArchive, RuleCondition, Skill, User } from "@kosh/shared";
+import type { AutomationRule, BulkAction, BulkPlan, BulkPreview, Collection, ContextPack, Item, LinkArchive, RuleCondition, Skill, User } from "@kosh/shared";
 import { getSessionTokenSync, isNative } from "@/lib/native";
 
 /** A Context Pack in list form, with a resolved item count. */
 export type PackListEntry = ContextPack & { itemCount: number };
+
+/** Response of POST /bulk/plan — the validated plan, its preview diff, and how it was produced. */
+export interface BulkPlanResult {
+  plan: BulkPlan | null;
+  preview: BulkPreview | null;
+  aiAvailable: boolean;
+  capReached?: boolean;
+  planner: "ai" | "parser" | "none";
+}
 /** Compact version-history metadata for a pack (one row per retained version). */
 export interface PackVersion {
   version: number;
@@ -345,6 +354,13 @@ export const api = {
   diffPack: (id: string, from: number, to: number) => req<PackDiff>(`/packs/${id}/diff?from=${from}&to=${to}`),
   sharePack: (id: string, isPublic: boolean) => req<{ pack: ContextPack }>(`/packs/${id}/share`, { method: "POST", body: JSON.stringify({ public: isPublic }) }),
   getPublicPack: (slug: string) => req<PublicPackView>(`/packs/public/${encodeURIComponent(slug)}`),
+
+  // Agentic bulk ops: plan a multi-step edit from a natural-language command, re-preview an edited plan,
+  // then apply the confirmed actions to the confirmed item ids.
+  planBulk: (command: string) => req<BulkPlanResult>("/bulk/plan", { method: "POST", body: JSON.stringify({ command }) }),
+  previewBulk: (plan: BulkPlan) => req<{ plan: BulkPlan; preview: BulkPreview }>("/bulk/preview", { method: "POST", body: JSON.stringify({ plan }) }),
+  applyBulk: (itemIds: string[], actions: BulkAction[]) =>
+    req<{ applied: number; archived: number; deleted: number }>("/bulk/apply", { method: "POST", body: JSON.stringify({ itemIds, actions }) }),
 
   publishRepo: (input: PublishRepoInput) => req<{ item: Item; repo: PublishedRepo }>("/repos/publish", { method: "POST", body: JSON.stringify(input) }),
   githubStatus: () => req<{ connected: boolean }>("/settings/github-token"),
