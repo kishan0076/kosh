@@ -11,6 +11,7 @@ import {
   Home,
   Inbox,
   LibraryBig,
+  Newspaper,
   Package,
   PanelLeftClose,
   Plus,
@@ -63,6 +64,7 @@ export function Sidebar({
 
   const inboxCount = inbox(items).length;
   const trashCount = items.filter((i) => i.deletedAt).length;
+  const digestNew = live(items).reduce((n, i) => n + (i.github?.watch?.newSince ?? 0), 0);
   const skillCount = live(items).filter((i) => i.kind === "skill").length;
   const promptCount = live(items).filter((i) => i.kind === "prompt").length;
 
@@ -88,6 +90,7 @@ export function Sidebar({
     { to: "/", label: "Home", icon: Home, end: true },
     { to: "/add", label: "Add", icon: Plus },
     { to: "/search", label: "Search & Ask", icon: Search },
+    { to: "/digest", label: "What's new", icon: Newspaper, badge: digestNew || undefined },
     { to: "/inbox", label: "Inbox", icon: Inbox, badge: inboxCount },
     { to: "/library", label: "Library", icon: LibraryBig },
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },

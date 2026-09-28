@@ -241,6 +241,21 @@ export async function uploadObjects(inputs: UploadInput[]): Promise<UploadedRef[
   return metas.filter((m) => byPath.has(m.path)).map((m) => ({ path: m.path, mime: m.mime, sha256: m.sha256, size: m.size }));
 }
 
+/** A "what's new" + weekly-activity digest over the vault. */
+export interface Digest {
+  days: number;
+  since: string;
+  savedCount: number;
+  enrichedCount: number;
+  deadCount: number;
+  toTryCount: number;
+  usingCount: number;
+  topTags: { tag: string; count: number }[];
+  recent: Item[];
+  watched: { itemId: string; title: string; url?: string; newSince: number; lastCheckedAt?: string }[];
+  watchedNewTotal: number;
+}
+
 export const api = {
   devLogin: (login: string, name?: string, client?: "mobile") =>
     req<{ user: User; token?: string }>("/auth/dev-login", { method: "POST", body: JSON.stringify({ login, name, client }) }),
@@ -280,6 +295,10 @@ export const api = {
   archiveItem: (id: string) => req<{ ok: boolean }>(`/items/${id}/archive`, { method: "POST" }),
   checkLink: (id: string) => req<LinkCheckResult>(`/items/${id}/check-link`, { method: "POST" }),
   checkAllLinks: () => req<BulkLinkCheck>("/links/check", { method: "POST" }),
+  getDigest: (days?: number) => req<Digest>(`/digest${days != null ? `?days=${days}` : ""}`),
+  markDigestSeen: () => req<{ cleared: number }>("/digest/seen", { method: "POST" }),
+  importBookmarks: (items: { url: string; title?: string; tags?: string[] }[]) =>
+    req<{ found: number; saved: number; skipped: number }>("/import/bookmarks", { method: "POST", body: JSON.stringify({ items }) }),
   extractLinks: (id: string) => req<{ found: number; saved: number; skipped: number }>(`/items/${id}/extract-links`, { method: "POST" }),
   snapshotSkills: (id: string, dirs?: string[]) =>
     req<{ copied: number }>(`/items/${id}/snapshot-skills`, { method: "POST", body: JSON.stringify({ dirs }) }),

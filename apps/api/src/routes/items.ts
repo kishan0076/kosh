@@ -11,6 +11,7 @@ import { enrichItem } from "../modules/enrich.js";
 import { archiveItem } from "../modules/archive.js";
 import { askTreasury } from "../modules/ask.js";
 import { checkAllLinks, checkLink } from "../modules/linkcheck.js";
+import { buildDigest, markWatchedSeen } from "../modules/digest.js";
 import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
@@ -33,6 +34,8 @@ const actionLimiter = rateLimit({
 
 // Hard ceiling on links ingested from one awesome-list README per call.
 const MAX_EXTRACT_LINKS = 200;
+// Hard ceiling on bookmarks imported in one call (a browser export can hold thousands).
+const MAX_IMPORT = 500;
 
 async function ownedItem(userId: string, id: string): Promise<ServerItem> {
   const item = await getStore().items.findById(id);
@@ -132,6 +135,53 @@ itemsRouter.post(
     const uid = requireUser(req);
     const { q } = z.object({ q: z.string().min(1).max(1000) }).parse(req.body);
     res.json(await askTreasury(uid, q));
+  }),
+);
+
+/* GET /digest — "what's new" + weekly activity review (watched repos + your own activity) */
+itemsRouter.get(
+  "/digest",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const days = req.query.days != null ? Number(req.query.days) : undefined;
+    res.json(await buildDigest(uid, { days: Number.isFinite(days) ? days : undefined }));
+  }),
+);
+
+/* POST /digest/seen — clear the "unseen changes" counters on watched repos */
+itemsRouter.post(
+  "/digest/seen",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    res.json({ cleared: await markWatchedSeen(uid) });
+  }),
+);
+
+/* POST /import/bookmarks — bulk-import parsed bookmark entries into the Inbox */
+itemsRouter.post(
+  "/import/bookmarks",
+  actionLimiter,
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const body = z
+      .object({
+        items: z
+          .array(z.object({ url: z.string().min(1), title: z.string().optional(), tags: z.array(z.string()).optional() }))
+          .min(1)
+          .max(MAX_IMPORT),
+      })
+      .parse(req.body);
+    let saved = 0;
+    let skipped = 0;
+    for (const b of body.items) {
+      try {
+        const { duplicate } = await ingest(uid, b.url, { source: "import", tags: b.tags?.slice(0, 5) });
+        duplicate ? skipped++ : saved++;
+      } catch {
+        skipped++; // a malformed URL shouldn't abort the whole import
+      }
+    }
+    res.json({ found: body.items.length, saved, skipped });
   }),
 );
 
