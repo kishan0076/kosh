@@ -33,6 +33,14 @@ describe("selectBulkItems", () => {
     expect(sel.map((i) => i.id)).toContain("a");
     expect(sel.map((i) => i.id)).not.toContain("b");
   });
+  it("a query that matches nothing selects nothing (never the whole library)", () => {
+    // A non-matching query must not fall back to 'all items' — that would be catastrophic for a delete plan.
+    expect(selectBulkItems(items, { mode: "all", conditions: [], query: "zzzznomatch" })).toEqual([]);
+  });
+  it("filters by stage", () => {
+    const withStages = [item({ id: "x", stage: "dropped" }), item({ id: "y", stage: "using" })];
+    expect(selectBulkItems(withStages, { mode: "all", conditions: [{ field: "stage", value: "dropped" }] }).map((i) => i.id)).toEqual(["x"]);
+  });
 });
 
 describe("describeItemEffects", () => {
@@ -63,6 +71,17 @@ describe("describeItemEffects", () => {
   });
   it("delete is flagged destructive", () => {
     expect(describeItemEffects(item(), [{ type: "delete" }])[0]).toMatchObject({ type: "delete", destructive: true });
+  });
+  it("with a collection resolver, skips add/remove no-ops (exact diff)", () => {
+    const ctx = { collectionIdByName: { tools: "c1" } };
+    // already a member → add is a no-op
+    expect(describeItemEffects(item({ collections: ["c1"] }), [{ type: "addToCollection", value: "Tools" }], ctx)).toEqual([]);
+    // not a member → add is a real change
+    expect(describeItemEffects(item({ collections: [] }), [{ type: "addToCollection", value: "Tools" }], ctx)).toHaveLength(1);
+    // not a member → remove is a no-op
+    expect(describeItemEffects(item({ collections: [] }), [{ type: "removeFromCollection", value: "Tools" }], ctx)).toEqual([]);
+    // without a resolver, the change is shown (server dedupes on apply)
+    expect(describeItemEffects(item({ collections: ["c1"] }), [{ type: "addToCollection", value: "Tools" }])).toHaveLength(1);
   });
 });
 
@@ -99,10 +118,17 @@ describe("parseBulkCommand", () => {
     const p = parseBulkCommand("move all repos to the Tools collection");
     expect(p?.actions).toContainEqual({ type: "addToCollection", value: "tools" });
   });
-  it("parses set stage", () => {
+  it("parses set stage without adding the target as a stage filter", () => {
     const p = parseBulkCommand("mark everything tagged stale as dropped");
     expect(p?.actions).toContainEqual({ type: "setStage", value: "dropped" });
     expect(p?.select.conditions).toContainEqual({ field: "tag", value: "stale" });
+    // "dropped" here is the setStage target, not a stage filter — it must not also become a condition.
+    expect(p?.select.conditions).not.toContainEqual({ field: "stage", value: "dropped" });
+  });
+  it("parses a stage word as a FILTER when it isn't a setStage target", () => {
+    const p = parseBulkCommand("delete everything I dropped");
+    expect(p?.actions).toContainEqual({ type: "delete" });
+    expect(p?.select.conditions).toContainEqual({ field: "stage", value: "dropped" });
   });
   it("parses an about-query", () => {
     const p = parseBulkCommand("pin everything about rust async");

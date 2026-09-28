@@ -46,7 +46,16 @@ registryRouter.post(
   installLimiter,
   ah(async (req, res) => {
     const uid = requireWrite(req);
-    const result = await installFromRegistry(uid, String(req.params.id));
+    let result;
+    try {
+      result = await installFromRegistry(uid, String(req.params.id));
+    } catch (e) {
+      if ((e as Error).message === "SKILL_FILE_UNAVAILABLE") {
+        res.status(502).json({ error: { code: "SKILL_FILE_UNAVAILABLE", message: "A file in this skill is no longer available from its author — it couldn't be installed." } });
+        return;
+      }
+      throw e;
+    }
     if (result === "not_found") throw notFound("That skill isn't in the registry (it may be private or removed).");
     res.status(result.duplicate ? 200 : 201).json(result);
   }),

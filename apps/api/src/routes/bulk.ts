@@ -5,7 +5,7 @@ import { getStore } from "../db/index.js";
 import { ah } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { toClientItem } from "../modules/ingest.js";
-import { planBulk, applyBulk } from "../modules/bulk.js";
+import { planBulk, applyBulk, collectionIdByName } from "../modules/bulk.js";
 import { previewBulkPlan, sanitizeBulkPlan } from "@kosh/shared";
 
 export const bulkRouter: Router = Router();
@@ -45,7 +45,7 @@ bulkRouter.post(
     const plan = sanitizeBulkPlan(req.body?.plan);
     if (!plan) { res.status(400).json({ error: { code: "BAD_PLAN", message: "That plan has no valid actions." } }); return; }
     const items = (await getStore().items.find({ userId: uid, deletedAt: null })).map(toClientItem);
-    res.json({ plan, preview: previewBulkPlan(items, plan) });
+    res.json({ plan, preview: previewBulkPlan(items, plan, { collectionIdByName: await collectionIdByName(uid) }) });
   }),
 );
 

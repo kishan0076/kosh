@@ -33,9 +33,9 @@ const nowIso = () => new Date().toISOString();
 const SYSTEM = `You convert a user's instruction into a precise bulk-edit plan over their saved library.
 Reply with ONLY a JSON object of this shape (no prose):
 {"summary": string, "select": {"mode": "all"|"any", "conditions": [{"field": F, "value": string}], "query": string?}, "actions": [{"type": T, "value": string?}]}
-F is one of: kind, linkType, repoKind, source, url, title, tag.
+F is one of: kind, linkType, repoKind, source, url, title, tag, stage.
   kind ∈ link|skill|prompt|file · linkType ∈ repo|article|video|package|tool|gist|release|issue|profile|other
-  url/title are case-insensitive substrings · tag is exact tag membership.
+  stage ∈ to-try|trying|using|dropped (exact) · url/title are case-insensitive substrings · tag is exact tag membership.
 T is one of: addTags, removeTags (value = comma tags), setStage (value = to-try|trying|using|dropped),
   addToCollection, removeFromCollection (value = collection name), pin, unpin, archive, delete.
 Use "query" for a fuzzy "about X" topic filter; use conditions for concrete fields. Prefer the fewest,
@@ -96,8 +96,16 @@ export async function planBulk(userId: string, command: string): Promise<BulkPla
   }
 
   if (!plan) return { plan: null, preview: null, aiAvailable: available, capReached, planner: "none" };
-  const preview = previewBulkPlan(items, plan);
+  const preview = previewBulkPlan(items, plan, { collectionIdByName: await collectionIdByName(userId) });
   return { plan, preview, aiAvailable: available, capReached, planner };
+}
+
+/** Map of the user's collection names (lower-cased) → id, so the preview can skip no-op collection changes. */
+export async function collectionIdByName(userId: string): Promise<Record<string, string>> {
+  const cols = await getStore().collections.find({ userId });
+  const out: Record<string, string> = {};
+  for (const c of cols) out[c.name.toLowerCase()] = c.id;
+  return out;
 }
 
 /** Resolve a collection by name for a user, creating it if it doesn't exist (mirrors the rules engine). */

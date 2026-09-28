@@ -14,7 +14,7 @@ function toClient(r: ServerRule) {
 }
 
 const conditionSchema = z.object({
-  field: z.enum(["kind", "linkType", "repoKind", "source", "url", "title", "tag"]),
+  field: z.enum(["kind", "linkType", "repoKind", "source", "url", "title", "tag", "stage"]),
   value: z.string().max(200),
 });
 const actionSchema = z.object({

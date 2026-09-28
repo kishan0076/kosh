@@ -2,14 +2,11 @@
 const $ = (id) => document.getElementById(id);
 
 let tab = null;
-chrome.tabs.query({ active: true, currentWindow: true }).then(([t]) => {
+// One query for the active tab feeds both the title/url display and the selection prefill.
+chrome.tabs.query({ active: true, currentWindow: true }).then(async ([t]) => {
   tab = t;
   $("title").textContent = t?.title || "This page";
   $("url").textContent = t?.url || "";
-});
-
-// Prefill any highlighted text on the page as the note.
-chrome.tabs.query({ active: true, currentWindow: true }).then(async ([t]) => {
   if (!t?.id) return;
   try {
     const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: t.id }, func: () => String(window.getSelection() || "") });

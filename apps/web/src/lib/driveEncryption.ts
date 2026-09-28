@@ -121,10 +121,14 @@ export function isEncryptedFolder(node?: PropBag | null): boolean {
   return !!node?.isFolder && node?.appProperties?.[ENC_PROP] === "1";
 }
 
-/** A file whose bytes are a Kosh KENC container (by the app marker, or a `.kenc` name as a fallback). */
+/** A file whose bytes are a Kosh KENC container. The app marker is authoritative and always honored (so a
+ *  file encrypted earlier still decrypts even if the flag is later turned off). The `.kenc` NAME heuristic is
+ *  only a fallback WHEN the feature is enabled — otherwise a file coincidentally named `*.kenc` would be
+ *  mis-detected and become impossible to preview/download with the feature off. */
 export function isEncryptedNode(node?: PropBag | null): boolean {
   if (!node || node.isFolder) return false;
-  return node.appProperties?.[ENC_PROP] === "1" || !!node.name?.endsWith(".kenc");
+  if (node.appProperties?.[ENC_PROP] === "1") return true;
+  return driveEncryptionEnabled() && !!node.name?.endsWith(".kenc");
 }
 
 export interface PreparedUpload {

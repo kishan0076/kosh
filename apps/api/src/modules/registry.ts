@@ -115,7 +115,9 @@ export async function installFromRegistry(installerId: string, id: string): Prom
       files.push({ path: f.path, mime: f.mime, content: f.content });
     } else if (f.sha256) {
       const buf = await getObject(src.userId, f.sha256);
-      files.push({ path: f.path, mime: f.mime, bytesBase64: (buf ?? Buffer.alloc(0)).toString("base64") });
+      // Fail loudly rather than silently install a 0-byte file if the author's object is gone.
+      if (!buf) throw new Error("SKILL_FILE_UNAVAILABLE");
+      files.push({ path: f.path, mime: f.mime, bytesBase64: buf.toString("base64") });
     } else {
       files.push({ path: f.path, mime: f.mime, content: "" });
     }

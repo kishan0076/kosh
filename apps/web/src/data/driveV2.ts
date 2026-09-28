@@ -1690,7 +1690,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       for (const item of items) {
         const parentId = await ensureDir(item.dirs);
         if (parentId == null) { if (item.file) skipped++; continue; }
-        if (item.file) await uploadOneFile(accountId, item.file, parentId);
+        // Honor the encryption decision for dropped folders too — never fall back to a plaintext upload
+        // into an encrypted folder (uploadFiles passes this; uploadDropped must as well).
+        if (item.file) await uploadOneFile(accountId, item.file, parentId, dec.encrypt);
       }
       // Silent partial loss is the worst outcome — if a folder failed, say how many files it took down.
       if (skipped) pushToast({ message: `${skipped} file${skipped === 1 ? "" : "s"} weren't uploaded — a folder couldn't be created.`, tone: "warn" });
@@ -1883,7 +1885,14 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (!accountId) return;
       const ok = await mutate(
         [id],
-        (nodes) => nodes.map((n) => (n.id === id ? { ...n, appProperties: { ...(n.appProperties ?? {}), ...(on ? { [ENC_PROP]: "1" } : {}) } } : n)),
+        // Add or REMOVE the marker to match the server patch — turning off must drop koshEnc locally too,
+        // else the folder still reads as encrypted until the next refresh.
+        (nodes) => nodes.map((n) => {
+          if (n.id !== id) return n;
+          const props = { ...(n.appProperties ?? {}) };
+          if (on) props[ENC_PROP] = "1"; else delete props[ENC_PROP];
+          return { ...n, appProperties: props };
+        }),
         async () => {
           await driveV2Api.updateMeta(accountId, id, { appProperties: { [ENC_PROP]: on ? "1" : null } });
         },

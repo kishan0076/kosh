@@ -18,10 +18,11 @@ const FIELD_OPTS: { value: RuleField; label: string }[] = [
   { value: "url", label: "URL contains" },
   { value: "title", label: "Title contains" },
   { value: "tag", label: "Has tag" },
+  { value: "stage", label: "Stage" },
 ];
 const FIELD_PLACEHOLDER: Record<RuleField, string> = {
   kind: "link / skill / prompt / file", linkType: "repo / article / video …", repoKind: "mcp-server / skills / cli …",
-  source: "web / bot / email / import …", url: "github.com", title: "invoice", tag: "ai",
+  source: "web / bot / email / import …", url: "github.com", title: "invoice", tag: "ai", stage: "to-try / trying / using / dropped",
 };
 const ACTION_OPTS: { value: RuleActionType; label: string }[] = [
   { value: "addTags", label: "Add tags" },

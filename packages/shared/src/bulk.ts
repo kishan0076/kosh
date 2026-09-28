@@ -76,22 +76,35 @@ export interface BulkPreview {
 
 const label = (i: Pick<Item, "title" | "url" | "id">): string => i.title || i.url || "Untitled";
 
-/** Select the items a plan targets: optional lexical retrieval, then the field-condition matcher. */
+/** Select the items a plan targets: optional lexical retrieval, then the field-condition matcher.
+ *  For a mutation selector, a query must NARROW — `retrieveItems` is recall-first and returns every item
+ *  (score 0) when the query has no meaningful content terms, so we keep only genuinely-matched hits
+ *  (score > 0). A meaningless/all-stopword query therefore selects (almost) nothing rather than the whole
+ *  vault — the safe failure for a destructive plan. */
 export function selectBulkItems<T extends Item>(items: T[], select: BulkSelect): T[] {
   const q = select.query?.trim();
-  const pool = q ? retrieveItems(items, q).map((h) => h.item) : items;
+  const pool = q ? retrieveItems(items, q).filter((h) => h.score > 0).map((h) => h.item) : items;
   if (!select.conditions.length) return pool;
   return pool.filter((i) => itemMatchesRule(i, { match: select.mode, conditions: select.conditions }));
 }
 
+/** Optional context so the preview can resolve a collection NAME → id and skip no-op collection changes. */
+export interface EffectContext {
+  /** Map of collection name (lower-cased) → id, for the caller's collections. */
+  collectionIdByName?: Record<string, string>;
+}
+
 /**
  * The concrete effects a set of actions would have on ONE item, skipping no-ops (a tag it already has, a
- * pin when already pinned, an archive when it's not a link…). Collection add/remove is described by name;
- * the server resolves the id and dedupes on apply.
+ * pin when already pinned, an archive when it's not a link…). When `ctx.collectionIdByName` is supplied, a
+ * collection add/remove is also skipped when the item is already in / already out of that collection, so the
+ * preview reflects the EXACT diff; without it, collection changes are shown (the server still dedupes on apply).
  */
-export function describeItemEffects(item: Item, actions: BulkAction[]): ItemEffect[] {
+export function describeItemEffects(item: Item, actions: BulkAction[], ctx: EffectContext = {}): ItemEffect[] {
   const effects: ItemEffect[] = [];
   const tags = new Set(item.tags);
+  const collections = new Set(item.collections);
+  const collId = (name: string): string | undefined => ctx.collectionIdByName?.[name.trim().toLowerCase()];
   let stage = item.stage;
   let pinned = !!item.pinned;
 
@@ -112,12 +125,25 @@ export function describeItemEffects(item: Item, actions: BulkAction[]): ItemEffe
         if ((RULE_STAGES as string[]).includes(s) && stage !== s) { const from = stage; stage = s as Stage; effects.push({ type: a.type, label: `stage ${from} → ${stage}` }); }
         break;
       }
-      case "addToCollection":
-        if (a.value?.trim()) effects.push({ type: a.type, label: `→ collection “${a.value.trim()}”` });
+      case "addToCollection": {
+        const name = a.value?.trim();
+        if (!name) break;
+        const id = collId(name);
+        // With a resolver, skip if already a member; a not-yet-existing collection (no id) still counts as a change.
+        if (ctx.collectionIdByName && id && collections.has(id)) break;
+        if (id) collections.add(id);
+        effects.push({ type: a.type, label: `→ collection “${name}”` });
         break;
-      case "removeFromCollection":
-        if (a.value?.trim()) effects.push({ type: a.type, label: `remove from “${a.value.trim()}”` });
+      }
+      case "removeFromCollection": {
+        const name = a.value?.trim();
+        if (!name) break;
+        const id = collId(name);
+        if (ctx.collectionIdByName && (!id || !collections.has(id))) break; // not a member → no-op
+        if (id) collections.delete(id);
+        effects.push({ type: a.type, label: `remove from “${name}”` });
         break;
+      }
       case "pin":
         if (!pinned) { pinned = true; effects.push({ type: a.type, label: "pin" }); }
         break;
@@ -135,13 +161,14 @@ export function describeItemEffects(item: Item, actions: BulkAction[]): ItemEffe
   return effects;
 }
 
-/** Build the full preview: which items match, and the exact per-item effects (no-op items dropped). */
-export function previewBulkPlan(items: Item[], plan: BulkPlan): BulkPreview {
+/** Build the full preview: which items match, and the exact per-item effects (no-op items dropped).
+ *  Pass `ctx.collectionIdByName` so collection add/remove no-ops are excluded from the diff. */
+export function previewBulkPlan(items: Item[], plan: BulkPlan, ctx: EffectContext = {}): BulkPreview {
   const live = items.filter((i) => !i.deletedAt);
   const matched = selectBulkItems(live, plan.select);
   const changes: BulkChange[] = [];
   for (const it of matched) {
-    const effects = describeItemEffects(it, plan.actions);
+    const effects = describeItemEffects(it, plan.actions, ctx);
     if (effects.length) changes.push({ itemId: it.id, title: label(it), effects });
   }
   return {
@@ -218,8 +245,12 @@ export function parseBulkCommand(command: string): BulkPlan | null {
     conditions.push({ field: "url", value: host });
   }
   if ((m = text.match(/\btagged\s+#?([a-z0-9-]+)/))) conditions.push({ field: "tag", value: m[1]! });
-  if ((m = text.match(/\b(?:dropped|to-try|trying|using)\b/)) && /\b(dropped|trying|using)\b/.test(text) && !actions.some((a) => a.type === "setStage")) {
-    // "everything I dropped" is a filter, not a setStage
+  // A stage word used as a FILTER ("delete everything I dropped") — distinct from setStage's target value,
+  // which is captured above via "mark/set … as <stage>". Skip the word that is the setStage value.
+  const stageSet = actions.find((a) => a.type === "setStage")?.value;
+  if ((m = text.match(/\b(dropped|trying|using|to-try|to try)\b/))) {
+    const s = m[1] === "to try" ? "to-try" : m[1]!;
+    if (s !== stageSet) conditions.push({ field: "stage", value: s });
   }
   if ((m = text.match(/\b(?:about|matching|regarding|related to)\s+(.+?)(?=\s+and\b|$)/))) query = m[1]?.trim();
 
@@ -235,7 +266,7 @@ export function sanitizeBulkPlan(input: unknown): BulkPlan | null {
   if (!input || typeof input !== "object") return null;
   const o = input as Record<string, unknown>;
   const sel = (o.select ?? {}) as Record<string, unknown>;
-  const allowedFields = new Set(["kind", "linkType", "repoKind", "source", "url", "title", "tag"]);
+  const allowedFields = new Set(["kind", "linkType", "repoKind", "source", "url", "title", "tag", "stage"]);
   const allowedActions = new Set<BulkActionType>(["addTags", "removeTags", "setStage", "addToCollection", "removeFromCollection", "pin", "unpin", "archive", "delete"]);
 
   const conditions: RuleCondition[] = Array.isArray(sel.conditions)

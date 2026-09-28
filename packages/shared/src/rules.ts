@@ -6,7 +6,7 @@ import type { Item, Stage } from "./types.js";
  * the server runs it once per item after capture/enrichment (no rule can trigger another → no loops).
  */
 
-export type RuleField = "kind" | "linkType" | "repoKind" | "source" | "url" | "title" | "tag";
+export type RuleField = "kind" | "linkType" | "repoKind" | "source" | "url" | "title" | "tag" | "stage";
 
 export interface RuleCondition {
   field: RuleField;
@@ -36,7 +36,7 @@ export interface AutomationRule {
   updatedAt: string;
 }
 
-type MatchableItem = Pick<Item, "kind" | "linkType" | "source" | "url" | "title" | "tags"> & { github?: { repoKind?: string } };
+type MatchableItem = Pick<Item, "kind" | "linkType" | "source" | "url" | "title" | "tags" | "stage"> & { github?: { repoKind?: string } };
 
 function conditionMatches(item: MatchableItem, c: RuleCondition): boolean {
   const v = c.value.trim().toLowerCase();
@@ -49,6 +49,7 @@ function conditionMatches(item: MatchableItem, c: RuleCondition): boolean {
     case "url": return (item.url ?? "").toLowerCase().includes(v);
     case "title": return (item.title ?? "").toLowerCase().includes(v);
     case "tag": return item.tags.some((t) => t.toLowerCase() === v);
+    case "stage": return (item.stage ?? "").toLowerCase() === v;
     default: return false;
   }
 }
