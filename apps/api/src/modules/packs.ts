@@ -54,19 +54,20 @@ export interface PackVersionMeta {
 const kindLabel = (it: ServerItem): string =>
   it.kind === "link" && it.linkType ? `link · ${it.linkType}` : it.kind;
 
-/** The best short descriptive text for an item (before optionally appending its longer stored body). */
-function itemSummary(it: ServerItem): string {
+/** The best short descriptive text for an item (before optionally appending its longer stored body).
+ *  `includeNotes` is false for a PUBLIC assembly — a private note must never appear in a shared pack. */
+function itemSummary(it: ServerItem, includeNotes: boolean): string {
   const parts: string[] = [];
   if (it.ai?.summary) parts.push(it.ai.summary);
   else if (it.description) parts.push(it.description);
-  if (it.note) parts.push(`Note: ${it.note}`);
+  if (includeNotes && it.note) parts.push(`Note: ${it.note}`);
   if (it.github?.repoKind) parts.push(`Repo kind: ${it.github.repoKind}`);
   if (it.github?.install?.command) parts.push(`Install: ${it.github.install.command}`);
   return parts.join("\n");
 }
 
 /** Assemble one item's Markdown block. `loads` caps how many object-store reads the whole assembly does. */
-async function itemBlock(userId: string, it: ServerItem, n: number, loads: { count: number }): Promise<string> {
+async function itemBlock(userId: string, it: ServerItem, n: number, loads: { count: number }, includeNotes: boolean): Promise<string> {
   const head = `## ${n}. ${it.title ?? it.url ?? "Untitled"}`;
   const meta: string[] = [`- Kind: ${kindLabel(it)}`];
   if (it.url) meta.push(`- URL: ${it.url}`);
@@ -74,7 +75,7 @@ async function itemBlock(userId: string, it: ServerItem, n: number, loads: { cou
 
   const sections: string[] = [head, meta.join("\n")];
 
-  const summary = itemSummary(it);
+  const summary = itemSummary(it, includeNotes);
   if (summary) sections.push(summary);
 
   // Prompts: include the full body (the whole point of saving a prompt is to reuse its text).
@@ -127,9 +128,10 @@ export function pickComposition(pack: ContextPack, version?: number): PackCompos
  * no longer resolve (deleted / not this user's) are skipped, never faked. Bounded by an overall size
  * ceiling. Pass `version` to pin a past version — returns null if that version is no longer retained.
  */
-export async function resolvePack(userId: string, pack: ContextPack, opts: { version?: number } = {}): Promise<ResolvedPack | null> {
+export async function resolvePack(userId: string, pack: ContextPack, opts: { version?: number; includeNotes?: boolean } = {}): Promise<ResolvedPack | null> {
   const comp = pickComposition(pack, opts.version);
   if (!comp) return null;
+  const includeNotes = opts.includeNotes !== false; // notes are included by default; the public serve opts out
 
   const store = getStore();
   const header: string[] = [`# ${comp.name}`];
@@ -156,7 +158,7 @@ export async function resolvePack(userId: string, pack: ContextPack, opts: { ver
       skipped++;
       continue;
     }
-    const block = await itemBlock(userId, it, n + 1, loads);
+    const block = await itemBlock(userId, it, n + 1, loads, includeNotes);
     if (length + sep.length + block.length > MAX_CONTEXT_CHARS) {
       truncated = true;
       break;

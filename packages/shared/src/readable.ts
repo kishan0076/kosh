@@ -148,6 +148,8 @@ interface ListCtx {
  */
 function htmlToMarkdown(fragment: string, base?: string): string {
   const out: string[] = [];
+  let outLen = 0; // running length of `out` joined — kept O(1) so the size cap check isn't quadratic
+  const emit = (s: string) => { out.push(s); outLen += s.length + 1; };
   let inline = "";
   let mode: "para" | "heading" | "li" = "para";
   let headingLevel = 0;
@@ -162,7 +164,7 @@ function htmlToMarkdown(fragment: string, base?: string): string {
     const content = inline.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n").trim();
     inline = "";
     if (mode === "heading") {
-      if (content) out.push("#".repeat(headingLevel) + " " + content.replace(/\n+/g, " "));
+      if (content) emit("#".repeat(headingLevel) + " " + content.replace(/\n+/g, " "));
       mode = "para";
       headingLevel = 0;
       return;
@@ -171,12 +173,12 @@ function htmlToMarkdown(fragment: string, base?: string): string {
       const top = lists[lists.length - 1];
       const depth = Math.max(0, lists.length - 1);
       const marker = top?.ordered ? `${top.index}.` : "-";
-      if (content) out.push("  ".repeat(depth) + marker + " " + content.replace(/\n+/g, " "));
+      if (content) emit("  ".repeat(depth) + marker + " " + content.replace(/\n+/g, " "));
       mode = "para";
       return;
     }
     if (!content) return;
-    out.push(quoteDepth > 0 ? content.split("\n").map((l) => "> " + l).join("\n") : content);
+    emit(quoteDepth > 0 ? content.split("\n").map((l) => "> " + l).join("\n") : content);
   };
 
   const TOKEN = /<!--[\s\S]*?-->|<\/?([a-zA-Z][a-zA-Z0-9]*)\b([^>]*)>|[^<]+/g;
@@ -239,14 +241,14 @@ function htmlToMarkdown(fragment: string, base?: string): string {
         } else {
           inPre = false;
           const code = preBuf.replace(/^\n+/, "").replace(/\s+$/, "");
-          if (code) out.push("```\n" + code + "\n```");
+          if (code) emit("```\n" + code + "\n```");
           preBuf = "";
         }
         break;
       }
       case "hr": {
         flush();
-        out.push("---");
+        emit("---");
         break;
       }
       case "br": {
@@ -286,7 +288,7 @@ function htmlToMarkdown(fragment: string, base?: string): string {
       default:
         break;
     }
-    if (out.join("\n").length > MAX_MARKDOWN) break;
+    if (outLen > MAX_MARKDOWN) break;
   }
   flush();
 

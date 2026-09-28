@@ -93,4 +93,12 @@ describe("retrieveItems (recall-first, for Ask)", () => {
     expect(retrieveItems(vault, "pdf kind:prompt")).toHaveLength(1);
     expect(retrieveItems(vault, "pdf", { limit: 1 })).toHaveLength(1);
   });
+
+  it("retrieves by meaningful 2-char terms like 'ai' (not filtered as too-short)", () => {
+    const v = [mk({ title: "Agent framework", tags: ["ai"], updatedAt: "2026-01-02" }), mk({ title: "A recipe blog", tags: ["food"], updatedAt: "2026-01-03" })];
+    const hits = retrieveItems(v, "what about ai");
+    // "ai" is a real content term → the ai-tagged item scores > 0 and is retrieved by relevance, not recency.
+    expect(hits[0]!.item.title).toBe("Agent framework");
+    expect(hits[0]!.score).toBeGreaterThan(0);
+  });
 });

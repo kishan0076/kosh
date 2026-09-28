@@ -195,6 +195,9 @@ export async function createSkillVersion(
   } as ServerItem);
 
   publish(userId, { kind: "item.created", item });
+  // Run the user's automations for the new skill item (kind/tag/stage rules) — links do this after enrich,
+  // but a skill has no enrichment step. Dynamic import avoids a static cycle (rules → ingest → skills).
+  void import("./rules.js").then((m) => m.enqueueRules(userId, item)).catch(() => undefined);
   return { skill, item, changed: true };
 }
 

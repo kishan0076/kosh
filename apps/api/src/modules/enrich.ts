@@ -120,7 +120,8 @@ export async function enrichItem(userId: string, itemId: string): Promise<void> 
   const patch = await computePatch(item, await tryGithubToken(userId)); // auto-refreshed; null → server/anon token
   const updated = await store.items.updateById(itemId, { ...patch, updatedAt: nowIso() } as Partial<ServerItem>);
   if (updated) {
-    publish(userId, { kind: "item.updated", item: updated });
+    const { toClientItem } = await import("./ingest.js"); // lazy to avoid a static import cycle
+    publish(userId, { kind: "item.updated", item: toClientItem(updated) }); // strip server-only fields
     // Now that the item is fully captured (linkType, tags, repoKind known), run the user's automations.
     const { applyRules } = await import("./rules.js");
     await applyRules(userId, updated).catch(() => 0);

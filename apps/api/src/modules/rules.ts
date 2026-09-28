@@ -66,3 +66,12 @@ export async function applyRules(userId: string, item: ServerItem): Promise<numb
   if (archive) enqueue(`archive:${item.id}`, () => archiveItem(userId, item.id).then(() => undefined), 3);
   return rules.length;
 }
+
+/**
+ * Run automations for a NON-link item (prompt/skill/file), off the request path. Links run rules from
+ * enrichItem once fully captured; other kinds have no enrichment step, so their create paths call this so a
+ * rule with a kind/source/tag/stage condition still fires (matching rules.ts's "once per item" contract).
+ */
+export function enqueueRules(userId: string, item: ServerItem): void {
+  enqueue(`rules:${item.id}`, () => applyRules(userId, item).then(() => undefined), 4);
+}

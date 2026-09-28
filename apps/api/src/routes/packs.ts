@@ -61,7 +61,8 @@ packsRouter.get(
     const items = found
       .filter((it): it is ServerItem => !!it && it.userId === pack.userId && !it.deletedAt)
       .map(publicItem);
-    const resolved = await resolvePack(pack.userId, pack);
+    // Public assembly must omit private per-item notes (the item list is already note-stripped via publicItem).
+    const resolved = await resolvePack(pack.userId, pack, { includeNotes: false });
     res.json({
       name: pack.name,
       description: pack.description,

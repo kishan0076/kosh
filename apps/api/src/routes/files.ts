@@ -4,6 +4,7 @@ import { getStore, type ServerItem } from "../db/index.js";
 import { ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { toClientItem } from "../modules/ingest.js";
+import { enqueueRules } from "../modules/rules.js";
 import { getObject, putIfMissing, sha256 } from "../storage/objects.js";
 
 export const filesRouter: Router = Router();
@@ -58,6 +59,7 @@ filesRouter.post(
       createdAt: now,
       updatedAt: now,
     } as Omit<ServerItem, "id">);
+    enqueueRules(uid, item); // run automations for the new file (kind/tag/stage rules)
     res.status(201).json({ item: toClientItem(item) });
   }),
 );

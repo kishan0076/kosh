@@ -140,7 +140,9 @@ const STOPWORDS = new Set([
 export function retrieveItems<T extends SearchableItem>(items: T[], rawQuery: string, opts: { limit?: number } = {}): SearchHit<T>[] {
   const q = parseSearchQuery(rawQuery);
   // Strip punctuation ("do?" → "do") so a trailing "?" can't leak a stopword through as a fake content term.
-  const terms = [...new Set(q.terms.map((t) => t.replace(/[^\p{L}\p{N}]/gu, "")).filter((t) => t.length >= 3 && !STOPWORDS.has(t)))];
+  // Keep 2-char content terms ("ai", "go", "js", "ml") — they're meaningful in a dev/AI library and common
+  // stopwords of that length are already filtered by STOPWORDS.
+  const terms = [...new Set(q.terms.map((t) => t.replace(/[^\p{L}\p{N}]/gu, "")).filter((t) => t.length >= 2 && !STOPWORDS.has(t)))];
   const hits: SearchHit<T>[] = [];
   for (const item of items) {
     if (!matchesFilters(item, q)) continue;

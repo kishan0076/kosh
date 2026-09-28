@@ -5,6 +5,7 @@ import { getStore, type ServerItem } from "../db/index.js";
 import { ah, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { toClientItem } from "../modules/ingest.js";
+import { enqueueRules } from "../modules/rules.js";
 
 export const promptsRouter: Router = Router();
 const nowIso = () => new Date().toISOString();
@@ -38,6 +39,7 @@ promptsRouter.post(
       createdAt: now,
       updatedAt: now,
     } as Omit<ServerItem, "id">);
+    enqueueRules(uid, item); // run automations for the new prompt (kind/tag/stage rules)
     res.status(201).json({ item: toClientItem(item) });
   }),
 );

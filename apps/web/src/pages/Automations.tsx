@@ -196,7 +196,8 @@ function RuleBuilder({ open, rule, onClose, onSaved }: { open: boolean; rule: Au
           <div className="space-y-2">
             {actions.map((a, i) => (
               <div key={i} className="flex items-center gap-2">
-                <SelectMenu value={a.type} width={170} options={ACTION_OPTS} onChange={(v) => setActions((s) => s.map((x, j) => (j === i ? { type: v as RuleActionType, value: "" } : x)))} ariaLabel="Action" />
+                {/* Seed setStage with a valid default so the shown 'trying' isn't a mirage that keeps Save disabled. */}
+                <SelectMenu value={a.type} width={170} options={ACTION_OPTS} onChange={(v) => setActions((s) => s.map((x, j) => (j === i ? { type: v as RuleActionType, value: v === "setStage" ? "trying" : "" } : x)))} ariaLabel="Action" />
                 {a.type === "setStage" ? (
                   <SelectMenu value={a.value || "trying"} width={140} options={RULE_STAGES.map((s) => ({ value: s, label: s }))} onChange={(v) => setActions((s) => s.map((x, j) => (j === i ? { ...x, value: v } : x)))} ariaLabel="Stage" />
                 ) : needsValue(a.type) ? (

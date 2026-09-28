@@ -5,6 +5,7 @@ import { publish } from "../events.js";
 import { logger } from "../logger.js";
 import { safeFetch } from "../integrations/safe-fetch.js";
 import { putIfMissing } from "../storage/objects.js";
+import { toClientItem } from "./ingest.js";
 
 const nowIso = () => new Date().toISOString();
 const sha256 = (buf: Buffer) => createHash("sha256").update(buf).digest("hex");
@@ -67,6 +68,6 @@ export async function archiveItem(userId: string, itemId: string): Promise<LinkA
     archive = { status: "failed", capturedAt: nowIso(), error: err instanceof Error ? err.message : "Couldn't reach that page." };
   }
   const updated = await store.items.updateById(itemId, { archive, updatedAt: nowIso() } as Partial<ServerItem>);
-  if (updated) publish(userId, { kind: "item.updated", item: updated });
+  if (updated) publish(userId, { kind: "item.updated", item: toClientItem(updated) }); // strip server-only fields
   return archive;
 }
