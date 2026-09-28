@@ -13,3 +13,4 @@ export * from "./readable.js";
 export * from "./bookmarks.js";
 export * from "./rules.js";
 export * from "./filecrypt.js";
+export * from "./security.js";

@@ -29,6 +29,7 @@ import { Add } from "@/pages/Add";
 import { SearchPage } from "@/pages/Search";
 import { Digest } from "@/pages/Digest";
 import { Automations } from "@/pages/Automations";
+import { Security } from "@/pages/Security";
 import { NotFound } from "@/pages/NotFound";
 
 initTheme();
@@ -79,6 +80,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="collections" element={<Collections />} />
           <Route path="collections/:slug" element={<CollectionDetail />} />
           <Route path="trash" element={<Trash />} />
+          <Route path="security" element={<Security />} />
           <Route path="settings" element={<Settings />} />
           <Route path="share" element={<Share />} />
           <Route path="*" element={<NotFound />} />

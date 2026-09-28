@@ -18,6 +18,7 @@ Tracks the strategic feature roadmap against what's actually implemented. Number
 | 11 | Weekly AI digest + review | `modules/digest.ts`, `/digest` |
 | 12 | Link-rot monitor + heal | `modules/linkcheck.ts`, detail drawer + Library bulk check |
 | 13 | Public shareable pages (packs **and** collections) | `/p/:slug`, `/c/:slug` |
+| ★ | Security posture dashboard (skill risk + secret scan + public links + key hygiene → one score) | `packages/shared/security.ts`, `pages/Security.tsx` (`/security`) |
 | — | Import bookmarks (Chrome/Pocket/Raindrop) | `packages/shared/bookmarks.ts`, Add page importer |
 | 9a | Google **multi-account** file federation | already supported (Drive space picker) |
 
@@ -46,5 +47,6 @@ Roles on collections, presence, and conflict handling. Needs an auth/membership 
 ### Moonshots
 - **On-device / local AI** (WebGPU / Ollama): add a "local" provider to the existing multi-provider registry so summaries/tagging/embeddings run at zero marginal cost. Buildable incrementally once an embeddings surface exists.
 - **Agentic bulk ops**: a command bar that plans multi-step actions and shows a preview diff before applying — composes cleanly on top of the Automations matcher (#6) and the Ask retriever (#2).
-- **Security posture dashboard**: roll up the existing repo secret-scan + skill risk-scan + over-shared-link checks into one score.
 - **Skill registry / marketplace**: a discovery layer over the existing scan+trust model.
+
+(Shipped from this list: the **security posture dashboard** — see the Shipped table above / `/security`.)
