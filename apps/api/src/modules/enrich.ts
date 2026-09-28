@@ -119,5 +119,10 @@ export async function enrichItem(userId: string, itemId: string): Promise<void> 
   if (!item || item.kind !== "link" || !item.url) return;
   const patch = await computePatch(item, await tryGithubToken(userId)); // auto-refreshed; null → server/anon token
   const updated = await store.items.updateById(itemId, { ...patch, updatedAt: nowIso() } as Partial<ServerItem>);
-  if (updated) publish(userId, { kind: "item.updated", item: updated });
+  if (updated) {
+    publish(userId, { kind: "item.updated", item: updated });
+    // Now that the item is fully captured (linkType, tags, repoKind known), run the user's automations.
+    const { applyRules } = await import("./rules.js");
+    await applyRules(userId, updated).catch(() => 0);
+  }
 }

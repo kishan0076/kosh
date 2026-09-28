@@ -123,6 +123,7 @@ export async function createMongoStore(uri: string): Promise<Store> {
       s.index({ userId: 1, updatedAt: -1 });
       s.index({ publicSlug: 1 }, { sparse: true }); // public-share lookups (only shared packs carry a slug)
     })),
+    rules: mongoose.model("AutomationRule", flexSchema((s) => s.index({ userId: 1, createdAt: -1 }))),
     apiKeys: mongoose.model("ApiKey", flexSchema((s) => s.index({ keyHash: 1 }, { unique: true }))),
     storageObjects: mongoose.model("StorageObject", flexSchema((s) => s.index({ userId: 1, sha256: 1 }, { unique: true }))),
     uploadSessions: mongoose.model("UploadSession", flexSchema((s) => s.index({ expiresAt: 1 }))),
@@ -143,6 +144,7 @@ export async function createMongoStore(uri: string): Promise<Store> {
     skills: mongoColl(models.skills),
     collections: mongoColl(models.collections),
     contextPacks: mongoColl(models.contextPacks),
+    rules: mongoColl(models.rules),
     apiKeys: mongoColl(models.apiKeys),
     storageObjects: mongoColl(models.storageObjects),
     uploadSessions: mongoColl(models.uploadSessions),

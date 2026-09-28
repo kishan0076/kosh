@@ -92,7 +92,7 @@ class MemoryColl<T extends { id: string }> implements Coll<T> {
   }
 }
 
-const COLLECTIONS = ["users", "items", "skills", "collections", "contextPacks", "apiKeys", "storageObjects", "uploadSessions", "driveAccounts", "driveUploads"] as const;
+const COLLECTIONS = ["users", "items", "skills", "collections", "contextPacks", "rules", "apiKeys", "storageObjects", "uploadSessions", "driveAccounts", "driveUploads"] as const;
 
 /** In-memory store with debounced JSON persistence — runs with zero infra. */
 export function createMemoryStore(dataDir: string): Store {

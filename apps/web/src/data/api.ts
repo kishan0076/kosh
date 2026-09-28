@@ -1,4 +1,4 @@
-import type { Collection, ContextPack, Item, LinkArchive, Skill, User } from "@kosh/shared";
+import type { AutomationRule, Collection, ContextPack, Item, LinkArchive, RuleCondition, Skill, User } from "@kosh/shared";
 import { getSessionTokenSync, isNative } from "@/lib/native";
 
 /** A Context Pack in list form, with a resolved item count. */
@@ -370,6 +370,16 @@ export const api = {
     req<{ user: User }>(`/settings/ai/keys/${encodeURIComponent(provider)}`, { method: "PUT", body: JSON.stringify({ key }) }),
   clearAiKey: (provider: string) =>
     req<{ user: User }>(`/settings/ai/keys/${encodeURIComponent(provider)}`, { method: "DELETE" }),
+
+  // Automations / rules
+  listRules: () => req<{ rules: AutomationRule[] }>("/rules"),
+  createRule: (input: Pick<AutomationRule, "name" | "match" | "conditions" | "actions"> & { enabled?: boolean }) =>
+    req<{ rule: AutomationRule }>("/rules", { method: "POST", body: JSON.stringify(input) }),
+  updateRule: (id: string, patch: Partial<Pick<AutomationRule, "name" | "enabled" | "match" | "conditions" | "actions">>) =>
+    req<{ rule: AutomationRule }>(`/rules/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteRule: (id: string) => req<{ ok: boolean }>(`/rules/${id}`, { method: "DELETE" }),
+  testRule: (match: "all" | "any", conditions: RuleCondition[]) =>
+    req<{ matches: number; total: number }>("/rules/test", { method: "POST", body: JSON.stringify({ match, conditions }) }),
 
   renameTag: (from: string, to: string) => req("/tags/rename", { method: "POST", body: JSON.stringify({ from, to }) }),
   mergeTags: (from: string[], to: string) => req("/tags/merge", { method: "POST", body: JSON.stringify({ from, to }) }),

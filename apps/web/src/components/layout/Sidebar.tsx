@@ -20,6 +20,7 @@ import {
   Settings,
   Trash2,
   UploadCloud,
+  Workflow,
   X,
 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
@@ -96,6 +97,7 @@ export function Sidebar({
     { to: "/skills", label: "Skills", icon: Blocks, badge: skillCount },
     { to: "/prompts", label: "Prompts", icon: Quote, badge: promptCount },
     { to: "/packs", label: "Context Packs", icon: Package },
+    { to: "/automations", label: "Automations", icon: Workflow },
     { to: "/github", label: "GitHub", icon: Github },
     { to: "/drive-v2", label: "Drive", icon: HardDrive },
     { to: "/drive", label: "Drive (classic)", icon: UploadCloud },
