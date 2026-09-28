@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, Folder, FolderPlus, HardDrive, MoreHorizontal, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Folder, FolderPlus, HardDrive, Lock, LockOpen, MoreHorizontal, ShieldCheck, Trash2, Upload } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui";
@@ -74,6 +74,7 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
             <Button variant="outline" size="sm" className="border-danger/40 text-danger hover:bg-danger-soft" onClick={() => openDialog({ kind: "empty-trash" })}><Trash2 size={14} /> Empty trash</Button>
           ) : view === "myDrive" ? (
             <>
+              <EncryptionControls />
               <Button variant="secondary" size="sm" onClick={onNewFolder}><FolderPlus size={15} /> New folder</Button>
               <Button variant="primary" size="sm" onClick={onUpload}><Upload size={15} /> Upload</Button>
             </>
@@ -81,6 +82,53 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
         </div>
       </div>
     </header>
+  );
+}
+
+/**
+ * Encrypted-folder controls (roadmap #7) — only rendered when the feature flag is on. Inside a real folder
+ * it offers an "Encrypt uploads" toggle (an app-private flag on the folder); when a key is loaded it shows a
+ * subtle lock/unlock affordance. The whole group is absent by default, so the header is unchanged when the
+ * flag is off.
+ */
+function EncryptionControls() {
+  const encEnabled = useDriveV2((s) => s.encEnabled);
+  const encUnlocked = useDriveV2((s) => s.encUnlocked);
+  const currentFolderEnc = useDriveV2((s) => s.currentFolderEnc);
+  const path = useDriveV2((s) => s.path);
+  const spaceId = useDriveV2((s) => s.spaceId);
+  const toggleFolderEncryption = useDriveV2((s) => s.toggleFolderEncryption);
+  const openEncUnlock = useDriveV2((s) => s.openEncUnlock);
+  const lockEnc = useDriveV2((s) => s.lockEnc);
+
+  if (!encEnabled) return null;
+  const folderId = path.at(-1)?.id ?? spaceId ?? "root";
+  const inFolder = path.length > 0; // root can't be marked encrypted
+
+  return (
+    <div className="flex items-center gap-1.5">
+      {inFolder && (
+        <Button
+          variant={currentFolderEnc ? "primary" : "outline"}
+          size="sm"
+          onClick={() => void toggleFolderEncryption(folderId, !currentFolderEnc)}
+          title={currentFolderEnc ? "New uploads here are encrypted — click to turn off" : "Encrypt new uploads into this folder"}
+        >
+          <ShieldCheck size={15} /> {currentFolderEnc ? "Encrypted" : "Encrypt"}
+        </Button>
+      )}
+      {/* A loaded key is shown so the user knows uploads/downloads will seal/open; click to lock or unlock. */}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => (encUnlocked ? lockEnc() : openEncUnlock())}
+        aria-label={encUnlocked ? "Lock encryption (drop the key)" : "Unlock encryption"}
+        title={encUnlocked ? "Encryption unlocked — click to lock" : "Unlock encryption"}
+        className={cn(encUnlocked && "text-gold")}
+      >
+        {encUnlocked ? <LockOpen size={15} /> : <Lock size={15} />}
+      </Button>
+    </div>
   );
 }
 

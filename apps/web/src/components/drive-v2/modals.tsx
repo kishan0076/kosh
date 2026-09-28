@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Check, ChevronRight, CornerUpRight, Folder, FolderPlus, Info, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, ChevronRight, CornerUpRight, Folder, FolderPlus, Info, Lock, ShieldCheck, Trash2 } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { Button, Input, Spinner, Textarea } from "@/components/ui";
@@ -7,6 +7,7 @@ import { Modal } from "@/components/overlays";
 import { driveApi } from "@/data/driveApi";
 import { driveV2Api, FOLDER_COLORS, type DriveNode } from "@/data/driveV2Api";
 import { useDriveV2 } from "@/data/driveV2";
+import { hasDrivePassphrase } from "@/lib/driveEncryption";
 import { NodeIcon } from "./items";
 
 // The Modal panel is a flex column: a body with these classes scrolls while the header and footer stay
@@ -346,6 +347,92 @@ export function EmptyTrashModal({ onClose }: { onClose: () => void }) {
         <Button ref={cancelRef} variant="ghost" onClick={onClose}>Cancel</Button>
         <Button variant="danger" onClick={confirm} disabled={!typeOk} loading={busy}>
           <Trash2 size={15} /> Empty trash
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ── Unlock (or first-time set) the Drive encryption passphrase (roadmap #7) ── */
+export function UnlockEncryptionModal({ onClose }: { onClose: () => void }) {
+  const unlockEnc = useDriveV2((s) => s.unlockEnc);
+  // First run (no verifier yet) is a "create passphrase" flow; afterwards it's "unlock".
+  const [firstRun] = useState(() => !hasDrivePassphrase());
+  const [pass, setPass] = useState("");
+  const [confirmPass, setConfirmPass] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const mismatch = firstRun && confirmPass.length > 0 && pass !== confirmPass;
+  const canSubmit = pass.length >= 8 && (!firstRun || pass === confirmPass) && !busy;
+
+  async function submit() {
+    if (!canSubmit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const ok = await unlockEnc(pass);
+      if (ok) onClose();
+      else setError("That passphrase is incorrect.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't unlock.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal open onClose={onClose} className="max-w-md" labelledBy="enc-title">
+      <div className="flex items-center gap-3 border-b border-border px-5 py-4">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-primary-soft text-primary">
+          {firstRun ? <ShieldCheck size={20} /> : <Lock size={20} />}
+        </span>
+        <div className="min-w-0">
+          <h2 id="enc-title" className="text-[15px] font-semibold">{firstRun ? "Set an encryption passphrase" : "Unlock encrypted files"}</h2>
+          <p className="truncate text-[12px] text-muted">Files in encrypted folders are sealed in your browser.</p>
+        </div>
+      </div>
+      <div className={cn(BODY, "space-y-3 px-5 py-4")}>
+        <p className="text-[12.5px] text-muted">
+          {firstRun
+            ? "This passphrase derives the key that encrypts your files before they reach Google. It never leaves this device and can't be recovered — if you forget it, the encrypted files can't be opened."
+            : "Enter your passphrase to seal new uploads and open encrypted downloads. It stays in memory only for this session."}
+        </p>
+        <div>
+          <label htmlFor="enc-pass" className="mb-1.5 block text-[12px] font-medium text-muted">Passphrase</label>
+          <Input
+            ref={inputRef}
+            id="enc-pass"
+            type="password"
+            value={pass}
+            onChange={(e) => setPass(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !firstRun) void submit(); }}
+            placeholder="At least 8 characters"
+            autoComplete={firstRun ? "new-password" : "current-password"}
+          />
+        </div>
+        {firstRun && (
+          <div>
+            <label htmlFor="enc-confirm" className="mb-1.5 block text-[12px] font-medium text-muted">Confirm passphrase</label>
+            <Input
+              id="enc-confirm"
+              type="password"
+              value={confirmPass}
+              onChange={(e) => setConfirmPass(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
+              autoComplete="new-password"
+            />
+            {mismatch && <p className="mt-1 text-[11.5px] text-danger">The passphrases don't match.</p>}
+          </div>
+        )}
+        {error && <p className="text-[12px] text-danger">{error}</p>}
+      </div>
+      <div className="flex shrink-0 justify-end gap-2 border-t border-border px-5 py-3.5">
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button variant="primary" onClick={submit} disabled={!canSubmit} loading={busy}>
+          {firstRun ? <><ShieldCheck size={15} /> Set passphrase</> : <><Lock size={15} /> Unlock</>}
         </Button>
       </div>
     </Modal>

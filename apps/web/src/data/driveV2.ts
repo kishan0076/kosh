@@ -10,6 +10,19 @@ import { parseDriveSearch, dedupeDriveActivity, parseTags, normalizeTag, seriali
 import { saveBlob } from "@/lib/download";
 import { makeZip, uniqueName, type ZipEntry } from "@/lib/zip";
 import type { UploadItem } from "@/lib/dropUpload";
+import {
+  driveEncryptionEnabled,
+  setDriveEncryptionEnabled,
+  isDriveUnlocked,
+  isEncryptedFolder,
+  isEncryptedNode,
+  encryptForUpload,
+  decryptDownload,
+  unlockDrive,
+  lockDrive,
+  ENC_PROP,
+  type PreparedUpload,
+} from "@/lib/driveEncryption";
 
 /** Push a toast without a React hook (store actions run outside components). */
 function pushToast(t: Omit<Toast, "id">): void {
@@ -233,6 +246,28 @@ interface DriveV2State {
   downloadZip: (ids: string[]) => Promise<void>;
   /** Fetch a small text/code/CSV file's contents (alt=media) for inline Quick Look. */
   fetchFileText: (node: DriveNode) => Promise<string>;
+
+  /* ── encrypted folders (roadmap #7, behind a feature flag) ── */
+  /** The feature flag is on (build-time env OR the runtime switch). OFF ⇒ the Drive path is unchanged. */
+  encEnabled: boolean;
+  /** An in-memory encryption key is loaded this session (needed to seal uploads / open downloads). */
+  encUnlocked: boolean;
+  /** The folder currently browsed is marked "encrypt uploads". */
+  currentFolderEnc: boolean;
+  /** The unlock / create-passphrase modal is showing. */
+  encUnlockOpen: boolean;
+  /** Re-read the flag + unlocked state from the crypto lib into the store (for reactivity). */
+  refreshEncState: () => void;
+  /** Turn the runtime feature switch on/off (build-time env can force it on regardless). */
+  setEncEnabled: (on: boolean) => void;
+  /** Unlock (or first-time set) the passphrase → derive the session key. Returns false on a wrong passphrase. */
+  unlockEnc: (passphrase: string) => Promise<boolean>;
+  /** Drop the in-memory key. */
+  lockEnc: () => void;
+  openEncUnlock: () => void;
+  closeEncUnlock: () => void;
+  /** Mark / unmark the folder as "encrypt uploads" (an app-private appProperties flag on the folder). */
+  toggleFolderEncryption: (id: string, on: boolean) => Promise<void>;
 }
 
 /* ── module-level (no re-render) ── */
@@ -255,7 +290,7 @@ let nodesKey: string | null = null; // cacheKey the currently-shown `nodes` belo
 const uploadControls = new Map<string, ResumableControl>();
 // Pause/resume + retry state, keyed by upload-tray row id. `uploadJobs` holds what's needed to (re)start
 // an upload; `uploadResumes` holds where a paused upload left off (Google's session URI + byte offset).
-const uploadJobs = new Map<string, { accountId: string; file: File; folderId: string }>();
+const uploadJobs = new Map<string, { accountId: string; file: File; folderId: string; enc?: PreparedUpload }>();
 const uploadResumes = new Map<string, { sessionUri: string; uploaded: number }>();
 
 /* Live-sync controller (module-level so it survives re-renders; driven by the page's mount effect). */
@@ -396,18 +431,31 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const control: ResumableControl = { paused: false, canceled: false };
     uploadControls.set(id, control);
     set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "uploading" } : u)) }));
+    // When the file was sealed for an encrypted folder, upload the (stable) ciphertext blob under its
+    // .kenc name — never the plaintext. The prepared blob is reused verbatim across pause/resume so the
+    // resumable session's earlier chunks always match.
+    const enc = uploadJobs.get(id)?.enc;
     try {
-      await resumableUpload({
+      const result = await resumableUpload({
         accessToken: await ensureToken(accountId),
-        file,
-        name: file.name,
-        mimeType: file.type || "application/octet-stream",
+        file: enc?.blob ?? file,
+        name: enc?.name ?? file.name,
+        mimeType: enc?.mimeType ?? (file.type || "application/octet-stream"),
         folderId,
         control,
         resumeFrom,
         onProgress: (b) => set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: b } : u)) })),
         getFreshToken: () => ensureToken(accountId),
       });
+      // Stamp the app-private encryption markers as a follow-up patch (never blocks the save; the .kenc name
+      // + container magic still identify the file for decryption if this best-effort patch fails).
+      if (enc && result?.id) {
+        try {
+          await driveV2Api.updateMeta(accountId, result.id, { appProperties: enc.appProperties });
+        } catch {
+          /* markers are best-effort */
+        }
+      }
       uploadJobs.delete(id);
       uploadResumes.delete(id);
       set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, uploaded: u.size, status: "done" } : u)) }));
@@ -429,12 +477,39 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     }
   }
 
-  /** Create a tray row for a new file and upload it into `folderId`. Shared by uploadFiles + uploadDropped. */
-  async function uploadOneFile(accountId: string, file: File, folderId: string): Promise<void> {
+  /** Create a tray row for a new file and upload it into `folderId`. Shared by uploadFiles + uploadDropped.
+   *  When `encrypt` is set (feature flag ON + an encrypted folder + an unlocked key), the file is sealed
+   *  client-side first and only the ciphertext leaves the browser. */
+  async function uploadOneFile(accountId: string, file: File, folderId: string, encrypt = false): Promise<void> {
     const id = uid("up");
-    uploadJobs.set(id, { accountId, file, folderId });
-    set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "uploading" }, ...s.uploads] }));
+    let enc: PreparedUpload | undefined;
+    if (encrypt) {
+      try {
+        enc = await encryptForUpload(file);
+      } catch (err) {
+        // A file that can't be sealed must NOT silently fall back to a plaintext upload into an
+        // "encrypted" folder — show a failed row instead.
+        set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "error", error: err instanceof Error ? err.message : "Couldn't encrypt this file." }, ...s.uploads] }));
+        return;
+      }
+    }
+    uploadJobs.set(id, { accountId, file, folderId, enc });
+    // Track ciphertext size so the progress bar reflects the bytes actually being sent.
+    set((s) => ({ uploads: [{ id, name: file.name, size: enc?.blob.size ?? file.size, uploaded: 0, status: "uploading" }, ...s.uploads] }));
     await runUpload(id, accountId, file, folderId);
+  }
+
+  /** Decide whether an upload batch into the CURRENT folder must be encrypted, gating on the key.
+   *  Returns { encrypt } to proceed, or null after prompting to unlock (the caller must then abort so a
+   *  file never lands in plaintext inside a folder the user marked encrypted). */
+  function resolveUploadEncryption(): { encrypt: boolean } | null {
+    if (!driveEncryptionEnabled() || !get().currentFolderEnc) return { encrypt: false };
+    if (!isDriveUnlocked()) {
+      set({ encUnlockOpen: true });
+      toastErr("Unlock Drive encryption to upload to this encrypted folder.");
+      return null;
+    }
+    return { encrypt: true };
   }
 
   function selectedAccount(): DriveAccount | undefined {
@@ -462,6 +537,14 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(node.id)}?alt=media&supportsAllDrives=true`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) throw new Error(`Download failed (${res.status})`);
+    // Kosh-encrypted files come down as ciphertext — decrypt client-side (needs an unlocked key) and restore
+    // the original name. A plain file is returned untouched, so the default download path is unchanged.
+    if (isEncryptedNode(node)) {
+      if (!isDriveUnlocked()) { set({ encUnlockOpen: true }); throw new Error("Unlock Drive encryption to open this file."); }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      const { bytes: plain, name } = await decryptDownload(bytes, node);
+      return { blob: new Blob([plain] as BlobPart[]), filename: name };
+    }
     return { blob: await res.blob(), filename: node.name };
   }
 
@@ -489,6 +572,22 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     });
   }
 
+  /** Keep `currentFolderEnc` in sync with the folder being browsed (only when the feature flag is on).
+   *  Root / Shared-Drive roots and non-folder views can't be marked, so they reset to false. */
+  async function refreshFolderEnc(accountId: string, view: DriveView, folderId: string): Promise<void> {
+    if (!driveEncryptionEnabled() || view !== "myDrive" || folderId === "root" || folderId === get().spaceId) {
+      if (get().currentFolderEnc) set({ currentFolderEnc: false });
+      return;
+    }
+    const seq = loadSeq;
+    try {
+      const { file } = await driveV2Api.getFile(accountId, folderId);
+      if (seq === loadSeq) set({ currentFolderEnc: isEncryptedFolder(file) }); // ignore a result the user navigated past
+    } catch {
+      /* non-fatal — a failed marker check just leaves uploads unencrypted, never blocks browsing */
+    }
+  }
+
   async function load(force = false): Promise<void> {
     const { accountId, view, path, searchQuery, aiSearchQuery, searchStarredOnly, spaceId } = get();
     if (!accountId || !get().scopeOk) return;
@@ -496,6 +595,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const driveId = spaceId ?? undefined;
     const key = cacheKey(view, folderId);
     const myseq = ++loadSeq;
+    void refreshFolderEnc(accountId, view, folderId);
 
     // Navigating to a DIFFERENT context (view/space/folder) drops the client-side tag filter, so a
     // stale filter can't make a populated view look empty. A same-context refresh keeps it.
@@ -900,6 +1000,10 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     busyIds: new Set(),
     dialog: null,
     uploads: [],
+    encEnabled: driveEncryptionEnabled(),
+    encUnlocked: isDriveUnlocked(),
+    currentFolderEnc: false,
+    encUnlockOpen: false,
     insightsOpen: false,
     setInsights: (v) => {
       const closing = !v && get().insightsOpen;
@@ -1530,7 +1634,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         toastErr("Couldn't start the upload — reconnect the account.");
         return;
       }
-      for (const file of files) await uploadOneFile(accountId, file, folderId);
+      const dec = resolveUploadEncryption();
+      if (!dec) return;
+      for (const file of files) await uploadOneFile(accountId, file, folderId, dec.encrypt);
       invalidateFolderViews();
       void get().loadQuota();
       if (get().view === "myDrive") void load(true);
@@ -1545,6 +1651,8 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         toastErr("Couldn't start the upload — reconnect the account.");
         return;
       }
+      const dec = resolveUploadEncryption();
+      if (!dec) return;
       const rootId = currentFolderId(get().path, get().spaceId);
       // Cache of created folder ids keyed by the joined relative path ("" = the drop target itself), so a
       // deep tree creates each folder exactly once and every file lands under the right parent.
@@ -1751,6 +1859,42 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`Preview failed (${res.status})`);
       return res.text();
+    },
+
+    /* ── encrypted folders (roadmap #7) ── */
+    refreshEncState: () => set({ encEnabled: driveEncryptionEnabled(), encUnlocked: isDriveUnlocked() }),
+    setEncEnabled: (on) => {
+      setDriveEncryptionEnabled(on);
+      set({ encEnabled: driveEncryptionEnabled(), encUnlocked: isDriveUnlocked() });
+    },
+    unlockEnc: async (passphrase) => {
+      const ok = await unlockDrive(passphrase);
+      if (ok) set({ encUnlocked: true, encUnlockOpen: false });
+      return ok;
+    },
+    lockEnc: () => {
+      lockDrive();
+      set({ encUnlocked: false });
+    },
+    openEncUnlock: () => set({ encUnlockOpen: true }),
+    closeEncUnlock: () => set({ encUnlockOpen: false }),
+    toggleFolderEncryption: async (id, on) => {
+      const accountId = get().accountId;
+      if (!accountId) return;
+      const ok = await mutate(
+        [id],
+        (nodes) => nodes.map((n) => (n.id === id ? { ...n, appProperties: { ...(n.appProperties ?? {}), ...(on ? { [ENC_PROP]: "1" } : {}) } } : n)),
+        async () => {
+          await driveV2Api.updateMeta(accountId, id, { appProperties: { [ENC_PROP]: on ? "1" : null } });
+        },
+        { invalidate: [] },
+      );
+      if (ok) {
+        // Keep the current-folder marker + toast in sync so the toolbar toggle + upload path see it at once.
+        if (currentFolderId(get().path, get().spaceId) === id) set({ currentFolderEnc: on });
+        pushToast({ message: on ? "New uploads to this folder will be encrypted." : "Encryption turned off for new uploads.", tone: "ok" });
+        if (on && !isDriveUnlocked()) set({ encUnlockOpen: true });
+      }
     },
   };
 });

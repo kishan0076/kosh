@@ -1,12 +1,20 @@
 import { memo, useEffect, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
-import { formatBytes, sortDriveNodes, parseTags, tagColorIndex } from "@kosh/shared";
+import { Check, File, FileArchive, FileText, Film, Folder, FolderOpen, Image as ImageIcon, Lock, MoreVertical, Music, Presentation, Search, Star, Table, UploadCloud } from "lucide-react";
+import { formatBytes, sortDriveNodes, parseTags, tagColorIndex, decryptedName } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
 import { Button, Skeleton, Spinner } from "@/components/ui";
 import { kindOf, type DriveKind, type DriveNode } from "@/data/driveV2Api";
 import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
+import { isEncryptedNode, ENC_NAME_PROP } from "@/lib/driveEncryption";
 import { getDragIds, hasDriveDrag } from "./dnd";
+
+/** The name to SHOW for a node: an encrypted file's stored name is `<orig>.kenc`, so display its recorded
+ *  original (or strip the suffix) instead of the ciphertext filename. Everything else shows verbatim. */
+export function displayName(node: DriveNode): string {
+  if (isEncryptedNode(node)) return node.appProperties?.[ENC_NAME_PROP] || decryptedName(node.name);
+  return node.name;
+}
 
 /**
  * Order nodes for display (folders always first, then by key). The single source of truth for the
@@ -158,7 +166,8 @@ interface ItemProps extends ItemHandlers {
 
 /** Accessible name for a cell — otherwise a screen reader concatenates every inner control's label. */
 function itemLabel(node: DriveNode): string {
-  const parts: string[] = [node.name, node.isFolder ? "folder" : kindOf(node)];
+  const parts: string[] = [displayName(node), node.isFolder ? "folder" : kindOf(node)];
+  if (isEncryptedNode(node)) parts.push("encrypted");
   if (!node.isFolder && node.size != null) parts.push(formatBytes(node.size));
   if (node.starred) parts.push("starred");
   if (node.modifiedTime) parts.push(`modified ${ago(node.modifiedTime)}`);
@@ -280,7 +289,10 @@ function FileRowImpl({ node, index, colIndex, selected, busy, renaming, focusabl
           <InlineRename node={node} onSubmit={(name) => onRenameSubmit(node, name)} onCancel={onRenameCancel} />
         ) : (
           <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium">{node.name}</span>
+            <span className="flex items-center gap-1 font-medium">
+              {isEncryptedNode(node) && <Lock size={11} className="shrink-0 text-gold" aria-label="Encrypted" />}
+              <span className="truncate">{displayName(node)}</span>
+            </span>
             <span className="block truncate font-mono text-[11.5px] tabular text-muted md:hidden">{metaLine(node)}</span>
           </span>
         )}
@@ -369,6 +381,13 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
           <NodeIcon node={node} size={44} thumb />
         )}
 
+        {/* encrypted badge — Google only holds ciphertext, so no meaningful thumbnail exists */}
+        {isEncryptedNode(node) && (
+          <span className="absolute bottom-2 right-2 grid h-6 w-6 place-items-center rounded-full bg-surface/85 text-gold backdrop-blur" title="Encrypted — stored as ciphertext">
+            <Lock size={13} />
+          </span>
+        )}
+
         {/* select disc */}
         <div className="absolute left-2 top-2">
           <SelectDisc selected={selected} onToggle={() => onToggleSelect(node)} tabIndex={innerTab} />
@@ -411,7 +430,7 @@ function FileCardImpl({ node, index, colIndex, selected, busy, renaming, focusab
         ) : (
           // Two clamped lines on phones so extensions/versions survive ("backup-2026-09-21.tar.gz");
           // the reserved height keeps a row of cards aligned. One truncated line from sm up.
-          <span className="line-clamp-2 min-h-[2.5em] break-words text-[13px] font-medium leading-snug [overflow-wrap:anywhere] sm:line-clamp-1 sm:min-h-0 sm:leading-normal">{node.name}</span>
+          <span className="line-clamp-2 min-h-[2.5em] break-words text-[13px] font-medium leading-snug [overflow-wrap:anywhere] sm:line-clamp-1 sm:min-h-0 sm:leading-normal">{displayName(node)}</span>
         )}
         <span className="truncate font-mono text-[11px] tabular text-faint">{metaLine(node)}</span>
         <TagChips node={node} className="mt-1" />

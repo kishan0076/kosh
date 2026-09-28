@@ -12,3 +12,4 @@ export * from "./drive-v2.js";
 export * from "./readable.js";
 export * from "./bookmarks.js";
 export * from "./rules.js";
+export * from "./filecrypt.js";

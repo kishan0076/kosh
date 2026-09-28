@@ -35,7 +35,8 @@ import { EmptyState, PageHeader, SectionCard } from "@/components/common";
 import { Collapse } from "@/components/motion";
 import { Modal, SelectMenu } from "@/components/overlays";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Avatar, Badge, Button, Input, Skeleton } from "@/components/ui";
+import { Avatar, Badge, Button, Input, Skeleton, Toggle } from "@/components/ui";
+import { useDriveV2 } from "@/data/driveV2";
 
 // Demo keys for mock mode; real keys are loaded from the API when a backend is wired.
 const DEMO_KEYS: ApiKeyPublic[] = [
@@ -265,6 +266,9 @@ export function Settings() {
             <ThemeToggle />
           </div>
         </SectionCard>
+
+        {/* labs / experimental */}
+        <EncryptedDriveCard />
 
         {/* storage + budget */}
         <SectionCard title="Storage & budget" className="lg:col-span-2">
@@ -592,6 +596,38 @@ export function Settings() {
 
       <NewKeyModal newKey={newKey} onClose={() => setNewKey(null)} onCopy={copy} />
     </div>
+  );
+}
+
+/** Labs toggle for encrypted Drive folders (roadmap #7). When on, folders can be marked "encrypt uploads"
+ *  and their files are sealed in the browser before reaching Google (only ciphertext is stored). Off by
+ *  default — the Drive path is byte-identical to before. A build-time env can force it on. */
+function EncryptedDriveCard() {
+  const encEnabled = useDriveV2((s) => s.encEnabled);
+  const setEncEnabled = useDriveV2((s) => s.setEncEnabled);
+  const toast = useUi((s) => s.toast);
+  return (
+    <SectionCard title="Labs" subtitle="Experimental features, off by default">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-[14px] font-medium">
+            <ShieldCheck size={15} className="shrink-0 text-gold" /> Encrypted Drive folders
+          </div>
+          <div className="mt-0.5 text-[12.5px] text-muted">
+            Mark a folder “encrypt uploads” and its files are sealed in your browser (AES-256-GCM) before they
+            reach Google — only ciphertext is stored. The passphrase never leaves this device.
+          </div>
+        </div>
+        <Toggle
+          checked={encEnabled}
+          label="Enable encrypted Drive folders"
+          onChange={(on) => {
+            setEncEnabled(on);
+            toast({ message: on ? "Encrypted Drive folders enabled." : "Encrypted Drive folders disabled.", tone: on ? "ok" : "default" });
+          }}
+        />
+      </div>
+    </SectionCard>
   );
 }
 

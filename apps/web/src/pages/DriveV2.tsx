@@ -55,7 +55,7 @@ import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileR
 import { PageHeader } from "@/components/drive-v2/PageHeader";
 import { DriveRail } from "@/components/drive-v2/DriveRail";
 import { ContextMenu, type MenuAction } from "@/components/drive-v2/ContextMenu";
-import { ChangeFolderColorModal, CreateFolderModal, DeleteConfirmModal, EmptyTrashModal, MoveToModal } from "@/components/drive-v2/modals";
+import { ChangeFolderColorModal, CreateFolderModal, DeleteConfirmModal, EmptyTrashModal, MoveToModal, UnlockEncryptionModal } from "@/components/drive-v2/modals";
 import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
@@ -548,8 +548,19 @@ function Shell() {
       {dialog?.kind === "empty-trash" && <EmptyTrashModal onClose={() => store.getState().closeDialog()} />}
       {dialog?.kind === "cleanup" && <CleanupModal onClose={() => store.getState().closeDialog()} />}
       {previewNode && <PreviewOverlay node={previewNode} list={visible} onClose={() => store.getState().setPreview(null)} />}
+      <EncryptionUnlockGate />
     </div>
   );
+}
+
+/** Renders the passphrase modal whenever the store asks to unlock (upload gate, folder toggle, or a
+ *  manual "Unlock" click). Kept tiny + subscribed to a single flag so the rest of the page never re-renders
+ *  on unlock-modal open/close. */
+function EncryptionUnlockGate() {
+  const open = useDriveV2((s) => s.encUnlockOpen);
+  const close = useDriveV2((s) => s.closeEncUnlock);
+  if (!open) return null;
+  return <UnlockEncryptionModal onClose={close} />;
 }
 
 /* ── mobile top bar + rail drawer (shown below lg, where the full sidebar would bury the file list) ── */

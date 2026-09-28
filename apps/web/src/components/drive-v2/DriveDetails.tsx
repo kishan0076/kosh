@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { motion } from "motion/react";
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, MessageSquare, Palette, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, Share2, Sparkles, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, CheckCircle2, ChevronLeft, ChevronRight, CornerDownRight, CornerUpRight, Download, ExternalLink, Eye, Lock, MessageSquare, Palette, Pencil, Plus, RefreshCw, RotateCcw, RotateCw, Share2, Sparkles, Star, Tag, Trash2, User, Users, X, ZoomIn, ZoomOut } from "lucide-react";
 import { formatBytes, normalizeTag, parseTags, isNativeGoogleDoc, driveHasTextSource } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { ago } from "@/lib/time";
-import { NodeIcon, tagChipClass } from "./items";
+import { NodeIcon, tagChipClass, displayName } from "./items";
 import { FolderColorSwatches } from "./modals";
+import { isEncryptedNode } from "@/lib/driveEncryption";
 import { Button, Input, Skeleton, Spinner, Textarea } from "@/components/ui";
 import { SkeletonText } from "@/components/PageSkeleton";
 import { Markdown } from "@/components/markdown";
@@ -660,10 +661,13 @@ const SWIPE_PX = 60; // horizontal drag past this pages the filmstrip
 /** Full-screen Quick Look: native rendering for images (zoom/rotate) and text/markdown/code/CSV; a
  *  Drive iframe for PDF/Docs/Sheets/Slides/video; filmstrip prev/next across the visible list. */
 export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; list?: DriveNode[]; onClose: () => void }) {
-  const isImage = node.mimeType.startsWith("image/");
+  // Encrypted files are ciphertext to Google — its thumbnail/embed/text are meaningless, so every inline
+  // renderer is bypassed for a "decrypt & download" placeholder.
+  const encrypted = isEncryptedNode(node);
+  const isImage = !encrypted && node.mimeType.startsWith("image/");
   const imgSrc = node.thumbnailLink?.replace(/=s\d+$/, "=s1600") ?? node.webContentLink;
-  const textKind = !isImage ? textPreviewKind(node) : null;
-  const frame = !isImage && !textKind ? embedUrl(node) : null;
+  const textKind = !encrypted && !isImage ? textPreviewKind(node) : null;
+  const frame = !encrypted && !isImage && !textKind ? embedUrl(node) : null;
 
   const [loading, setLoading] = useState(!isImage && !textKind && !!frame);
   const [text, setText] = useState<string | null>(null);
@@ -717,7 +721,7 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
       {/* Top bar: on phones the name + close share the first row and the actions wrap to a second one;
           from sm up it's a single row. Padded past the notch. */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 pb-2 pt-[max(0.5rem,var(--safe-top))] text-white sm:py-3" onClick={(e) => e.stopPropagation()}>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{node.name}</span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium">{displayName(node)}</span>
         <ChromeBtn onClick={onClose} label="Close preview" className="sm:order-last"><X size={18} /></ChromeBtn>
         <div className="flex basis-full items-center justify-end gap-1 sm:basis-auto">
           <span className="hidden sm:contents">{counter}</span>
@@ -751,7 +755,16 @@ export function PreviewOverlay({ node, list = [], onClose }: { node: DriveNode; 
         {hasPrev && <button onClick={() => go(-1)} aria-label="Previous" className="pressable absolute left-2 top-1/2 z-10 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white shadow-[var(--shadow-pop)] backdrop-blur hover:bg-black/75 sm:grid"><ChevronLeft size={22} /></button>}
         {hasNext && <button onClick={() => go(1)} aria-label="Next" className="pressable absolute right-2 top-1/2 z-10 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-black/60 text-white shadow-[var(--shadow-pop)] backdrop-blur hover:bg-black/75 sm:grid"><ChevronRight size={22} /></button>}
 
-        {isImage && imgSrc ? (
+        {encrypted ? (
+          <div className="mx-auto max-w-sm rounded-2xl bg-surface p-8 text-center text-foreground shadow-2xl">
+            <span className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-3xl bg-gold-soft text-gold"><Lock size={30} /></span>
+            <div className="font-display text-[17px] font-semibold">Encrypted file</div>
+            <p className="mx-auto mt-1.5 max-w-xs text-[13px] text-muted">
+              Google only stores ciphertext, so there's no inline preview. Decrypt it in your browser to save the original.
+            </p>
+            <Button variant="primary" onClick={() => void useDriveV2.getState().downloadNode(node.id)} className="mx-auto mt-5"><Download size={15} /> Decrypt &amp; download</Button>
+          </div>
+        ) : isImage && imgSrc ? (
           <img
             src={imgSrc}
             alt={node.name}
