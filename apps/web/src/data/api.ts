@@ -322,6 +322,9 @@ export const api = {
   patchSkill: (id: string, patch: Record<string, unknown>) => req<{ skill: Skill }>(`/skills/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 
   createCollection: (name: string) => req<{ collection: Collection }>("/collections", { method: "POST", body: JSON.stringify({ name }) }),
+  shareCollection: (id: string, isPublic: boolean) => req<{ collection: Collection }>(`/collections/${id}/share`, { method: "POST", body: JSON.stringify({ public: isPublic }) }),
+  getPublicCollection: (slug: string) =>
+    req<{ name: string; icon?: string; color?: string; items: { title: string; kind: string; linkType?: string; url?: string; tags: string[]; summary?: string }[] }>(`/collections/public/${encodeURIComponent(slug)}`),
 
   // Context Packs — named, versioned bundles of saved items an AI agent loads in one shot via MCP.
   listPacks: () => req<{ packs: PackListEntry[] }>("/packs"),

@@ -292,6 +292,9 @@ export interface Collection {
   order: number;
   isSmart?: boolean;
   filter?: Record<string, unknown>;
+  /** Read-only public sharing: when `public`, anyone with the unguessable `publicSlug` can view it. */
+  public?: boolean;
+  publicSlug?: string;
 }
 
 /**

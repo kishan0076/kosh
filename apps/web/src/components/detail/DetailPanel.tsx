@@ -47,7 +47,7 @@ import { GitHubMark, itemIcon, TOOL_COLOR_VAR } from "@/lib/icons";
 import { useSetStage } from "@/lib/useSetStage";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
-import { live } from "@/data/selectors";
+import { live, related } from "@/data/selectors";
 import { api, type PackListEntry } from "@/data/api";
 import { Badge, Button, Divider, Input, Textarea, Toggle } from "../ui";
 import { Menu, MenuItem, MenuLabel, MenuSeparator } from "../overlays";
@@ -439,6 +439,38 @@ function AddToPackMenu({ item }: { item: Item }) {
   );
 }
 
+/* ── Related rail (knowledge-graph backlinks) ───────────────── */
+function RelatedRail({ item }: { item: Item }) {
+  const items = useData((s) => s.items);
+  const openItem = useUi((s) => s.openItem);
+  const hits = useMemo(() => related(item, items, 6), [item, items]);
+  if (!hits.length) return null;
+  return (
+    <div className="px-4 py-4">
+      <h4 className="mb-2 text-[13px] font-semibold">Related</h4>
+      <div className="space-y-1.5">
+        {hits.map(({ item: r, reasons }) => {
+          const Icon = itemIcon(r);
+          return (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => openItem(r.id)}
+              className="pressable flex w-full items-center gap-2.5 rounded-[var(--radius-control)] border border-border bg-surface px-2.5 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-2"
+            >
+              <span className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-surface-2 text-muted">
+                {r.linkType === "repo" ? <GitHubMark size={12} /> : <Icon size={13} />}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{r.title || r.url || "Untitled"}</span>
+              {reasons[0] && <span className="shrink-0 truncate text-[11px] text-faint">{reasons[0]}</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /* ── Non-skill body ─────────────────────────────────────────── */
 function ItemBody({ item }: { item: Item }) {
   const readmes = useData((s) => s.readmes);
@@ -604,6 +636,9 @@ function ItemBody({ item }: { item: Item }) {
 
       <Divider className="my-4" />
       <MetaRail item={item} />
+
+      <Divider className="my-1" />
+      <RelatedRail item={item} />
 
       {/* github stats */}
       {g && (

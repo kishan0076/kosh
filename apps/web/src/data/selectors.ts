@@ -4,6 +4,38 @@ import { STAGES } from "@kosh/shared";
 export const live = (items: Item[]): Item[] => items.filter((i) => !i.deletedAt);
 export const trashed = (items: Item[]): Item[] => items.filter((i) => !!i.deletedAt);
 
+const domainOf = (url?: string): string | undefined => {
+  if (!url) return undefined;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return undefined;
+  }
+};
+
+/** Items related to `item`, scored by shared tags, same domain, shared collection, and same type.
+ *  Pure and client-side — the "knowledge graph" edges derived without a backend. */
+export function related(item: Item, items: Item[], limit = 6): { item: Item; score: number; reasons: string[] }[] {
+  const tags = new Set(item.tags);
+  const cols = new Set(item.collections);
+  const dom = domainOf(item.url);
+  const out: { item: Item; score: number; reasons: string[] }[] = [];
+  for (const other of items) {
+    if (other.id === item.id || other.deletedAt) continue;
+    let score = 0;
+    const reasons: string[] = [];
+    const sharedTags = other.tags.filter((t) => tags.has(t));
+    if (sharedTags.length) { score += sharedTags.length * 2; reasons.push(`#${sharedTags[0]}${sharedTags.length > 1 ? ` +${sharedTags.length - 1}` : ""}`); }
+    if (dom && domainOf(other.url) === dom) { score += 3; reasons.push(dom); }
+    const sharedCols = other.collections.filter((c) => cols.has(c));
+    if (sharedCols.length) { score += 2; reasons.push("same collection"); }
+    if (other.kind === item.kind && item.kind !== "link") { score += 1; }
+    if (other.linkType && item.linkType && other.linkType === item.linkType) { score += 1; }
+    if (score > 0) out.push({ item: other, score, reasons });
+  }
+  return out.sort((a, b) => b.score - a.score || b.item.updatedAt.localeCompare(a.item.updatedAt)).slice(0, limit);
+}
+
 /** Items whose stage still needs a decision (Inbox = to-try, freshly captured). */
 export const inbox = (items: Item[]): Item[] =>
   live(items)

@@ -139,6 +139,7 @@ interface DataState {
 
   createCollection: (name: string) => Collection;
   toggleItemCollection: (itemId: string, collectionId: string) => void;
+  setCollectionPublic: (id: string, isPublic: boolean) => Promise<Collection | undefined>;
 
   publishRepo: (input: PublishRepoInput, onProgress?: (p: PublishProgress) => void) => Promise<PublishedRepo>;
 
@@ -791,6 +792,17 @@ export const useData = create<DataState>()(
         const has = cur.collections.includes(collectionId);
         const next = has ? cur.collections.filter((c) => c !== collectionId) : [...cur.collections, collectionId];
         get().patchItem(itemId, { collections: next });
+      },
+      setCollectionPublic: async (id, isPublic) => {
+        if (!get().backend) return undefined;
+        try {
+          const { collection } = await api.shareCollection(id, isPublic);
+          set((s) => ({ collections: s.collections.map((c) => (c.id === id ? collection : c)) }));
+          return collection;
+        } catch (err) {
+          notifyError("Couldn't update sharing", err);
+          return undefined;
+        }
       },
 
       publishRepo: async (input, onProgress) => {

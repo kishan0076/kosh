@@ -1,17 +1,38 @@
+import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
 import { slugify } from "@kosh/shared";
-import { getStore, type ServerCollection } from "../db/index.js";
+import { getStore, type ServerCollection, type ServerItem } from "../db/index.js";
 import { ah, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 
 export const collectionsRouter: Router = Router();
 const COLORS = ["#4f46e5", "#14b8a6", "#f59e0b", "#ec4899", "#8b5cf6", "#0ea5e9"];
+const randomSlug = () => randomUUID().replace(/-/g, "").slice(0, 22);
 
 function toClient(c: ServerCollection) {
   const { userId: _u, ...rest } = c;
   return rest;
 }
+
+/** Lightweight read-only item view for a public collection page (no notes / owner-private fields). */
+function publicItem(it: ServerItem) {
+  return { title: it.title ?? it.url ?? "Untitled", kind: it.kind, linkType: it.linkType, url: it.url, tags: it.tags, summary: it.ai?.summary ?? it.description };
+}
+
+/* GET /collections/public/:slug — a shared collection, read-only, no auth */
+collectionsRouter.get(
+  "/collections/public/:slug",
+  ah(async (req, res) => {
+    const col = await getStore().collections.findOne({ publicSlug: String(req.params.slug), public: true });
+    if (!col) throw notFound("This shared collection isn't available.");
+    const items = (await getStore().items.find({ userId: col.userId, deletedAt: null }))
+      .filter((i) => i.collections.includes(col.id))
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+      .map(publicItem);
+    res.json({ name: col.name, icon: col.icon, color: col.color, items });
+  }),
+);
 
 collectionsRouter.get(
   "/collections",
@@ -57,6 +78,21 @@ collectionsRouter.patch(
       patch.slug = slugify(body.name);
     }
     if (body.color) patch.color = body.color;
+    const updated = await getStore().collections.updateById(c.id, patch);
+    res.json({ collection: toClient(updated!) });
+  }),
+);
+
+/* POST /collections/:id/share — toggle read-only public sharing ({ public: boolean }) */
+collectionsRouter.post(
+  "/collections/:id/share",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const c = await ownedCollection(uid, String(req.params.id));
+    const { public: isPublic } = z.object({ public: z.boolean() }).parse(req.body);
+    const patch: Partial<ServerCollection> = isPublic
+      ? { public: true, publicSlug: c.publicSlug ?? randomSlug() }
+      : { public: false, publicSlug: undefined };
     const updated = await getStore().collections.updateById(c.id, patch);
     res.json({ collection: toClient(updated!) });
   }),

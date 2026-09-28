@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, FolderOpen, FolderPlus } from "lucide-react";
+import { ArrowLeft, Copy, FolderOpen, FolderPlus, Globe, Share2 } from "lucide-react";
 import type { Collection } from "@kosh/shared";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
@@ -8,7 +8,7 @@ import { live } from "@/data/selectors";
 import { cn } from "@/lib/cn";
 import { EmptyState, PageHeader } from "@/components/common";
 import { ItemGrid } from "@/components/ItemGrid";
-import { Button, Input } from "@/components/ui";
+import { Button, Input, Toggle } from "@/components/ui";
 import { Modal } from "@/components/overlays";
 import { useReveal } from "@/components/cards/ItemCard";
 
@@ -91,7 +91,9 @@ export function CollectionDetail() {
   const { slug } = useParams();
   const items = useData((s) => s.items);
   const collections = useData((s) => s.collections);
+  const backend = useData((s) => s.backend);
   const collection = collections.find((c) => c.slug === slug);
+  const [shareOpen, setShareOpen] = useState(false);
 
   if (!collection) {
     return (
@@ -114,13 +116,65 @@ export function CollectionDetail() {
         title={collection.name}
         subtitle={`${list.length} items`}
         icon={FolderOpen}
+        actions={backend ? (
+          <Button variant="outline" size="sm" onClick={() => setShareOpen(true)}>
+            {collection.public ? <Globe size={15} className="text-ok" /> : <Share2 size={15} />} {collection.public ? "Shared" : "Share"}
+          </Button>
+        ) : undefined}
       />
+      {shareOpen && <ShareCollectionModal open onClose={() => setShareOpen(false)} collection={collection} />}
       {list.length === 0 ? (
         <EmptyState icon={FolderOpen} title="Empty collection" description="Add items to this collection from any card's menu or the detail panel." />
       ) : (
         <ItemGrid key={collection.id} items={list} />
       )}
     </div>
+  );
+}
+
+function ShareCollectionModal({ open, onClose, collection }: { open: boolean; onClose: () => void; collection: Collection }) {
+  const setCollectionPublic = useData((s) => s.setCollectionPublic);
+  const toast = useUi((s) => s.toast);
+  const [busy, setBusy] = useState(false);
+  const shareUrl = collection.publicSlug ? `${window.location.origin}/c/${collection.publicSlug}` : "";
+
+  const toggle = async (next: boolean) => {
+    setBusy(true);
+    const updated = await setCollectionPublic(collection.id, next);
+    setBusy(false);
+    if (updated) toast({ message: next ? "Collection shared" : "Sharing stopped", tone: "ok" });
+  };
+  const copy = () => navigator.clipboard?.writeText(shareUrl).then(() => toast({ message: "Link copied", tone: "ok" })).catch(() => toast({ message: "Copy failed", tone: "danger" }));
+
+  return (
+    <Modal open={open} onClose={onClose} className="max-w-md" labelledBy="share-collection-title">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
+        <Share2 size={18} className="text-primary" />
+        <h2 id="share-collection-title" className="min-w-0 flex-1 truncate text-base font-semibold">Share “{collection.name}”</h2>
+      </div>
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
+        <div className="flex items-center justify-between gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 px-3 py-2.5">
+          <div className="min-w-0">
+            <div className="text-[13.5px] font-medium">Public link</div>
+            <div className="text-[12px] text-muted">Anyone with the link can view this collection read-only.</div>
+          </div>
+          <Toggle checked={!!collection.public} onChange={(next) => void toggle(next)} disabled={busy} label="Public link" />
+        </div>
+        {collection.public && collection.publicSlug && (
+          <div>
+            <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-muted"><Globe size={13} className="text-ok" /> Live link</div>
+            <div className="flex items-center gap-2">
+              <Input readOnly value={shareUrl} onFocus={(e) => e.currentTarget.select()} className="flex-1 font-mono text-[12px]" aria-label="Public link" />
+              <Button variant="outline" size="sm" onClick={copy}><Copy size={14} /> Copy</Button>
+            </div>
+            <p className="mt-2 text-[11.5px] text-faint">Only titles, links and tags are shown — never your notes. Turning sharing off revokes the link.</p>
+          </div>
+        )}
+      </div>
+      <div className="flex shrink-0 justify-end border-t border-border px-5 py-3.5">
+        <Button variant="primary" onClick={onClose}>Done</Button>
+      </div>
+    </Modal>
   );
 }
 
