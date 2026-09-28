@@ -18,6 +18,7 @@ import {
   updatePackFields,
 } from "../modules/packs.js";
 import type { ServerItem } from "../db/index.js";
+import { suggestPack } from "../modules/autopack.js";
 
 export const packsRouter: Router = Router();
 
@@ -70,6 +71,16 @@ packsRouter.get(
       items,
       context: resolved?.markdown ?? "",
     });
+  }),
+);
+
+/* POST /packs/suggest — propose a pack (items + draft instructions) for a natural-language goal */
+packsRouter.post(
+  "/packs/suggest",
+  ah(async (req, res) => {
+    const uid = requireUser(req);
+    const { goal } = z.object({ goal: z.string().min(1).max(500) }).parse(req.body);
+    res.json(await suggestPack(uid, goal));
   }),
 );
 

@@ -10,6 +10,7 @@ import { requireUser } from "../auth/middleware.js";
 import { ingest } from "../modules/ingest.js";
 import { createSkillVersion, type IncomingFile } from "../modules/skills.js";
 import { addItemToPack, createPack, removeItemFromPack, resolvePack, updatePackFields } from "../modules/packs.js";
+import { suggestPack } from "../modules/autopack.js";
 import { askTreasury } from "../modules/ask.js";
 import { AppError } from "../errors.js";
 
@@ -271,6 +272,25 @@ function buildServer(userId: string): McpServer {
         const updated = await removeItemFromPack(store, existing, itemId);
         return json({ pack: updated.name, version: updated.version, itemCount: updated.itemIds.length });
       }),
+  );
+
+  server.registerTool(
+    "suggest_pack",
+    {
+      description: "Propose a Context Pack for a goal: returns a suggested name, a draft instruction preamble, and the relevant saved items (ids). Review, then call create_context_pack with the ids you want.",
+      inputSchema: { goal: z.string().max(500) },
+    },
+    async ({ goal }) => {
+      const s = await suggestPack(userId, goal);
+      return json({
+        name: s.name,
+        instructions: s.instructions,
+        aiAvailable: s.aiAvailable,
+        capReached: s.capReached,
+        itemIds: s.itemIds,
+        items: s.items.map((i) => ({ id: i.id, title: i.title ?? i.url ?? "Untitled", kind: i.kind, url: i.url })),
+      });
+    },
   );
 
   server.registerTool(

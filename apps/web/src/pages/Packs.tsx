@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   ArrowUpRight,
+  Check,
   ChevronDown,
   ChevronUp,
   Copy,
@@ -22,7 +23,7 @@ import {
 } from "lucide-react";
 import type { ContextPack, Item } from "@kosh/shared";
 import { searchItems } from "@kosh/shared";
-import { api, type PackDiff, type PackListEntry, type PackVersion, type ResolvedPackContext } from "@/data/api";
+import { api, type PackDiff, type PackListEntry, type PackSuggestion, type PackVersion, type ResolvedPackContext } from "@/data/api";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
 import { live } from "@/data/selectors";
@@ -47,6 +48,7 @@ export function Packs() {
   const [packs, setPacks] = useState<PackListEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
+  const [suggestOpen, setSuggestOpen] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -72,9 +74,14 @@ export function Packs() {
         icon={Package}
         actions={
           backend && (
-            <Button variant="primary" onClick={() => setNewOpen(true)}>
-              <Plus size={16} /> New pack
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => setSuggestOpen(true)}>
+                <Sparkles size={16} /> Suggest
+              </Button>
+              <Button variant="primary" onClick={() => setNewOpen(true)}>
+                <Plus size={16} /> New pack
+              </Button>
+            </>
           )
         }
       />
@@ -123,6 +130,13 @@ export function Packs() {
         onClose={() => setNewOpen(false)}
         onCreated={(pack) => { setNewOpen(false); toast({ message: "Pack created", description: pack.name, tone: "ok" }); navigate(`/packs/${pack.id}`); }}
       />
+      {suggestOpen && (
+        <SuggestPackModal
+          open
+          onClose={() => setSuggestOpen(false)}
+          onCreated={(pack) => { setSuggestOpen(false); toast({ message: "Pack created", description: pack.name, tone: "ok" }); navigate(`/packs/${pack.id}`); }}
+        />
+      )}
     </div>
   );
 }
@@ -667,6 +681,126 @@ function ShareModal({ open, onClose, pack, onChange }: { open: boolean; onClose:
       </div>
       <div className="flex shrink-0 justify-end border-t border-border px-5 py-3.5">
         <Button variant="primary" onClick={onClose}>Done</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function SuggestPackModal({ open, onClose, onCreated }: { open: boolean; onClose: () => void; onCreated: (p: ContextPack) => void }) {
+  const toast = useUi((s) => s.toast);
+  const [goal, setGoal] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [suggestion, setSuggestion] = useState<PackSuggestion | null>(null);
+  const [name, setName] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const run = async () => {
+    if (!goal.trim() || loading) return;
+    setLoading(true);
+    try {
+      const s = await api.suggestPack(goal.trim());
+      setSuggestion(s);
+      setName(s.name);
+      setInstructions(s.instructions);
+      setPicked(new Set(s.itemIds));
+    } catch (err) {
+      toast({ message: "Couldn't build a suggestion", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const create = async () => {
+    if (!name.trim() || creating || !suggestion) return;
+    // Preserve the suggested order, keeping only the ticked items.
+    const itemIds = suggestion.itemIds.filter((id) => picked.has(id));
+    setCreating(true);
+    try {
+      const { pack } = await api.createPack({ name: name.trim(), instructions: instructions.trim() || undefined, itemIds });
+      onCreated(pack);
+    } catch (err) {
+      toast({ message: "Couldn't create pack", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} className="max-w-lg" labelledBy="suggest-title">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-5 py-4">
+        <Sparkles size={18} className="text-primary" />
+        <h2 id="suggest-title" className="text-base font-semibold">Suggest a pack</h2>
+      </div>
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+        {!suggestion ? (
+          <>
+            <p className="text-[13px] text-muted">Describe what the pack is for. Kosh finds the relevant saved items and drafts an instruction preamble — you review before creating.</p>
+            <Textarea
+              autoFocus
+              value={goal}
+              onChange={(e) => setGoal(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void run(); }}
+              placeholder="e.g. Everything an agent needs to onboard to our payments stack"
+              rows={3}
+              className="resize-y"
+            />
+          </>
+        ) : (
+          <>
+            {!suggestion.aiAvailable && <p className="rounded-[var(--radius-control)] bg-surface-2 px-3 py-2 text-[12px] text-muted">AI isn't configured, so these are the closest matches by keyword. Add a provider key in Settings for smarter picks.</p>}
+            {suggestion.capReached && <p className="rounded-[var(--radius-control)] bg-warn-soft px-3 py-2 text-[12px] text-warn">Daily AI limit reached — showing keyword matches instead.</p>}
+            <div>
+              <span className="mb-1.5 block text-[12px] font-medium text-muted">Name</span>
+              <Input value={name} onChange={(e) => setName(e.target.value)} aria-label="Pack name" />
+            </div>
+            <div>
+              <span className="mb-1.5 block text-[12px] font-medium text-muted">Instructions</span>
+              <Textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={3} className="resize-y" aria-label="Instructions" />
+            </div>
+            <div>
+              <span className="mb-1.5 block text-[12px] font-medium text-muted">Items ({picked.size} of {suggestion.items.length})</span>
+              {suggestion.items.length === 0 ? (
+                <p className="text-[13px] text-muted">No matching items found. Try a different description.</p>
+              ) : (
+                <div className="space-y-1">
+                  {suggestion.items.map((it) => {
+                    const on = picked.has(it.id);
+                    const Icon = itemIcon(it);
+                    return (
+                      <button
+                        key={it.id}
+                        type="button"
+                        onClick={() => setPicked((prev) => { const n = new Set(prev); n.has(it.id) ? n.delete(it.id) : n.add(it.id); return n; })}
+                        className={cn("flex w-full items-center gap-3 rounded-[var(--radius-control)] border px-2.5 py-2 text-left transition-colors", on ? "border-primary/40 bg-primary-soft/25" : "border-border hover:bg-surface-2")}
+                      >
+                        <span className={cn("grid h-5 w-5 shrink-0 place-items-center rounded border", on ? "border-primary bg-primary text-primary-foreground" : "border-border-strong text-transparent")}><Check size={13} /></span>
+                        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-surface-2 text-muted">{it.linkType === "repo" ? <GitHubMark size={14} /> : <Icon size={15} />}</span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block min-w-0 truncate text-[13.5px] font-medium">{it.title || it.url || "Untitled"}</span>
+                          <span className="block min-w-0 truncate text-[11.5px] text-faint">{kindLabel(it)}{it.url ? ` · ${it.url}` : ""}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+      <div className="flex shrink-0 justify-between gap-2 border-t border-border px-5 py-3.5">
+        {suggestion ? (
+          <Button variant="ghost" onClick={() => setSuggestion(null)}>Back</Button>
+        ) : (
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        )}
+        {suggestion ? (
+          <Button variant="primary" onClick={() => void create()} disabled={!name.trim() || picked.size === 0} loading={creating}>Create pack</Button>
+        ) : (
+          <Button variant="primary" onClick={() => void run()} disabled={!goal.trim()} loading={loading}><Sparkles size={16} /> Suggest</Button>
+        )}
       </div>
     </Modal>
   );

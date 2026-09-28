@@ -25,6 +25,7 @@ import {
   Star,
   Terminal,
   Trash2,
+  Unlink,
   X,
 } from "lucide-react";
 import {
@@ -454,6 +455,20 @@ function ItemBody({ item }: { item: Item }) {
   const closePanel = useUi((s) => s.closePanel);
   const [fillOpen, setFillOpen] = useState(false);
   const [busy, setBusy] = useState<null | "extract" | string>(null);
+  const [checking, setChecking] = useState(false);
+
+  const onCheckLink = async () => {
+    setChecking(true);
+    try {
+      const r = await api.checkLink(item.id);
+      if (r.ok) toast({ message: "Link is healthy", tone: "ok" });
+      else toast({ message: "Link looks dead", description: r.archived ? "A saved readable copy is available below." : "No archived copy captured yet.", tone: "danger" });
+    } catch (err) {
+      toast({ message: "Couldn't check the link", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const onExtract = async () => {
     setBusy("extract");
@@ -484,6 +499,19 @@ function ItemBody({ item }: { item: Item }) {
 
   return (
     <div className="pb-8">
+      {/* dead-link banner (anti-link-rot): the original stopped resolving; offer a re-check + archived copy */}
+      {item.kind === "link" && item.status === "dead" && (
+        <div className="mx-4 mt-4 rounded-[var(--radius-control)] border border-danger/30 bg-danger-soft/50 p-3">
+          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-danger"><Unlink size={13} /> This link looks dead</div>
+          <p className="mt-1 text-[12px] text-muted">
+            {item.archive?.status === "ok" ? "The original didn't respond — a saved readable copy is available below." : "The original didn't respond when it was last checked."}
+          </p>
+          <div className="mt-2">
+            <Button variant="outline" size="sm" onClick={onCheckLink} loading={checking}><RefreshCw size={14} /> Re-check</Button>
+          </div>
+        </div>
+      )}
+
       {/* summary / hero */}
       <div className="px-4 pt-4">
         {item.ai?.summary && (
@@ -538,6 +566,11 @@ function ItemBody({ item }: { item: Item }) {
               <ArrowUpRight size={15} /> Open original
             </Button>
           </a>
+        )}
+        {item.kind === "link" && item.url && (
+          <Button variant="ghost" size="sm" onClick={onCheckLink} loading={checking}>
+            <Unlink size={15} /> Check link
+          </Button>
         )}
         <Button variant="ghost" size="sm" onClick={() => togglePin(item.id)}>
           <Pin size={15} className={cn(item.pinned && "rotate-45 fill-gold text-gold")} /> {item.pinned ? "Pinned" : "Pin"}

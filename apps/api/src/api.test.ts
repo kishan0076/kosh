@@ -7,6 +7,7 @@ import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from "./auth/crypto.js";
 import { addItemToPack, createPack, diffCompositions, findPublicPack, listVersions, makeSnapshot, pickComposition, removeItemFromPack, setPackSharing, updatePackFields, upsertSnapshot } from "./modules/packs.js";
+import { nextLinkStatus } from "./modules/linkcheck.js";
 import type { ContextPack, ContextPackSnapshot } from "@kosh/shared";
 
 describe("safeFetch SSRF guard", () => {
@@ -284,5 +285,17 @@ describe("context pack sharing", () => {
     expect(unshared.publicSlug).toBeUndefined();
     expect(await findPublicPack(store, shared.publicSlug!)).toBeNull(); // link revoked
     await store.close();
+  });
+});
+
+describe("link-rot status transitions", () => {
+  it("flips only ready↔dead and never clobbers enriching / archived", () => {
+    expect(nextLinkStatus("ready", false)).toBe("dead");
+    expect(nextLinkStatus("dead", true)).toBe("ready"); // healed
+    expect(nextLinkStatus("ready", true)).toBe("ready");
+    expect(nextLinkStatus("dead", false)).toBe("dead");
+    // In-flight or deliberately-frozen items are left exactly as they are.
+    expect(nextLinkStatus("enriching", false)).toBe("enriching");
+    expect(nextLinkStatus("archived", false)).toBe("archived");
   });
 });

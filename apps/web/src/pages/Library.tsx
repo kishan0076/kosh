@@ -1,8 +1,10 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Columns3, LayoutGrid, LibraryBig, Search, X } from "lucide-react";
+import { Columns3, LayoutGrid, LibraryBig, Search, Unlink, X } from "lucide-react";
 import { STAGE_LABEL, STAGES, type Item, type Stage } from "@kosh/shared";
 import { useData } from "@/data/store";
+import { useUi } from "@/data/ui";
+import { api } from "@/data/api";
 import { live, topTags } from "@/data/selectors";
 import { cn } from "@/lib/cn";
 import { EmptyState, PageHeader, STAGE_TONE } from "@/components/common";
@@ -40,7 +42,27 @@ function matchesSeg(i: Item, seg: KindSeg): boolean {
 
 export function Library() {
   const items = useData((s) => s.items);
+  const backend = useData((s) => s.backend);
+  const toast = useUi((s) => s.toast);
   const [params, setParams] = useSearchParams();
+  const [checking, setChecking] = useState(false);
+
+  // Bulk link-rot sweep: re-checks every saved link and flags dead ones (SSE flips their status live).
+  const onCheckLinks = async () => {
+    setChecking(true);
+    try {
+      const r = await api.checkAllLinks();
+      toast({
+        message: r.dead ? `${r.dead} dead link${r.dead === 1 ? "" : "s"} found` : "All links healthy",
+        description: `Checked ${r.checked}${r.healed ? ` · ${r.healed} healed` : ""}`,
+        tone: r.dead ? "danger" : "ok",
+      });
+    } catch (err) {
+      toast({ message: "Couldn't check links", description: err instanceof Error ? err.message : undefined, tone: "danger" });
+    } finally {
+      setChecking(false);
+    }
+  };
 
   const seg = (params.get("kind") as KindSeg) ?? "all";
   const stage = params.get("stage") as Stage | null;
@@ -128,7 +150,13 @@ export function Library() {
         subtitle={`${filtered.length} of ${base.length} items`}
         icon={LibraryBig}
         actions={
-          <div className="inline-flex items-center gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface p-0.5">
+          <div className="flex items-center gap-2">
+            {backend && (
+              <Button variant="outline" size="sm" onClick={onCheckLinks} loading={checking}>
+                <Unlink size={15} /> Check links
+              </Button>
+            )}
+            <div className="inline-flex items-center gap-0.5 rounded-[var(--radius-control)] border border-border bg-surface p-0.5">
             <button
               type="button"
               onClick={() => setParam("view", undefined)}
@@ -153,6 +181,7 @@ export function Library() {
             >
               <Columns3 size={16} />
             </button>
+            </div>
           </div>
         }
       />

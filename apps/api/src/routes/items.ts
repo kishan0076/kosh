@@ -10,6 +10,7 @@ import { enqueue } from "../modules/queue.js";
 import { enrichItem } from "../modules/enrich.js";
 import { archiveItem } from "../modules/archive.js";
 import { askTreasury } from "../modules/ask.js";
+import { checkAllLinks, checkLink } from "../modules/linkcheck.js";
 import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
 import { snapshotRepoSkills } from "../modules/snapshot.js";
@@ -310,6 +311,28 @@ itemsRouter.post(
     if (item.kind !== "link" || !item.url) throw notFound("Only saved links can be archived.");
     enqueue(`archive:${item.id}`, () => archiveItem(uid, item.id).then(() => undefined), 3);
     res.status(202).json({ ok: true });
+  }),
+);
+
+/* POST /items/:id/check-link — re-fetch the link and flag it dead / heal it back to ready */
+itemsRouter.post(
+  "/items/:id/check-link",
+  actionLimiter,
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const result = await checkLink(uid, String(req.params.id));
+    if (!result) throw notFound("Only saved links can be checked.");
+    res.json(result);
+  }),
+);
+
+/* POST /links/check — bulk link-rot sweep across the vault */
+itemsRouter.post(
+  "/links/check",
+  actionLimiter,
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    res.json(await checkAllLinks(uid));
   }),
 );
 

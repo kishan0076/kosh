@@ -22,6 +22,31 @@ export interface PackDiff {
   instructionsChanged: boolean;
   items: Record<string, { title: string; kind: string; linkType?: string; url?: string }>;
 }
+/** A proposed pack for a natural-language goal (review before creating). */
+export interface PackSuggestion {
+  name: string;
+  instructions: string;
+  itemIds: string[];
+  items: Item[];
+  aiAvailable: boolean;
+  capReached?: boolean;
+}
+/** Result of a single link-rot check. */
+export interface LinkCheckResult {
+  itemId: string;
+  ok: boolean;
+  status?: number;
+  changed: boolean;
+  dead: boolean;
+  archived: boolean;
+}
+/** Summary of a bulk link-rot sweep. */
+export interface BulkLinkCheck {
+  checked: number;
+  ok: number;
+  dead: number;
+  healed: number;
+}
 /** A read-only public view of a shared pack (no auth). */
 export interface PublicPackView {
   name: string;
@@ -253,6 +278,8 @@ export const api = {
   refreshItem: (id: string) => req<{ ok: boolean }>(`/items/${id}/refresh`, { method: "POST" }),
   getArchive: (id: string) => req<{ markdown: string; archive: LinkArchive }>(`/items/${id}/archive`),
   archiveItem: (id: string) => req<{ ok: boolean }>(`/items/${id}/archive`, { method: "POST" }),
+  checkLink: (id: string) => req<LinkCheckResult>(`/items/${id}/check-link`, { method: "POST" }),
+  checkAllLinks: () => req<BulkLinkCheck>("/links/check", { method: "POST" }),
   extractLinks: (id: string) => req<{ found: number; saved: number; skipped: number }>(`/items/${id}/extract-links`, { method: "POST" }),
   snapshotSkills: (id: string, dirs?: string[]) =>
     req<{ copied: number }>(`/items/${id}/snapshot-skills`, { method: "POST", body: JSON.stringify({ dirs }) }),
@@ -290,6 +317,7 @@ export const api = {
     req<{ pack: ContextPack; duplicate?: boolean }>(`/packs/${id}/items`, { method: "POST", body: JSON.stringify({ itemId }) }),
   removePackItem: (id: string, itemId: string) => req<{ pack: ContextPack }>(`/packs/${id}/items/${itemId}`, { method: "DELETE" }),
   deletePack: (id: string) => req<{ ok: boolean }>(`/packs/${id}`, { method: "DELETE" }),
+  suggestPack: (goal: string) => req<PackSuggestion>("/packs/suggest", { method: "POST", body: JSON.stringify({ goal }) }),
   diffPack: (id: string, from: number, to: number) => req<PackDiff>(`/packs/${id}/diff?from=${from}&to=${to}`),
   sharePack: (id: string, isPublic: boolean) => req<{ pack: ContextPack }>(`/packs/${id}/share`, { method: "POST", body: JSON.stringify({ public: isPublic }) }),
   getPublicPack: (slug: string) => req<PublicPackView>(`/packs/public/${encodeURIComponent(slug)}`),
