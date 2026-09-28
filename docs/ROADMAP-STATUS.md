@@ -21,6 +21,7 @@ Tracks the strategic feature roadmap against what's actually implemented. Number
 | ★ | Security posture dashboard (skill risk + secret scan + public links + key hygiene → one score) | `packages/shared/security.ts`, `pages/Security.tsx` (`/security`) |
 | ★ | Agentic bulk ops (NL command → planned multi-step edit → preview diff → apply) | `packages/shared/bulk.ts`, `modules/bulk.ts`, `routes/bulk.ts`, `pages/Bulk.tsx` (`/bulk`) |
 | ★ | On-device AI (browser → local model, zero-cost & private; drives the Playground + Bulk planner) | `packages/shared/localai.ts`, `apps/web/src/lib/localAi.ts`, Settings → On-device AI |
+| ★ | Skill registry / marketplace (discover public skills, review scan + trust, install as unreviewed) | `packages/shared/registry.ts`, `modules/registry.ts`, `routes/registry.ts`, `pages/Registry.tsx` (`/registry`) |
 | — | Import bookmarks (Chrome/Pocket/Raindrop) | `packages/shared/bookmarks.ts`, Add page importer |
 | 9a | Google **multi-account** file federation | already supported (Drive space picker) |
 
@@ -47,8 +48,8 @@ Generalize the existing `DriveNode`/space abstraction behind a provider interfac
 Roles on collections, presence, and conflict handling. Needs an auth/membership model and a realtime layer (the Drive comments/presence code is a starting point). Deferred: an architectural change best done after the single-player moat, and it needs realtime infra to validate.
 
 ### Moonshots
-- **Skill registry / marketplace**: a discovery layer over the existing scan+trust model.
+_All shipped._ The **security posture dashboard** (`/security`), **agentic bulk ops** (`/bulk`), **on-device AI** (Settings → On-device AI), and the **skill registry / marketplace** (`/registry`) are all in the Shipped table above.
 
-(Shipped from this list: the **security posture dashboard** (`/security`), **agentic bulk ops** (`/bulk`), and **on-device AI** (Settings → On-device AI) — see the Shipped table above.)
+Note on the skill registry: it's a discovery layer over the existing scan + trust model. Any skill a user marks **public** (the existing share toggle) is listed cross-user; installing one copies the latest version's files into your vault, re-runs the static scan, and lands it `trust: "unreviewed"` — the install is gated behind a review modal that shows the scan findings and the SKILL.md before you confirm (a danger-styled "Install anyway" when the scan flagged something). Re-installs are idempotent (a synthetic `source` marker), and installs bump the source skill's `installCount` for the "most installed" ranking. Cross-user discovery is exercisable in a single deployment; it's keyed by the skill's own id (unguessable) rather than the name-based `publicSlug` to avoid collisions.
 
 Note on on-device AI: the server registry already carries an `ollama` provider for self-hosted API deployments, but a *hosted* API can't reach a user's `localhost` — so on-device runs **browser-direct** to the user's local model (Ollama/LM Studio/llama.cpp over the OpenAI `/v1` API). It's opt-in in Settings, and features that support it (Prompt Playground; the Bulk planner) prefer it when enabled, falling back to the cloud provider. The live localhost round-trip can only be exercised against a real local server; the request/response core is unit-tested (`localai.test.ts`).

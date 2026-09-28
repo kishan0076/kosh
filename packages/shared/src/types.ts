@@ -276,6 +276,8 @@ export interface Skill {
   lastUsedAt?: string;
   public?: boolean;
   publicSlug?: string;
+  /** How many times this skill has been installed from the public skill registry (marketplace). */
+  installCount?: number;
   /** Index-only skills live in a saved repo but haven't been copied into storage. */
   indexOnly?: boolean;
   deletedAt?: string;

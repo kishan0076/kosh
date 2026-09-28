@@ -1,8 +1,23 @@
-import type { AutomationRule, BulkAction, BulkPlan, BulkPreview, Collection, ContextPack, Item, LinkArchive, RuleCondition, Skill, User } from "@kosh/shared";
+import type { AutomationRule, BulkAction, BulkPlan, BulkPreview, Collection, ContextPack, Item, LinkArchive, RegistryEntry, RuleCondition, ScanResult, Skill, User } from "@kosh/shared";
 import { getSessionTokenSync, isNative } from "@/lib/native";
 
 /** A Context Pack in list form, with a resolved item count. */
 export type PackListEntry = ContextPack & { itemCount: number };
+
+/** One public skill's detail from the registry — enough to review before installing. */
+export interface RegistryDetail {
+  entry: RegistryEntry;
+  files: { path: string; mime: string; size: number; content?: string }[];
+  scan: ScanResult;
+  versions: { n: number; createdAt: string; note?: string; risky: boolean }[];
+}
+/** Result of installing a skill from the registry. */
+export interface InstallResult {
+  skill: Skill;
+  duplicate: boolean;
+  risky: boolean;
+  findingCount: number;
+}
 
 /** Response of POST /bulk/plan — the validated plan, its preview diff, and how it was produced. */
 export interface BulkPlanResult {
@@ -361,6 +376,15 @@ export const api = {
   previewBulk: (plan: BulkPlan) => req<{ plan: BulkPlan; preview: BulkPreview }>("/bulk/preview", { method: "POST", body: JSON.stringify({ plan }) }),
   applyBulk: (itemIds: string[], actions: BulkAction[]) =>
     req<{ applied: number; archived: number; deleted: number }>("/bulk/apply", { method: "POST", body: JSON.stringify({ itemIds, actions }) }),
+
+  // Skill registry (marketplace): browse public skills, review one, install a copy into the vault.
+  listRegistry: (params: { q?: string; tool?: string; risk?: string; sort?: string } = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) qs.set(k, v);
+    return req<{ skills: RegistryEntry[] }>(`/registry/skills${qs.toString() ? `?${qs}` : ""}`);
+  },
+  getRegistrySkill: (id: string) => req<RegistryDetail>(`/registry/skills/${encodeURIComponent(id)}`),
+  installFromRegistry: (id: string) => req<InstallResult>(`/registry/skills/${encodeURIComponent(id)}/install`, { method: "POST" }),
 
   publishRepo: (input: PublishRepoInput) => req<{ item: Item; repo: PublishedRepo }>("/repos/publish", { method: "POST", body: JSON.stringify(input) }),
   githubStatus: () => req<{ connected: boolean }>("/settings/github-token"),
