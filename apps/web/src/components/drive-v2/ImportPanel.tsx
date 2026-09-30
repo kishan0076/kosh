@@ -2,6 +2,8 @@ import { useMemo, useState, type ReactNode } from "react";
 import {
   Archive,
   ArrowLeft,
+  ArrowRight,
+  Check,
   CheckCircle2,
   Copy,
   File as FileIcon,
@@ -11,6 +13,7 @@ import {
   Folder,
   FolderInput,
   FolderPlus,
+  FolderSearch,
   Image as ImageIcon,
   Link2,
   Music,
@@ -33,7 +36,8 @@ import {
 } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { revealClass, revealStyle } from "@/lib/motion";
-import { Button, Input, Spinner, Textarea, Toggle } from "@/components/ui";
+import { Reveal, Stagger, StaggerItem, FadeSwap } from "@/components/motion";
+import { Button, Input, Skeleton, Spinner, Textarea, Toggle } from "@/components/ui";
 import { EmptyState } from "@/components/common";
 import { useUi } from "@/data/ui";
 import { ApiError } from "@/data/api";
@@ -323,181 +327,230 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
   }
 
   const failedRefs = scan?.refs.filter((r) => !r.ok) ?? [];
+  const dupCount = scan ? scan.dedup.counts.dupInDest + scan.dedup.counts.dupInSource : 0;
+  const step = phase === "done" ? 3 : phase === "review" || phase === "running" ? 2 : 1;
 
   return (
     <div className="flex flex-col overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface lg:h-full">
-      {/* header */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary-soft text-primary"><FolderInput size={17} /></span>
-        <div className="min-w-0">
-          <div className="text-[14px] font-semibold leading-tight">Import from Drive</div>
-          <div className="truncate text-[11.5px] text-muted">Scan any Drive links, skip duplicates, copy into {currentFolderName}</div>
+      {/* header — gold hairline + mesh backdrop, with a compact step indicator */}
+      <div className="relative shrink-0 overflow-hidden border-b border-border">
+        <span className="pointer-events-none absolute inset-x-0 top-0 z-10 block h-px bg-gradient-to-r from-transparent via-gold/45 to-transparent" />
+        <span className="mesh pointer-events-none absolute inset-0 opacity-40" />
+        <div className="relative flex items-center gap-3 px-4 py-3 sm:px-5">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary-soft text-primary shadow-[var(--shadow-sm)]"><FolderInput size={18} /></span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[14.5px] font-semibold leading-tight">Import from Drive</div>
+            <div className="truncate text-[11.5px] text-muted">Copy files &amp; folders from any Drive links into {currentFolderName}</div>
+          </div>
+          <Stepper step={step} className="mr-1 hidden md:flex" />
+          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close import"><X size={16} /></Button>
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={onClose} className="ml-auto" aria-label="Close import"><X size={16} /></Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        {/* ── input ── */}
-        {(phase === "input" || phase === "scanning") && (
-          <div className="mx-auto max-w-2xl space-y-4">
-            <div className="rounded-[var(--radius-card)] border border-border bg-surface-2 p-4">
-              <label htmlFor="import-links" className="mb-1.5 flex items-center gap-1.5 text-[13px] font-medium">
-                <Link2 size={14} className="text-muted" /> Google Drive links
-              </label>
-              <Textarea
-                id="import-links"
-                value={linksText}
-                onChange={(e) => setLinksText(e.target.value)}
-                disabled={phase === "scanning"}
-                rows={6}
-                placeholder={"Paste one or more links or ids, one per line — e.g.\nhttps://drive.google.com/drive/folders/…\nhttps://drive.google.com/file/d/…/view"}
-                className="font-mono text-[12.5px]"
-              />
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <span className="text-[12px] text-muted">
-                  {parsedCount > 0 ? `${parsedCount} link${parsedCount === 1 ? "" : "s"} detected` : "Folders are scanned recursively — everything inside comes too."}
-                </span>
-                <Button variant="primary" size="sm" className="ml-auto" disabled={parsedCount === 0} loading={phase === "scanning"} onClick={() => void runScan()}>
-                  <Sparkles size={15} /> {phase === "scanning" ? "Scanning…" : "Scan links"}
-                </Button>
+      {/* body — one scroll container; phases crossfade */}
+      <div className="relative min-h-0 flex-1 overflow-y-auto">
+        <FadeSwap k={phase} className="min-h-full">
+          {/* ── input ── */}
+          {phase === "input" && (
+            <div className="flex min-h-full flex-col justify-center px-4 py-6 sm:px-6 lg:px-8 lg:py-10">
+              <div className="mx-auto grid w-full max-w-5xl gap-5 lg:grid-cols-[1.4fr_1fr] lg:items-start lg:gap-8">
+                {/* paste */}
+                <Reveal className="flex flex-col rounded-[var(--radius-panel)] border border-border bg-surface-2 p-4 shadow-[var(--shadow-sm)] transition-colors focus-within:border-primary/50 sm:p-5">
+                  <div className="mb-2.5 flex items-center gap-2">
+                    <span className="grid h-7 w-7 place-items-center rounded-lg bg-primary-soft text-primary"><Link2 size={15} /></span>
+                    <label htmlFor="import-links" className="text-[13.5px] font-semibold">Google Drive links</label>
+                    <span className={cn("ml-auto rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors", parsedCount > 0 ? "bg-primary-soft text-primary" : "bg-surface-3 text-faint")}>
+                      {parsedCount > 0 ? `${parsedCount} detected` : "none yet"}
+                    </span>
+                  </div>
+                  <Textarea
+                    id="import-links"
+                    autoFocus
+                    value={linksText}
+                    onChange={(e) => setLinksText(e.target.value)}
+                    rows={7}
+                    placeholder={"Paste one or more links or ids, one per line — e.g.\nhttps://drive.google.com/drive/folders/…\nhttps://drive.google.com/file/d/…/view"}
+                    className="min-h-[150px] resize-none font-mono text-[12.5px] leading-relaxed"
+                  />
+                  {scanError && <p className="mt-2 flex items-start gap-1.5 text-[12.5px] text-danger"><TriangleAlert size={14} className="mt-0.5 shrink-0" /> {scanError}</p>}
+                  <div className="mt-3 flex flex-wrap items-center gap-3">
+                    <p className="flex items-center gap-1.5 text-[12px] text-muted"><FolderSearch size={14} className="shrink-0 text-muted" /> Folders scan recursively — everything inside comes too.</p>
+                    <Button variant="primary" className="ml-auto" disabled={parsedCount === 0} onClick={() => void runScan()}>
+                      <Sparkles size={15} /> Scan {parsedCount > 0 ? `${parsedCount} link${parsedCount === 1 ? "" : "s"}` : "links"} <ArrowRight size={15} />
+                    </Button>
+                  </div>
+                </Reveal>
+
+                {/* how it works + supported formats */}
+                <Stagger className="flex flex-col gap-3">
+                  <StaggerItem><Feature icon={FolderSearch} title="Recursive scan" body="Whole folder trees — every file and subfolder comes along." /></StaggerItem>
+                  <StaggerItem><Feature icon={Copy} title="Duplicate-aware" body="Flags what's already in your Drive so nothing is copied twice." /></StaggerItem>
+                  <StaggerItem><Feature icon={CheckCircle2} title="Same names & structure" body="Copies keep their original names and folder layout." /></StaggerItem>
+                  <StaggerItem>
+                    <div className="rounded-[var(--radius-control)] border border-dashed border-border bg-surface-2 p-3">
+                      <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-faint">Supported links</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {["drive/folders/…", "file/d/…", "docs…/d/…", "a file id"].map((f) => (
+                          <span key={f} className="rounded-md bg-surface-3 px-2 py-1 font-mono text-[11px] text-muted">{f}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </StaggerItem>
+                </Stagger>
               </div>
-              {scanError && <p className="mt-2 text-[12.5px] text-danger">{scanError}</p>}
             </div>
+          )}
 
-            <ul className="grid gap-2 text-[12.5px] text-muted sm:grid-cols-3">
-              <HowItWorks icon={FolderInput} title="Recursive scan" body="Whole folder trees, files and subfolders." />
-              <HowItWorks icon={Copy} title="Duplicate-aware" body="Flags what's already in your Drive." />
-              <HowItWorks icon={CheckCircle2} title="Same names" body="Copies keep their original names & structure." />
-            </ul>
-          </div>
-        )}
-
-        {/* ── review ── */}
-        {phase === "review" && scan && plan && (
-          <div className="mx-auto max-w-3xl space-y-4">
-            {scan.summary.fileCount === 0 ? (
-              <EmptyState
-                size="sm"
-                icon={FolderInput}
-                title="Nothing to import"
-                description={failedRefs.length ? "None of the pasted links could be opened with this account." : "The links you pasted contain no files."}
-                action={<Button variant="outline" size="sm" onClick={reset}><ArrowLeft size={14} /> Back</Button>}
-              />
-            ) : (
-              <>
-                {/* stats */}
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                  <Stat label="Files found" value={scan.summary.fileCount.toLocaleString()} />
-                  <Stat label="Total size" value={formatBytes(scan.summary.totalBytes)} />
-                  <Stat label="New" value={scan.dedup.counts.new.toLocaleString()} tone="ok" />
-                  <Stat label="Duplicates" value={(scan.dedup.counts.dupInDest + scan.dedup.counts.dupInSource).toLocaleString()} tone={scan.dedup.counts.dupInDest + scan.dedup.counts.dupInSource > 0 ? "warn" : undefined} />
+          {/* ── scanning (loader + skeleton preview) ── */}
+          {phase === "scanning" && (
+            <div className="flex min-h-full flex-col items-center px-4 py-8 sm:px-6 lg:py-12">
+              <div className="w-full max-w-xl text-center">
+                <div className="relative mx-auto mb-5 grid h-16 w-16 place-items-center">
+                  <span className="absolute inset-0 rounded-full bg-primary-soft motion-safe:animate-ping" />
+                  <span className="relative grid h-12 w-12 place-items-center rounded-full bg-primary text-primary-foreground shadow-[var(--shadow-sm)]"><FolderSearch size={22} /></span>
                 </div>
+                <h3 className="text-[16px] font-semibold">Scanning your Drive links…</h3>
+                <p className="mx-auto mt-1 max-w-sm text-[12.5px] text-muted">Walking folders, reading files and checking your Drive for duplicates. Large folders can take a moment.</p>
+              </div>
+              <div className="mx-auto mt-8 w-full max-w-xl space-y-4" aria-hidden>
+                <SkeletonGroup rows={4} />
+                <SkeletonGroup rows={3} />
+              </div>
+            </div>
+          )}
 
-                {(scan.sourceTruncated || scan.destTruncated || failedRefs.length > 0) && (
-                  <div className="space-y-2">
-                    {scan.sourceTruncated && <Notice tone="warn">This is a very large set — only the first {scan.summary.fileCount.toLocaleString()} files were scanned.</Notice>}
-                    {scan.destTruncated && <Notice tone="warn">Your Drive is large, so the duplicate check sampled part of it — a few duplicates might slip through.</Notice>}
-                    {failedRefs.length > 0 && (
-                      <Notice tone="danger">
-                        {failedRefs.length} link{failedRefs.length === 1 ? "" : "s"} couldn't be opened:{" "}
-                        <span className="break-all">{failedRefs.map((r) => r.raw).join(", ")}</span>
-                      </Notice>
+          {/* ── review ── */}
+          {phase === "review" && scan && plan && (
+            scan.summary.fileCount === 0 ? (
+              <div className="flex min-h-full items-center justify-center p-6">
+                <EmptyState
+                  size="md"
+                  icon={FolderInput}
+                  title="Nothing to import"
+                  description={failedRefs.length ? "None of the pasted links could be opened with this account." : "The links you pasted contain no files."}
+                  action={<Button variant="outline" size="sm" onClick={reset}><ArrowLeft size={14} /> Back</Button>}
+                />
+              </div>
+            ) : (
+              <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:items-start lg:gap-5 lg:p-6">
+                {/* left: summary + controls */}
+                <Reveal className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-2 xl:grid-cols-4">
+                    <Stat label="Files found" value={scan.summary.fileCount.toLocaleString()} />
+                    <Stat label="Total size" value={formatBytes(scan.summary.totalBytes)} />
+                    <Stat label="New" value={scan.dedup.counts.new.toLocaleString()} tone="ok" />
+                    <Stat label="Duplicates" value={dupCount.toLocaleString()} tone={dupCount > 0 ? "warn" : undefined} />
+                  </div>
+
+                  {(scan.sourceTruncated || scan.destTruncated || failedRefs.length > 0) && (
+                    <div className="space-y-2">
+                      {scan.sourceTruncated && <Notice tone="warn">This is a very large set — only the first {scan.summary.fileCount.toLocaleString()} files were scanned.</Notice>}
+                      {scan.destTruncated && <Notice tone="warn">Your Drive is large, so the duplicate check sampled part of it — a few duplicates might slip through.</Notice>}
+                      {failedRefs.length > 0 && (
+                        <Notice tone="danger">
+                          {failedRefs.length} link{failedRefs.length === 1 ? "" : "s"} couldn't be opened:{" "}
+                          <span className="break-all">{failedRefs.map((r) => r.raw).join(", ")}</span>
+                        </Notice>
+                      )}
+                    </div>
+                  )}
+
+                  {dupCount > 0 && (
+                    <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
+                      <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-faint">Duplicates</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {STRATEGIES.map((s) => (
+                          <button
+                            key={s.k}
+                            onClick={() => { setStrategy(s.k); setOverrides({}); }}
+                            title={s.hint}
+                            aria-pressed={strategy === s.k}
+                            className={cn(
+                              "pressable inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-3 text-[13px] font-medium transition-colors [@media(pointer:coarse)]:h-10",
+                              strategy === s.k ? "border-primary bg-primary-soft text-primary" : "border-border text-muted hover:bg-surface-3",
+                            )}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="mt-2 text-[11.5px] text-muted">{STRATEGIES.find((s) => s.k === strategy)?.hint}. Click a badge in the preview to change one file.</p>
+                    </div>
+                  )}
+
+                  <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
+                    <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-faint">Destination</div>
+                    <div className="flex items-center gap-2 text-[13px]">
+                      <Toggle checked={intoNewFolder} onChange={setIntoNewFolder} label="Create a new folder for this import" />
+                      <span className="text-muted">Create a new folder for this import</span>
+                    </div>
+                    {intoNewFolder ? (
+                      <div className="mt-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <FolderPlus size={15} className="shrink-0 text-muted" />
+                          <Input aria-label="New folder name" value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="New folder name" maxLength={255} className="max-w-xs flex-1" aria-invalid={!newFolderName.trim()} />
+                          <span className="truncate text-[12px] text-muted">in {currentFolderName}</span>
+                        </div>
+                        {!newFolderName.trim() && <p className="mt-1.5 text-[11.5px] text-danger">Enter a folder name, or turn this off to import into {currentFolderName}.</p>}
+                      </div>
+                    ) : (
+                      <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] text-muted"><Folder size={14} className="shrink-0" /> Files import directly into <span className="font-medium text-foreground">{currentFolderName}</span></p>
                     )}
                   </div>
-                )}
+                </Reveal>
 
-                {/* duplicate strategy */}
-                {scan.dedup.counts.dupInDest + scan.dedup.counts.dupInSource > 0 && (
-                  <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
-                    <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-faint">Duplicates</div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {STRATEGIES.map((s) => (
-                        <button
-                          key={s.k}
-                          onClick={() => { setStrategy(s.k); setOverrides({}); }}
-                          title={s.hint}
-                          className={cn(
-                            "pressable inline-flex h-9 items-center gap-1.5 rounded-[var(--radius-control)] border px-3 text-[13px] font-medium [@media(pointer:coarse)]:h-10",
-                            strategy === s.k ? "border-primary bg-primary-soft text-primary" : "border-border text-muted hover:bg-surface-3",
-                          )}
-                        >
-                          {s.label}
-                        </button>
-                      ))}
-                      <span className="ml-auto self-center text-[11.5px] text-muted">{STRATEGIES.find((s) => s.k === strategy)?.hint}. Click a badge below to change one file.</span>
-                    </div>
-                  </div>
-                )}
-
-                {/* destination */}
-                <div className="rounded-[var(--radius-control)] border border-border bg-surface-2 p-3">
-                  <div className="mb-2 text-[12px] font-semibold uppercase tracking-wide text-faint">Destination</div>
-                  <div className="flex items-center gap-2 text-[13px]">
-                    <Toggle checked={intoNewFolder} onChange={setIntoNewFolder} label="Create a new folder for this import" />
-                    <span className="text-muted">Create a new folder for this import</span>
-                  </div>
-                  {intoNewFolder ? (
-                    <div className="mt-2">
-                      <div className="flex items-center gap-2">
-                        <FolderPlus size={15} className="shrink-0 text-muted" />
-                        <Input aria-label="New folder name" value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="New folder name" maxLength={255} className="max-w-xs" aria-invalid={!newFolderName.trim()} />
-                        <span className="truncate text-[12px] text-muted">in {currentFolderName}</span>
-                      </div>
-                      {!newFolderName.trim() && <p className="mt-1 text-[11.5px] text-danger">Enter a folder name, or turn this off to import into {currentFolderName}.</p>}
-                    </div>
-                  ) : (
-                    <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] text-muted"><Folder size={14} /> Files import directly into <span className="font-medium text-foreground">{currentFolderName}</span></p>
-                  )}
-                </div>
-
-                {/* file preview */}
+                {/* right: file preview */}
                 <FilePreview groups={groups} scan={scan} copyBySource={copyBySource} onCycle={cycleDecision} />
-              </>
-            )}
-          </div>
-        )}
+              </div>
+            )
+          )}
 
-        {/* ── running ── */}
-        {phase === "running" && (
-          <div className="mx-auto flex max-w-sm flex-col items-center gap-3 py-12 text-center">
-            <Spinner size={26} className="text-primary" />
-            <div className="text-[14px] font-medium">Importing into {destName}…</div>
-            <p className="text-[12.5px] text-muted">Copying files and rebuilding folders in your Drive. You can keep working — progress shows at the bottom.</p>
-          </div>
-        )}
+          {/* ── running ── */}
+          {phase === "running" && (
+            <div className="flex min-h-full flex-col items-center justify-center p-8 text-center">
+              <div className="relative mb-5 grid h-16 w-16 place-items-center">
+                <span className="absolute inset-0 rounded-full bg-primary-soft motion-safe:animate-ping" />
+                <span className="relative grid h-12 w-12 place-items-center rounded-full bg-primary text-primary-foreground shadow-[var(--shadow-sm)]"><FolderInput size={22} /></span>
+              </div>
+              <h3 className="text-[16px] font-semibold">Importing into {destName}…</h3>
+              <p className="mx-auto mt-1 max-w-sm text-[12.5px] text-muted">Copying files and rebuilding folders in your Drive. You can keep working — live progress shows at the bottom of the screen.</p>
+              <div className="mt-4"><Spinner size={18} className="text-primary" /></div>
+            </div>
+          )}
 
-        {/* ── done ── */}
-        {phase === "done" && result && (
-          <div className="mx-auto max-w-md space-y-5 py-8 text-center">
-            <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-ok-soft text-ok"><CheckCircle2 size={28} /></span>
-            <div>
-              <div className="text-[17px] font-semibold">Import complete</div>
-              <p className="mt-1 text-[13px] text-muted">Copied into {result.destName}.</p>
+          {/* ── done ── */}
+          {phase === "done" && result && (
+            <div className="flex min-h-full flex-col items-center justify-center p-6 text-center">
+              <Reveal className="w-full max-w-md">
+                <span className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-full bg-ok-soft text-ok"><CheckCircle2 size={30} /></span>
+                <h3 className="font-display text-[19px] font-semibold">Import complete</h3>
+                <p className="mt-1 text-[13px] text-muted">Copied into {result.destName}.</p>
+                <div className="mt-5 grid grid-cols-2 gap-3 text-left sm:grid-cols-4">
+                  <Stat label="Copied" value={result.copied.toLocaleString()} tone="ok" />
+                  <Stat label="Folders" value={result.folders.toLocaleString()} />
+                  <Stat label="Skipped" value={result.skipped.toLocaleString()} />
+                  <Stat label="Failed" value={result.failed.toLocaleString()} tone={result.failed > 0 ? "warn" : undefined} />
+                </div>
+                <div className="mt-6 flex justify-center gap-2">
+                  <Button variant="secondary" size="sm" onClick={reset}><RefreshCw size={14} /> Import more</Button>
+                  <Button variant="primary" size="sm" onClick={onClose}><Check size={15} /> Done</Button>
+                </div>
+              </Reveal>
             </div>
-            <div className="grid grid-cols-2 gap-3 text-left sm:grid-cols-4">
-              <Stat label="Copied" value={result.copied.toLocaleString()} tone="ok" />
-              <Stat label="Folders" value={result.folders.toLocaleString()} />
-              <Stat label="Skipped" value={result.skipped.toLocaleString()} />
-              <Stat label="Failed" value={result.failed.toLocaleString()} tone={result.failed > 0 ? "warn" : undefined} />
-            </div>
-            <div className="flex justify-center gap-2">
-              <Button variant="secondary" size="sm" onClick={reset}><RefreshCw size={14} /> Import more</Button>
-              <Button variant="primary" size="sm" onClick={onClose}>Done</Button>
-            </div>
-          </div>
-        )}
+          )}
+        </FadeSwap>
       </div>
 
       {/* review footer (sticky action bar) */}
       {phase === "review" && scan && plan && scan.summary.fileCount > 0 && (
-        <div className="flex shrink-0 items-center gap-3 border-t border-border bg-surface px-4 py-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-border bg-surface px-4 py-3 sm:px-5">
           <Button variant="ghost" size="sm" onClick={reset}><ArrowLeft size={14} /> Back</Button>
-          <span className="ml-auto text-[12.5px] text-muted">
+          <span className="order-last w-full text-[12.5px] text-muted sm:order-none sm:ml-auto sm:w-auto">
             {plan.stats.filesToCopy.toLocaleString()} to copy
             {plan.stats.filesSkipped > 0 && ` · ${plan.stats.filesSkipped.toLocaleString()} skipped`}
             {plan.stats.foldersToCreate > 0 && ` · ${plan.stats.foldersToCreate.toLocaleString()} folder${plan.stats.foldersToCreate === 1 ? "" : "s"}`}
           </span>
-          <Button variant="primary" size="sm" disabled={plan.stats.filesToCopy === 0 || (intoNewFolder && !newFolderName.trim())} onClick={() => void runImport()}>
+          <Button variant="primary" size="sm" className="ml-auto sm:ml-0" disabled={plan.stats.filesToCopy === 0 || (intoNewFolder && !newFolderName.trim())} onClick={() => void runImport()}>
             <FolderInput size={15} /> Import {plan.stats.filesToCopy.toLocaleString()} file{plan.stats.filesToCopy === 1 ? "" : "s"}
           </Button>
         </div>
@@ -506,12 +559,65 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function HowItWorks({ icon: Icon, title, body }: { icon: typeof FolderInput; title: string; body: string }) {
+/** Compact 3-step indicator (Paste → Review → Import) shown in the header on wide screens. */
+function Stepper({ step, className }: { step: number; className?: string }) {
+  const labels = ["Paste", "Review", "Import"];
   return (
-    <li className="rounded-[var(--radius-control)] border border-border bg-surface px-3 py-2.5">
-      <div className="mb-0.5 flex items-center gap-1.5 font-medium text-foreground"><Icon size={14} className="text-primary" /> {title}</div>
-      {body}
-    </li>
+    <div className={cn("items-center gap-1.5 text-[11px]", className)}>
+      {labels.map((label, i) => {
+        const n = i + 1;
+        const active = n === step;
+        const done = n < step;
+        return (
+          <div key={label} className="flex items-center gap-1.5">
+            <span
+              className={cn(
+                "grid h-5 w-5 place-items-center rounded-full text-[10px] font-semibold transition-colors",
+                done ? "bg-primary text-primary-foreground" : active ? "bg-primary-soft text-primary ring-1 ring-primary/40" : "bg-surface-3 text-faint",
+              )}
+            >
+              {done ? <Check size={11} /> : n}
+            </span>
+            <span className={cn(active || done ? "font-medium text-foreground" : "text-muted")}>{label}</span>
+            {i < labels.length - 1 && <span className="mx-1 h-px w-5 bg-border" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Feature({ icon: Icon, title, body }: { icon: typeof FolderInput; title: string; body: string }) {
+  return (
+    <div className="flex items-start gap-3 rounded-[var(--radius-control)] border border-border bg-surface-2 p-3 transition-colors hover:border-border-strong">
+      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-primary-soft text-primary"><Icon size={17} /></span>
+      <div className="min-w-0">
+        <div className="text-[13px] font-semibold">{title}</div>
+        <div className="mt-0.5 text-[12px] leading-snug text-muted">{body}</div>
+      </div>
+    </div>
+  );
+}
+
+/** Shimmering placeholder rows shown while a scan is in flight. */
+function SkeletonGroup({ rows }: { rows: number }) {
+  const widths = ["w-2/3", "w-1/2", "w-3/5", "w-5/12", "w-1/3"];
+  return (
+    <div className="overflow-hidden rounded-[var(--radius-control)] border border-border">
+      <div className="flex items-center gap-2 border-b border-border bg-surface-2 px-3 py-2">
+        <Skeleton className="h-3.5 w-3.5 rounded" />
+        <Skeleton className="h-3 w-32 rounded" />
+      </div>
+      <div className="divide-y divide-border">
+        {Array.from({ length: rows }, (_, i) => (
+          <div key={i} className="flex items-center gap-3 px-3 py-2.5">
+            <Skeleton className="h-4 w-4 rounded" />
+            <Skeleton className={cn("h-3 rounded", widths[i % widths.length])} />
+            <Skeleton className="ml-auto h-3 w-12 rounded" />
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -547,11 +653,15 @@ function FilePreview({
   let rendered = 0;
   const totalFiles = scan.summary.fileCount;
   return (
-    <div className="overflow-hidden rounded-[var(--radius-control)] border border-border">
-      <div className="border-b border-border bg-surface-2 px-3 py-2 text-[12px] font-semibold uppercase tracking-wide text-faint">
-        Preview {totalFiles > MAX_ROWS ? `· first ${MAX_ROWS} of ${totalFiles.toLocaleString()}` : `· ${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}`}
+    <div className="flex flex-col overflow-hidden rounded-[var(--radius-control)] border border-border bg-surface lg:sticky lg:top-0">
+      <div className="flex items-center gap-2 border-b border-border bg-surface-2 px-3 py-2 text-[12px] font-semibold uppercase tracking-wide text-faint">
+        <FileText size={13} className="shrink-0" />
+        Preview
+        <span className="ml-auto font-mono text-[11px] normal-case tracking-normal text-muted">
+          {totalFiles > MAX_ROWS ? `first ${MAX_ROWS} of ${totalFiles.toLocaleString()}` : `${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}`}
+        </span>
       </div>
-      <div className="max-h-[46vh] overflow-y-auto">
+      <div className="max-h-[52vh] overflow-y-auto lg:max-h-[calc(100vh-20rem)]">
         {groups.map((g, gi) => {
           if (rendered >= MAX_ROWS) return null;
           const visible = g.files.slice(0, MAX_ROWS - rendered);
