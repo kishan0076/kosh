@@ -169,6 +169,9 @@ export interface ViewOpts {
   orderBy?: string | null; // null = send NO orderBy (Google forbids sorting a fullText query)
   pageSize?: number;
   driveId?: string;
+  /** Enumerate across ALL drives (My Drive + every Shared Drive) when no specific driveId is given — used
+   *  by the import scan so a source folder that lives in a Shared Drive still returns its children. */
+  allDrives?: boolean;
 }
 
 /** Low-level list by an arbitrary `q`. Powers folder browse, search, recent, starred and trash. */
@@ -182,10 +185,15 @@ export async function listByQuery(accessToken: string, q: string, opts: ViewOpts
   u.searchParams.set("pageSize", String(opts.pageSize ?? 100));
   u.searchParams.set("spaces", "drive");
   u.searchParams.set("supportsAllDrives", "true");
-  // Scope to a Shared Drive when asked (otherwise the default: the user's own corpus).
+  // Scope to a Shared Drive when asked (otherwise the default: the user's own corpus). When `allDrives` is
+  // set and no specific driveId is given, enumerate across every drive so a query like "'<id>' in parents"
+  // returns children wherever the folder actually lives (My Drive OR any Shared Drive).
   if (opts.driveId) {
     u.searchParams.set("corpora", "drive");
     u.searchParams.set("driveId", opts.driveId);
+    u.searchParams.set("includeItemsFromAllDrives", "true");
+  } else if (opts.allDrives) {
+    u.searchParams.set("corpora", "allDrives");
     u.searchParams.set("includeItemsFromAllDrives", "true");
   }
   if (opts.pageToken) u.searchParams.set("pageToken", opts.pageToken);
@@ -445,7 +453,9 @@ export async function scanDescendants(
     const parentId = queue.shift()!;
     let pageToken: string | undefined;
     do {
-      const page = await listChildren(accessToken, parentId, { pageToken, driveId: opts.driveId, orderBy: null, pageSize: 1000 });
+      // Enumerate children across all drives unless a specific Shared Drive was requested, so a source root
+      // that lives in a Shared Drive (while the user browses My Drive) still returns its full subtree.
+      const page = await listChildren(accessToken, parentId, { pageToken, driveId: opts.driveId, allDrives: !opts.driveId, orderBy: null, pageSize: 1000 });
       for (const child of page.files) {
         if (files.length >= fileCap || folders.length >= folderCap) {
           truncated = true;

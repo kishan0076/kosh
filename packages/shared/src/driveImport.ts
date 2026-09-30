@@ -130,15 +130,16 @@ export interface ScanFileLite {
 }
 
 /**
- * A content signature for duplicate matching:
- *  • binary files carry an md5 checksum → match on md5 alone (true content identity, name-independent,
- *    the same signal Drive's own duplicate finder uses);
- *  • native Google docs (Docs/Sheets/Slides) have NO md5 → fall back to name + mime + size.
+ * A CONTENT signature for duplicate matching, or `null` when the file has no reliable content fingerprint.
+ *
+ * Only binary files carry an md5 checksum (Drive's own duplicate signal, name-independent). Native Google
+ * docs (Docs/Sheets/Slides), shortcuts, etc. have NO md5 — and matching them on name+type alone is unsafe:
+ * two genuinely different docs named "Meeting Notes" (or the ubiquitous "Untitled document") would collide
+ * and, under the default skip strategy, the user's distinct file would be silently dropped. So a file with
+ * no md5 gets NO signature and is never auto-classified as a duplicate — it always imports.
  */
-export function fileSignature(f: ScanFileLite): string {
-  if (f.md5Checksum) return `md5:${f.md5Checksum}`;
-  const size = f.size != null ? String(f.size) : "";
-  return `nm:${(f.name || "").trim().toLowerCase()}|${f.mimeType || ""}|${size}`;
+export function fileSignature(f: ScanFileLite): string | null {
+  return f.md5Checksum ? `md5:${f.md5Checksum}` : null;
 }
 
 /** `new` — not present anywhere yet · `dupInDest` — already in the destination Drive · `dupInSource` —
@@ -166,10 +167,12 @@ export function detectDuplicates(sourceFiles: ScanFileLite[], destSignatures: It
   for (const f of sourceFiles) {
     const sig = fileSignature(f);
     let status: DupStatus;
-    if (dest.has(sig)) status = "dupInDest";
+    // No content signature (native docs, shortcuts) ⇒ never a duplicate — always import it.
+    if (!sig) status = "new";
+    else if (dest.has(sig)) status = "dupInDest";
     else if (seen.has(sig)) status = "dupInSource";
     else status = "new";
-    seen.add(sig);
+    if (sig) seen.add(sig);
     statusById[f.id] = status;
     counts[status]++;
     bytes[status] += f.size ?? 0;
@@ -302,26 +305,38 @@ export function buildCopyPlan(input: BuildPlanInput): CopyPlan {
     };
   });
 
-  // Which folders must exist? Those directly receiving a surviving copy, plus all their ancestors.
-  const needed = new Set<string>();
+  // Pruning drops only folders left EMPTY BY SKIPS — never a genuinely-empty source folder (those are
+  // preserved so the imported tree mirrors the source). `needed` = folders that still receive a surviving
+  // copy; `hadFile` = folders that directly held any source file. A folder is KEPT when it still receives a
+  // copy, or it never held a file at all (genuinely empty). Then close over ancestors so every kept folder's
+  // parent chain also exists — otherwise a preserved empty child of a skip-emptied parent would be orphaned.
+  let plannedFolders = tree.folders;
   if (prune) {
+    const needed = new Set<string>();
+    const hadFile = new Set<string>();
+    for (const c of copies) {
+      if (!c.parentRef.startsWith("f:")) continue;
+      const folderId = c.parentRef.slice(2);
+      hadFile.add(folderId);
+      if (!c.skipped) needed.add(folderId);
+    }
+    const keep = new Set<string>();
     const addWithAncestors = (id: string) => {
       let cur: string | undefined = id;
       const guard = new Set<string>();
-      while (cur && folderIds.has(cur) && !needed.has(cur) && !guard.has(cur)) {
+      while (cur && folderIds.has(cur) && !keep.has(cur) && !guard.has(cur)) {
         guard.add(cur);
-        needed.add(cur);
+        keep.add(cur);
         cur = folderById.get(cur)?.parentId;
       }
     };
-    for (const c of copies) {
-      if (c.skipped) continue;
-      if (c.parentRef.startsWith("f:")) addWithAncestors(c.parentRef.slice(2));
+    for (const f of tree.folders) {
+      if (needed.has(f.id) || !hadFile.has(f.id)) addWithAncestors(f.id);
     }
+    plannedFolders = tree.folders.filter((f) => keep.has(f.id));
   }
 
-  const folders: PlanFolder[] = tree.folders
-    .filter((f) => !prune || needed.has(f.id))
+  const folders: PlanFolder[] = [...plannedFolders]
     .sort((a, b) => depthOf(a.id) - depthOf(b.id) || a.name.localeCompare(b.name))
     .map((f) => ({ ref: folderRef(f.id), name: f.name, sourceId: f.id, parentRef: parentRefOf(f.parentId) }));
 

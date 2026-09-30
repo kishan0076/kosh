@@ -479,7 +479,9 @@ driveV2Router.post(
       }
     }
 
-    const scan = roots.length ? await driveCall(acc, (token) => scanDescendants(token, roots, { driveId })) : { folders: [], files: [], truncated: false };
+    // Enumerate the source subtree across ALL drives — a pasted link can point into My Drive or any Shared
+    // Drive regardless of which space is active, so we must not pin the scan to `driveId`.
+    const scan = roots.length ? await driveCall(acc, (token) => scanDescendants(token, roots)) : { folders: [], files: [], truncated: false };
 
     // Slim, client-facing tree (the fields the UI + the shared copy-plan builder need).
     const treeFiles = scan.files.map((f) => ({
@@ -502,7 +504,12 @@ driveV2Router.post(
     if (dedupeScope === "drive" && treeFiles.length) {
       const dest = await driveCall(acc, (token) => scanFiles(token, { pageCap: 20, driveId }));
       destTruncated = dest.truncated;
-      for (const f of dest.files) destSignatures.add(fileSignature(f));
+      // Only files with a real content signature (md5) count toward duplicate detection; native docs etc.
+      // have none (fileSignature → null) and are never treated as duplicates.
+      for (const f of dest.files) {
+        const sig = fileSignature(f);
+        if (sig) destSignatures.add(sig);
+      }
     }
 
     const dedup = detectDuplicates(treeFiles, destSignatures);

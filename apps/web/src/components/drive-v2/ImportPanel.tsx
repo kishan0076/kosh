@@ -82,6 +82,28 @@ const DECISION_LABEL: Record<FileDecision, string> = { skip: "Skip", copy: "Copy
 
 const MAX_ROWS = 300; // cap the DOM — the import still processes every scanned file
 
+// Drive throttles bulk writes (429 / 403 rate-limit → the API maps both to 502) and occasionally 5xx.
+// Those responses mean the write never applied, so retrying with backoff is safe and is standard for bulk
+// copy. NEEDS_RECONNECT (400) and per-item 403/404 are NOT retried.
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+async function withRetry<T>(fn: () => Promise<T>, attempts = 4): Promise<T> {
+  let lastErr: unknown;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i === attempts - 1 || !(err instanceof ApiError) || !RETRYABLE_STATUS.has(err.status ?? 0)) throw err;
+      await new Promise((r) => setTimeout(r, Math.min(500 * 2 ** i, 4000)));
+    }
+  }
+  throw lastErr;
+}
+
+// Guards against two import runs sharing the global bulkOp/counters — the panel can be closed mid-import
+// (the async loop keeps running) and reopened, which would otherwise let a second run start concurrently.
+let importRunning = false;
+
 type Phase = "input" | "scanning" | "review" | "running" | "done";
 
 interface ImportResult {
@@ -191,11 +213,18 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
 
   async function runImport() {
     if (!plan) return;
+    // Never let a second import share the global bulkOp/counters with one already running (the panel can be
+    // closed mid-import and reopened, which mounts a fresh panel over the still-running loop).
+    if (importRunning) {
+      toast({ message: "An import is already running — wait for it to finish.", tone: "warn" });
+      return;
+    }
     const total = plan.folders.length + plan.stats.filesToCopy;
     if (total === 0) {
       toast({ message: "Nothing to import — every file was skipped.", tone: "warn" });
       return;
     }
+    importRunning = true;
     setPhase("running");
     useDriveV2.setState({ bulkOp: { label: "Importing from Drive", total, done: 0 } });
     const bump = () => useDriveV2.setState((s) => (s.bulkOp ? { bulkOp: { ...s.bulkOp, done: s.bulkOp.done + 1 } } : {}));
@@ -206,10 +235,11 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
     let destRootId = currentFolderId;
     try {
       if (intoNewFolder && newFolderName.trim()) {
-        const { file } = await driveV2Api.createFolder(accountId, { name: newFolderName.trim(), parentId: currentFolderId });
+        const { file } = await withRetry(() => driveV2Api.createFolder(accountId, { name: newFolderName.trim(), parentId: currentFolderId }));
         destRootId = file.id;
       }
     } catch (err) {
+      importRunning = false;
       useDriveV2.setState({ bulkOp: null });
       setPhase("review");
       toast({ message: err instanceof ApiError ? err.message : "Couldn't create the destination folder.", tone: "danger" });
@@ -217,7 +247,8 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
     }
     refMap.set(DEST_ROOT, destRootId);
 
-    // 2) Recreate folders in dependency order (parents first) so every child has a real parent id.
+    // 2) Recreate folders in dependency order (parents first) so every child has a real parent id. Each
+    //    create is retried on transient throttling so one 429/5xx doesn't cascade to fail a whole subtree.
     let foldersMade = 0;
     for (const f of plan.folders) {
       const parent = refMap.get(f.parentRef);
@@ -227,7 +258,7 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
         continue;
       }
       try {
-        const { file } = await driveV2Api.createFolder(accountId, { name: f.name, parentId: parent });
+        const { file } = await withRetry(() => driveV2Api.createFolder(accountId, { name: f.name, parentId: parent }));
         refMap.set(f.ref, file.id);
         foldersMade++;
       } catch (err) {
@@ -237,7 +268,9 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
       bump();
     }
 
-    // 3) Copy files into their (now-created) parents — bounded concurrency, per-file failures don't abort.
+    // 3) Copy files into their (now-created) parents — bounded concurrency, per-file failures don't abort;
+    //    each copy is retried on transient throttling. Once a genuine reconnect is seen, drain the rest fast
+    //    (mark failed without hammering Drive) instead of firing every remaining request.
     const toCopy = plan.copies.filter((c) => !c.skipped);
     let copied = 0;
     let failed = 0;
@@ -247,13 +280,13 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
       while (i < toCopy.length) {
         const c = toCopy[i++]!;
         const parent = refMap.get(c.parentRef);
-        if (!parent) {
+        if (!parent || reconnect) {
           failed++;
           bump();
           continue;
         }
         try {
-          await driveV2Api.copy(accountId, c.sourceId, { name: c.name, parents: [parent] });
+          await withRetry(() => driveV2Api.copy(accountId, c.sourceId, { name: c.name, parents: [parent] }));
           copied++;
         } catch (err) {
           failed++;
@@ -264,6 +297,7 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
     };
     await Promise.all(Array.from({ length: Math.min(LIMIT, toCopy.length) }, worker));
 
+    importRunning = false;
     useDriveV2.setState({ bulkOp: null });
     useDriveV2.getState().invalidateViews(); // the destination folder must refetch to show the new items
     void loadQuota();
@@ -403,10 +437,13 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
                     <span className="text-muted">Create a new folder for this import</span>
                   </div>
                   {intoNewFolder ? (
-                    <div className="mt-2 flex items-center gap-2">
-                      <FolderPlus size={15} className="shrink-0 text-muted" />
-                      <Input value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="New folder name" maxLength={255} className="max-w-xs" />
-                      <span className="truncate text-[12px] text-muted">in {currentFolderName}</span>
+                    <div className="mt-2">
+                      <div className="flex items-center gap-2">
+                        <FolderPlus size={15} className="shrink-0 text-muted" />
+                        <Input aria-label="New folder name" value={newFolderName} onChange={(e) => setNewFolderName(e.target.value)} placeholder="New folder name" maxLength={255} className="max-w-xs" aria-invalid={!newFolderName.trim()} />
+                        <span className="truncate text-[12px] text-muted">in {currentFolderName}</span>
+                      </div>
+                      {!newFolderName.trim() && <p className="mt-1 text-[11.5px] text-danger">Enter a folder name, or turn this off to import into {currentFolderName}.</p>}
                     </div>
                   ) : (
                     <p className="mt-1.5 flex items-center gap-1.5 text-[12.5px] text-muted"><Folder size={14} /> Files import directly into <span className="font-medium text-foreground">{currentFolderName}</span></p>
@@ -460,7 +497,7 @@ export function ImportPanel({ onClose }: { onClose: () => void }) {
             {plan.stats.filesSkipped > 0 && ` · ${plan.stats.filesSkipped.toLocaleString()} skipped`}
             {plan.stats.foldersToCreate > 0 && ` · ${plan.stats.foldersToCreate.toLocaleString()} folder${plan.stats.foldersToCreate === 1 ? "" : "s"}`}
           </span>
-          <Button variant="primary" size="sm" disabled={plan.stats.filesToCopy === 0} onClick={() => void runImport()}>
+          <Button variant="primary" size="sm" disabled={plan.stats.filesToCopy === 0 || (intoNewFolder && !newFolderName.trim())} onClick={() => void runImport()}>
             <FolderInput size={15} /> Import {plan.stats.filesToCopy.toLocaleString()} file{plan.stats.filesToCopy === 1 ? "" : "s"}
           </Button>
         </div>

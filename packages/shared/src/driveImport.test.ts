@@ -85,9 +85,9 @@ describe("fileSignature", () => {
     expect(fileSignature(a)).toBe("md5:deadbeef");
   });
 
-  it("falls back to name|mime|size for native docs (no md5)", () => {
+  it("returns null for files without an md5 (native docs) so they're never auto-deduped", () => {
     const doc: ScanFileLite = { id: "3", name: "Plan", mimeType: "application/vnd.google-apps.document" };
-    expect(fileSignature(doc)).toBe("nm:plan|application/vnd.google-apps.document|");
+    expect(fileSignature(doc)).toBeNull();
   });
 });
 
@@ -119,6 +119,16 @@ describe("detectDuplicates", () => {
   it("accepts a plain iterable of signatures (not just a Set)", () => {
     const r = detectDuplicates([{ id: "z", name: "z", md5Checksum: "hZ" }], ["md5:hZ"]);
     expect(r.statusById.z).toBe("dupInDest");
+  });
+
+  it("never marks a native doc (no md5) as a duplicate, even against a same-named file — no silent data loss", () => {
+    const src: ScanFileLite[] = [
+      { id: "d1", name: "Meeting Notes", mimeType: "application/vnd.google-apps.document" },
+      { id: "d2", name: "Meeting Notes", mimeType: "application/vnd.google-apps.document" }, // same name, distinct doc
+    ];
+    const r = detectDuplicates(src, ["md5:whatever"]);
+    expect(r.statusById).toEqual({ d1: "new", d2: "new" }); // both import, neither dropped
+    expect(r.counts.new).toBe(2);
   });
 });
 
@@ -181,6 +191,24 @@ describe("buildCopyPlan", () => {
     const dedup = detectDuplicates(tree.files, ["md5:hb"]);
     const plan = buildCopyPlan({ tree, dedup, strategy: "skip", pruneEmptyFolders: false });
     expect(plan.folders.map((f) => f.sourceId)).toEqual(["A", "B"]);
+  });
+
+  it("preserves a genuinely-empty source folder (mirror the structure) even with pruning on", () => {
+    const t: ImportTree = {
+      folders: [{ id: "A", name: "A" }, { id: "T", name: "Templates", parentId: "A" }],
+      files: [{ id: "a", name: "a.txt", parentId: "A", md5Checksum: "ha" }], // nothing skipped
+    };
+    const plan = buildCopyPlan({ tree: t, dedup: detectDuplicates(t.files, []), strategy: "skip" });
+    expect(plan.folders.map((f) => f.sourceId).sort()).toEqual(["A", "T"]); // empty Templates/ kept
+  });
+
+  it("keeps a skip-emptied parent when it must host a preserved empty child (ancestor closure)", () => {
+    const t: ImportTree = {
+      folders: [{ id: "A", name: "A" }, { id: "T", name: "Templates", parentId: "A" }],
+      files: [{ id: "a", name: "a.txt", parentId: "A", md5Checksum: "dup" }], // A's only file is a dest dup → skipped
+    };
+    const plan = buildCopyPlan({ tree: t, dedup: detectDuplicates(t.files, ["md5:dup"]), strategy: "skip" });
+    expect(plan.folders.map((f) => f.sourceId).sort()).toEqual(["A", "T"]); // A kept to host empty Templates/
   });
 
   it("'copy' strategy copies duplicates with the same name", () => {
