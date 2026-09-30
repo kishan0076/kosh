@@ -1,21 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { Router, type Request } from "express";
 import { z } from "zod";
-import { getStore } from "../db/index.js";
-import { ah, badRequest, forbidden, notFound } from "../errors.js";
+import { ah, badRequest, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
-import { isAdmin } from "../auth/users.js";
 import { config } from "../config.js";
 import { deleteVaultBlob, getVaultBlob, putVaultBlob } from "../vault/storage.js";
 
 export const vaultRouter: Router = Router();
 
-/** Admin-only gate (defense in depth alongside the client-side E2EE). */
-async function requireAdmin(req: Request): Promise<string> {
-  const uid = requireWrite(req); // must be an authenticated, write-scoped session/key
-  const user = await getStore().users.findById(uid);
-  if (!isAdmin(user)) throw forbidden("The secure vault is admin-only.");
-  return uid;
+/** Each signed-in member has their OWN Secure Vault: every blob below is keyed by the user id, and the
+ *  contents are end-to-end encrypted client-side under that user's master password. A write-scoped
+ *  session or API key is required. */
+function requireVaultUser(req: Request): string {
+  return requireWrite(req);
 }
 
 const cipher = z.object({ iv: z.string().min(1), ct: z.string().min(1) });
@@ -33,7 +30,7 @@ const manifestSchema = z.object({
 vaultRouter.get(
   "/vault/manifest",
   ah(async (req, res) => {
-    const uid = await requireAdmin(req);
+    const uid = requireVaultUser(req);
     const buf = await getVaultBlob(uid, "manifest.json");
     if (!buf) {
       res.json({ exists: false }); // first run — the client will create a master password
@@ -46,7 +43,7 @@ vaultRouter.get(
 vaultRouter.put(
   "/vault/manifest",
   ah(async (req, res) => {
-    const uid = await requireAdmin(req);
+    const uid = requireVaultUser(req);
     const body = manifestSchema.parse(req.body);
     const buf = Buffer.from(JSON.stringify(body), "utf8");
     if (buf.length > config.vault.maxManifestBytes) throw badRequest("TOO_LARGE", "Vault manifest is too large.");
@@ -68,7 +65,7 @@ vaultRouter.put(
 vaultRouter.post(
   "/vault/files",
   ah(async (req, res) => {
-    const uid = await requireAdmin(req);
+    const uid = requireVaultUser(req);
     const { contentB64 } = z.object({ contentB64: z.string().min(1) }).parse(req.body);
     const buf = Buffer.from(contentB64, "base64");
     if (buf.length > config.vault.maxFileBytes) throw badRequest("TOO_LARGE", "Encrypted file is too large.");
@@ -81,7 +78,7 @@ vaultRouter.post(
 vaultRouter.get(
   "/vault/files/:id",
   ah(async (req, res) => {
-    const uid = await requireAdmin(req);
+    const uid = requireVaultUser(req);
     const id = String(req.params.id);
     if (!FILE_ID.test(id)) throw badRequest("BAD_ID", "Invalid file id.");
     const buf = await getVaultBlob(uid, `files/${id}`);
@@ -93,7 +90,7 @@ vaultRouter.get(
 vaultRouter.delete(
   "/vault/files/:id",
   ah(async (req, res) => {
-    const uid = await requireAdmin(req);
+    const uid = requireVaultUser(req);
     const id = String(req.params.id);
     if (!FILE_ID.test(id)) throw badRequest("BAD_ID", "Invalid file id.");
     await deleteVaultBlob(uid, `files/${id}`);

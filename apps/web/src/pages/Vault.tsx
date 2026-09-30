@@ -32,18 +32,15 @@ import { Button, Input, Textarea } from "@/components/ui";
 const TYPE_ICON: Record<VaultEntryType, typeof FileText> = { note: FileText, secret: KeyRound, file: Paperclip };
 
 export function Vault() {
-  const user = useData((s) => s.user);
   const backend = useData((s) => s.backend);
   const status = useVault((s) => s.status);
   const init = useVault((s) => s.init);
   const lock = useVault((s) => s.lock);
   const touch = useVault((s) => s.touch);
 
-  const isAdmin = !!user.isAdmin;
-
   useEffect(() => {
-    if (backend && isAdmin) void init();
-  }, [backend, isAdmin, init]);
+    if (backend) void init();
+  }, [backend, init]);
 
   // Lock on unmount / tab hidden so secrets never linger.
   useEffect(() => {
@@ -63,15 +60,6 @@ export function Vault() {
       </Gate>
     );
   }
-  if (!isAdmin) {
-    return (
-      <Gate icon={Lock} title="Admin only">
-        The Secure Vault is restricted to the admin account. Ask the owner to add your login to{" "}
-        <code className="rounded bg-surface-2 px-1 py-0.5 font-mono text-[12px]">KOSH_ADMIN_LOGIN</code>.
-      </Gate>
-    );
-  }
-
   return (
     <div onClickCapture={touch} onKeyDownCapture={touch}>
       {status === "loading" && <PageSkeleton variant="vault" />}

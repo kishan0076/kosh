@@ -396,6 +396,14 @@ export interface User {
     scopes?: string[];
     source?: "oauth" | "pat";
   };
-  /** Whether this user may access the admin-only Secure Vault. */
+  /** Whether this user may access admin-only areas (the Users management screen). */
   isAdmin?: boolean;
+  /** Access role. "admin" can manage users; "user" is a normal member. */
+  role?: "admin" | "user";
+  /** Email address for password accounts (absent for GitHub-only sign-ins). */
+  email?: string;
+  /** How this account signs in. */
+  authProvider?: "password" | "github" | "dev";
+  /** A disabled account cannot sign in or use the app. */
+  disabled?: boolean;
 }

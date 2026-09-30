@@ -32,6 +32,7 @@ import { Automations } from "@/pages/Automations";
 import { Security } from "@/pages/Security";
 import { Bulk } from "@/pages/Bulk";
 import { Registry } from "@/pages/Registry";
+import { Admin } from "@/pages/Admin";
 import { NotFound } from "@/pages/NotFound";
 
 initTheme();
@@ -85,6 +86,7 @@ createRoot(document.getElementById("root")!).render(
           <Route path="security" element={<Security />} />
           <Route path="bulk" element={<Bulk />} />
           <Route path="registry" element={<Registry />} />
+          <Route path="admin" element={<Admin />} />
           <Route path="settings" element={<Settings />} />
           <Route path="share" element={<Share />} />
           <Route path="*" element={<NotFound />} />

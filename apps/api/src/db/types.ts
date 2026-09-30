@@ -20,6 +20,15 @@ export interface ServerUser extends Omit<User, "aiKeys"> {
   aiModel?: string; // optional model override for the selected provider
   aiKeys?: Record<string, string>; // provider id -> encryptSecret(key); bring-your-own-key, never exposed
   telegramChatId?: number;
+  // Accounts & roles (email/password auth + admin management).
+  email?: string; // normalized (lowercased) email for password accounts
+  passwordHash?: string; // scrypt hash — never a plaintext password, never exposed
+  role?: "admin" | "user"; // "admin" gates the Users screen; defaults to "user"
+  authProvider?: "password" | "github" | "dev"; // how the account was created
+  disabled?: boolean; // a disabled account cannot sign in or use the app
+  createdBy?: string; // userId of the admin who created this account (if admin-created)
+  createdAt?: string; // ISO — set on creation
+  updatedAt?: string; // ISO — bumped on updates
 }
 export interface ServerItem extends Item {
   userId: string;

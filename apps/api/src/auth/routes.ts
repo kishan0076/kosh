@@ -1,12 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { Router } from "express";
 import { z } from "zod";
+import { isValidEmail, passwordProblem } from "@kosh/shared";
 import { config } from "../config.js";
 import { getStore, type ServerUser } from "../db/index.js";
-import { ah, badRequest, forbidden, unauthorized } from "../errors.js";
-import { getOrCreateUser, newEmailToken, publicUser } from "./users.js";
-import { requireUser, requireWrite } from "./middleware.js";
-import { encryptSecret, verifyPassword } from "./crypto.js";
+import { ah, badRequest, forbidden, notFound, unauthorized } from "../errors.js";
+import { adminUserRow, createPasswordUser, findUserByEmail, getOrCreateUser, isAdmin, isConfigAdmin, newEmailToken, normalizeEmail, publicUser } from "./users.js";
+import { requireAdmin, requireUser, requireWrite } from "./middleware.js";
+import { encryptSecret, hashPassword, verifyPassword } from "./crypto.js";
+import { deleteVaultBlob } from "../vault/storage.js";
 import { isProviderId } from "../integrations/aiProviders.js";
 import { githubGrantPatch } from "../integrations/githubToken.js";
 import { SESSION_COOKIE, signSession, signState, verifyState } from "./jwt.js";
@@ -50,32 +52,61 @@ authRouter.post(
   }),
 );
 
+// A valid scrypt hash of a random secret, used to keep /auth/password constant-time when no account
+// matches — so response timing can't be used to probe which emails are registered.
+const DUMMY_PASSWORD_HASH = hashPassword(randomBytes(24).toString("hex"));
+
 /**
- * Admin email + password login (env-configured). Works on web (cookie) and the mobile app (Bearer
- * token), with no OAuth app or dev-login needed — ideal for the packaged APK. Only active when both
- * ADMIN_EMAIL and a secret (ADMIN_PASSWORD or ADMIN_PASSWORD_HASH) are set. Rate-limited by the shared
- * /auth bucket (30/min/IP). Failures are generic (never reveal which of email/password was wrong) and
- * the password check is constant-time.
+ * Email + password login. Works for BOTH the env-configured admin (ADMIN_EMAIL + ADMIN_PASSWORD/…_HASH,
+ * a break-glass identity that needs no user store) AND any registered password account. Works on web
+ * (cookie) and the mobile app (Bearer token). Rate-limited by the shared /auth bucket (30/min/IP).
+ * Failures are generic (never reveal which of email/password was wrong) and the password check is
+ * constant-time whether or not the email exists.
  */
 authRouter.post(
   "/auth/password",
   ah(async (req, res) => {
-    const secret = config.admin.passwordHash || config.admin.password;
-    if (!config.admin.email || !secret) throw forbidden("Password login isn't configured on this server.");
     const { email, password, client } = z
       .object({ email: z.string().min(1).max(320), password: z.string().min(1).max(200), client: z.enum(["web", "mobile"]).optional() })
       .parse(req.body);
-    // Always run the password check (constant-time) even on an email mismatch, so response timing can't
-    // be used to probe the admin email.
-    const emailOk = email.trim().toLowerCase() === config.admin.email;
+    const emailNorm = normalizeEmail(email);
+    const adminSecret = config.admin.passwordHash || config.admin.password;
+    const isAdminLogin = !!config.admin.email && emailNorm === config.admin.email && !!adminSecret;
+    // Registered account (only looked up when it isn't the env admin).
+    const account = isAdminLogin ? null : await findUserByEmail(emailNorm);
+    // Always verify against SOME hash so timing is uniform; a disabled or password-less account can't win.
+    const secret = isAdminLogin ? adminSecret! : account?.passwordHash ?? DUMMY_PASSWORD_HASH;
     const pwOk = verifyPassword(password, secret);
-    if (!emailOk || !pwOk) throw unauthorized("Invalid email or password.");
-    // The admin identity's login is the email (which config.vault.adminLogin defaults to), so this user is
-    // the vault admin.
-    const user = await getOrCreateUser({ login: config.admin.email, name: config.admin.name });
+    const ok = pwOk && (isAdminLogin || (!!account?.passwordHash && !account.disabled));
+    if (!ok) throw unauthorized("Invalid email or password.");
+    const user = isAdminLogin ? await getOrCreateUser({ login: config.admin.email!, name: config.admin.name, authProvider: "password" }) : account!;
     const token = await signSession(user.id);
     res.cookie(SESSION_COOKIE, token, cookieOpts());
     res.json(client === "mobile" ? { user: publicUser(user), token } : { user: publicUser(user) });
+  }),
+);
+
+/**
+ * Self-service email + password sign-up. Anyone can create their own account (no GitHub needed); the
+ * very first account on a fresh instance bootstraps as admin. Email must be unique (and not the env
+ * admin email). Rate-limited by the shared /auth bucket.
+ */
+authRouter.post(
+  "/auth/register",
+  ah(async (req, res) => {
+    const { email, password, name, client } = z
+      .object({ email: z.string().min(1).max(320), password: z.string().min(1).max(200), name: z.string().max(120).optional(), client: z.enum(["web", "mobile"]).optional() })
+      .parse(req.body);
+    if (!isValidEmail(email)) throw badRequest("BAD_EMAIL", "Enter a valid email address.");
+    const problem = passwordProblem(password);
+    if (problem) throw badRequest("WEAK_PASSWORD", problem);
+    const emailNorm = normalizeEmail(email);
+    const taken = (config.admin.email && emailNorm === config.admin.email) || (await findUserByEmail(emailNorm));
+    if (taken) throw badRequest("EMAIL_TAKEN", "An account with that email already exists.");
+    const user = await createPasswordUser({ email: emailNorm, passwordHash: hashPassword(password), name });
+    const token = await signSession(user.id);
+    res.cookie(SESSION_COOKIE, token, cookieOpts());
+    res.status(201).json(client === "mobile" ? { user: publicUser(user), token } : { user: publicUser(user) });
   }),
 );
 
@@ -185,6 +216,95 @@ authRouter.get(
     // Backfill the inbound-email token for users created before it existed.
     if (!user.emailToken) user = (await getStore().users.updateById(uid, { emailToken: newEmailToken() })) ?? user;
     res.json({ user: publicUser(user) });
+  }),
+);
+
+/* ── Admin: user management ───────────────────────────────── */
+
+/** Count the accounts that currently have effective admin access and aren't disabled. */
+async function activeAdminCount(): Promise<number> {
+  const users = await getStore().users.find({});
+  return users.filter((u) => isAdmin(u) && !u.disabled).length;
+}
+
+/** Remove all of a user's data when their account is deleted, so nothing is orphaned. The vault's
+ *  per-user encrypted file blobs are left (unreadable without the manifest + master password) — only
+ *  the manifest is removed here. */
+async function purgeUserData(uid: string): Promise<void> {
+  const store = getStore();
+  const colls = [store.items, store.skills, store.collections, store.contextPacks, store.rules, store.apiKeys, store.storageObjects, store.uploadSessions, store.driveAccounts, store.driveUploads];
+  for (const coll of colls) {
+    const docs = await coll.find({ userId: uid });
+    for (const d of docs) await coll.deleteById(d.id);
+  }
+  await deleteVaultBlob(uid, "manifest.json").catch(() => {});
+}
+
+/** List every account (admin only). */
+authRouter.get(
+  "/auth/admin/users",
+  ah(async (req, res) => {
+    await requireAdmin(req);
+    const users = await getStore().users.find({}, { sort: { createdAt: 1 } });
+    res.json({ users: users.map(adminUserRow) });
+  }),
+);
+
+/** Create an account with an email + password (admin only). */
+authRouter.post(
+  "/auth/admin/users",
+  ah(async (req, res) => {
+    const { uid: adminId } = await requireAdmin(req);
+    const { email, password, name, role } = z
+      .object({ email: z.string().min(1).max(320), password: z.string().min(1).max(200), name: z.string().max(120).optional(), role: z.enum(["admin", "user"]).optional() })
+      .parse(req.body);
+    if (!isValidEmail(email)) throw badRequest("BAD_EMAIL", "Enter a valid email address.");
+    const problem = passwordProblem(password);
+    if (problem) throw badRequest("WEAK_PASSWORD", problem);
+    const emailNorm = normalizeEmail(email);
+    const taken = (config.admin.email && emailNorm === config.admin.email) || (await findUserByEmail(emailNorm));
+    if (taken) throw badRequest("EMAIL_TAKEN", "An account with that email already exists.");
+    const user = await createPasswordUser({ email: emailNorm, passwordHash: hashPassword(password), name, role: role ?? "user", createdBy: adminId });
+    res.status(201).json({ user: adminUserRow(user) });
+  }),
+);
+
+/** Change an account's role or enabled state (admin only). */
+authRouter.patch(
+  "/auth/admin/users/:id",
+  ah(async (req, res) => {
+    const { uid: adminId } = await requireAdmin(req);
+    const target = await getStore().users.findById(String(req.params.id));
+    if (!target) throw notFound("User not found.");
+    if (isConfigAdmin(target)) throw forbidden("The configured admin account can't be changed here.");
+    const { role, disabled } = z.object({ role: z.enum(["admin", "user"]).optional(), disabled: z.boolean().optional() }).parse(req.body);
+    if (role === undefined && disabled === undefined) throw badRequest("NO_CHANGES", "Nothing to update.");
+    if (target.id === adminId && disabled === true) throw badRequest("SELF_DISABLE", "You can't disable your own account.");
+    if (target.id === adminId && role === "user") throw badRequest("SELF_DEMOTE", "You can't remove your own admin access.");
+    // Never leave the instance with no active admin.
+    const losingAdmin = (role === "user" || disabled === true) && isAdmin(target) && !target.disabled;
+    if (losingAdmin && (await activeAdminCount()) <= 1) throw badRequest("LAST_ADMIN", "You can't remove the last admin.");
+    const patch: Partial<ServerUser> = { updatedAt: new Date().toISOString() };
+    if (role !== undefined) patch.role = role;
+    if (disabled !== undefined) patch.disabled = disabled;
+    const updated = await getStore().users.updateById(target.id, patch);
+    res.json({ user: adminUserRow(updated!) });
+  }),
+);
+
+/** Delete an account and its data (admin only). */
+authRouter.delete(
+  "/auth/admin/users/:id",
+  ah(async (req, res) => {
+    const { uid: adminId } = await requireAdmin(req);
+    const target = await getStore().users.findById(String(req.params.id));
+    if (!target) throw notFound("User not found.");
+    if (isConfigAdmin(target)) throw forbidden("The configured admin account can't be removed here.");
+    if (target.id === adminId) throw badRequest("SELF_DELETE", "You can't delete your own account.");
+    if (isAdmin(target) && !target.disabled && (await activeAdminCount()) <= 1) throw badRequest("LAST_ADMIN", "You can't delete the last admin.");
+    await purgeUserData(target.id);
+    await getStore().users.deleteById(target.id);
+    res.json({ ok: true });
   }),
 );
 

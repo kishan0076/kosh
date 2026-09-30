@@ -280,6 +280,20 @@ export interface Digest {
   watchedNewTotal: number;
 }
 
+/** A row in the admin Users screen (identity + role only; never secrets). */
+export interface AdminUserRow {
+  id: string;
+  login: string;
+  name: string;
+  email?: string;
+  avatarUrl?: string;
+  role: "admin" | "user";
+  authProvider: "password" | "github" | "dev";
+  disabled: boolean;
+  configAdmin: boolean;
+  createdAt?: string;
+}
+
 export const api = {
   devLogin: (login: string, name?: string, client?: "mobile") =>
     req<{ user: User; token?: string }>("/auth/dev-login", { method: "POST", body: JSON.stringify({ login, name, client }) }),
@@ -287,6 +301,16 @@ export const api = {
   // app (Bearer token via the returned `token`), no OAuth needed.
   passwordLogin: (email: string, password: string, client?: "mobile") =>
     req<{ user: User; token?: string }>("/auth/password", { method: "POST", body: JSON.stringify({ email, password, client }) }),
+  // Self-service email+password sign-up. The first account on a fresh instance becomes the admin.
+  register: (email: string, password: string, name?: string, client?: "mobile") =>
+    req<{ user: User; token?: string }>("/auth/register", { method: "POST", body: JSON.stringify({ email, password, name, client }) }),
+  // Admin: user management.
+  adminListUsers: () => req<{ users: AdminUserRow[] }>("/auth/admin/users"),
+  adminCreateUser: (input: { email: string; password: string; name?: string; role?: "admin" | "user" }) =>
+    req<{ user: AdminUserRow }>("/auth/admin/users", { method: "POST", body: JSON.stringify(input) }),
+  adminUpdateUser: (id: string, patch: { role?: "admin" | "user"; disabled?: boolean }) =>
+    req<{ user: AdminUserRow }>(`/auth/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  adminDeleteUser: (id: string) => req<{ ok: boolean }>(`/auth/admin/users/${id}`, { method: "DELETE" }),
   me: () => req<{ user: User }>("/me"),
   logout: () => req<{ ok: boolean }>("/auth/logout", { method: "POST" }),
   // Native app auth: the GitHub login runs in the system browser and returns a one-time code via the

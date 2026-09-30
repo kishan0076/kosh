@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Github, LogIn, Lock, RefreshCw } from "lucide-react";
+import { Github, LogIn, Lock, RefreshCw, UserPlus } from "lucide-react";
+import { isValidEmail, passwordProblem } from "@kosh/shared";
 import { api } from "@/data/api";
 import { useData } from "@/data/store";
 import { useUi } from "@/data/ui";
@@ -15,19 +16,39 @@ export function LoginScreen() {
   const completeLogin = useData((s) => s.completeLogin);
   const toast = useUi((s) => s.toast);
   const [busy, setBusy] = useState<"github" | "dev" | "password" | null>(null);
+  const [mode, setMode] = useState<"signin" | "register">("signin");
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const withPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email.trim() || !password || busy) return;
+    if (mode === "register") {
+      if (!isValidEmail(email)) {
+        toast({ message: "Enter a valid email", tone: "danger" });
+        return;
+      }
+      const problem = passwordProblem(password);
+      if (problem) {
+        toast({ message: problem, tone: "danger" });
+        return;
+      }
+    }
     setBusy("password");
     try {
       // Native gets a Bearer token back; web relies on the cookie the response set (token is undefined).
-      const { token } = await api.passwordLogin(email.trim(), password, isNative ? "mobile" : undefined);
+      const { token } =
+        mode === "register"
+          ? await api.register(email.trim(), password, name.trim() || undefined, isNative ? "mobile" : undefined)
+          : await api.passwordLogin(email.trim(), password, isNative ? "mobile" : undefined);
       await completeLogin(token);
     } catch (err) {
-      toast({ message: "Sign-in failed", description: err instanceof Error ? err.message : "Check your email and password.", tone: "danger" });
+      toast({
+        message: mode === "register" ? "Couldn't create account" : "Sign-in failed",
+        description: err instanceof Error ? err.message : "Check your details and try again.",
+        tone: "danger",
+      });
       setBusy(null);
     }
   };
@@ -66,10 +87,21 @@ export function LoginScreen() {
             <div className="text-[12px] uppercase tracking-wider text-muted">Treasury</div>
           </div>
         </div>
-        <h1 className="text-[22px] font-semibold">Sign in</h1>
+        <h1 className="text-[22px] font-semibold">{mode === "register" ? "Create your account" : "Sign in"}</h1>
         <p className="mt-1 text-[13.5px] text-muted">Your links, repos, skills and prompts — the same vault as on the web.</p>
 
         <form onSubmit={withPassword} className="mt-6 space-y-2.5">
+          {mode === "register" && (
+            <Input
+              type="text"
+              autoComplete="name"
+              placeholder="Name (optional)"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              disabled={busy !== null}
+              aria-label="Name"
+            />
+          )}
           <Input
             type="email"
             inputMode="email"
@@ -92,9 +124,19 @@ export function LoginScreen() {
             aria-label="Password"
           />
           <Button type="submit" variant="primary" className="w-full justify-center" disabled={busy !== null || !email.trim() || !password}>
-            {busy === "password" ? <RefreshCw size={16} className="animate-spin" /> : <Lock size={16} />} Sign in
+            {busy === "password" ? <RefreshCw size={16} className="animate-spin" /> : mode === "register" ? <UserPlus size={16} /> : <Lock size={16} />}{" "}
+            {mode === "register" ? "Create account" : "Sign in"}
           </Button>
         </form>
+
+        <button
+          type="button"
+          className="mt-3 text-[13px] text-primary hover:underline disabled:opacity-50"
+          onClick={() => setMode(mode === "register" ? "signin" : "register")}
+          disabled={busy !== null}
+        >
+          {mode === "register" ? "Already have an account? Sign in" : "New here? Create an account"}
+        </button>
 
         <div className="my-4 flex items-center gap-3 text-[11px] uppercase tracking-wider text-faint">
           <span className="h-px flex-1 bg-border" /> or <span className="h-px flex-1 bg-border" />

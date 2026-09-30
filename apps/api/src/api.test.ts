@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { safeFetch, isPublicUnicast } from "./integrations/safe-fetch.js";
+import { isAdmin } from "./auth/users.js";
 import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from "./auth/crypto.js";
@@ -36,6 +37,14 @@ describe("safeFetch SSRF guard", () => {
     expect(isPublicUnicast("169.254.169.254")).toBe(false);
     expect(isPublicUnicast("10.1.2.3")).toBe(false);
     expect(isPublicUnicast("::1")).toBe(false);
+  });
+});
+
+describe("isAdmin roles", () => {
+  it("honors the stored role", () => {
+    expect(isAdmin({ role: "admin" } as never)).toBe(true);
+    expect(isAdmin({ role: "user" } as never)).toBe(false);
+    expect(isAdmin(null)).toBe(false);
   });
 });
 
