@@ -14,8 +14,6 @@
  * recreate and in what order, which names to use) are made by these functions alone.
  */
 
-import { DRIVE_FOLDER_MIME } from "./drive-v2.js";
-
 /* ── 1. link / id parsing ─────────────────────────────────────────────────────────────────────── */
 
 export type DriveLinkKind = "file" | "folder" | "unknown";
@@ -369,9 +367,4 @@ export function summarizeImportTree(tree: ImportTree): ImportTreeSummary {
     fileCount: tree.files.length,
     totalBytes: tree.files.reduce((a, f) => a + (f.size ?? 0), 0),
   };
-}
-
-/** Is this mime a folder? (Convenience mirror of the shared folder constant for import callers.) */
-export function isDriveFolderMime(mimeType?: string): boolean {
-  return mimeType === DRIVE_FOLDER_MIME;
 }

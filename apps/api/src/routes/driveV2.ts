@@ -498,11 +498,14 @@ driveV2Router.post(
     }));
     const tree = { folders: scan.folders, files: treeFiles };
 
-    // Destination signatures for the duplicate check (whole My-Drive corpus, or the active Shared Drive).
+    // Destination signatures for the duplicate check (the user's own files, or the active Shared Drive).
+    // Only files with an md5 can ever match a source signature, so skip the (up to 20k-file) scan entirely
+    // when no scanned source file has one (e.g. a folder of only native Google docs). Shared-with-me files
+    // are excluded so a file the user doesn't actually own isn't treated as a destination duplicate.
     let destTruncated = false;
     const destSignatures = new Set<string>();
-    if (dedupeScope === "drive" && treeFiles.length) {
-      const dest = await driveCall(acc, (token) => scanFiles(token, { pageCap: 20, driveId }));
+    if (dedupeScope === "drive" && treeFiles.some((f) => f.md5Checksum)) {
+      const dest = await driveCall(acc, (token) => scanFiles(token, { pageCap: 20, driveId, excludeShared: true }));
       destTruncated = dest.truncated;
       // Only files with a real content signature (md5) count toward duplicate detection; native docs etc.
       // have none (fileSignature → null) and are never treated as duplicates.

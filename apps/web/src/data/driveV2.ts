@@ -1281,7 +1281,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       try {
         let result;
         const folderId = currentFolderId(path, spaceId);
-        if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { pageToken: nextPageToken, driveId });
+        // Drive binds a pageToken to the EXACT query (incl. orderBy) that produced it — page 2 must repeat the
+        // same orderBy as the first load or Google rejects the token with 400 "Invalid Value".
+        if (view === "myDrive") result = await driveV2Api.list(accountId, folderId, { pageToken: nextPageToken, orderBy: driveOrderBy(get().prefs.sortKey, get().prefs.sortDir), driveId });
         else if (view === "recent") result = await driveV2Api.recent(accountId, { pageToken: nextPageToken, driveId });
         else if (view === "starred") result = await driveV2Api.starred(accountId, { pageToken: nextPageToken, driveId });
         else if (view === "trash") result = await driveV2Api.trash(accountId, { pageToken: nextPageToken, driveId });
@@ -1879,7 +1881,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       if (!ids.length) return;
       const requeued = new Set(ids);
       uploadQueue.push(...ids);
-      set((s) => ({ uploads: s.uploads.map((u) => (requeued.has(u.id) ? { ...u, status: "queued" } : u)) }));
+      // A failed row restarting from scratch (no saved offset) kept its failed attempt's byte count — zero it
+      // so the tray doesn't show stale progress until the fresh transfer's first onProgress (matches resumeUpload).
+      set((s) => ({ uploads: s.uploads.map((u) => (requeued.has(u.id) ? { ...u, status: "queued", uploaded: uploadResumes.has(u.id) ? u.uploaded : 0 } : u)) }));
       pumpUploads();
     },
 

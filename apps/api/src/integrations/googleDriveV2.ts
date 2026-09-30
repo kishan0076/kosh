@@ -353,9 +353,13 @@ export interface DriveScanFile {
   parents?: string[];
 }
 
-/** Scan up to `pageCap` pages of non-folder files with the fields analytics panels need. */
-export async function scanFiles(accessToken: string, opts: { orderBy?: string; pageCap?: number; driveId?: string } = {}): Promise<{ files: DriveScanFile[]; truncated: boolean }> {
-  const q = `trashed = false and mimeType != '${FOLDER_MIME}'`;
+/** Scan up to `pageCap` pages of non-folder files with the fields analytics panels need.
+ *  `excludeShared` drops files merely shared-with-me (kept out of the import duplicate check so a file the
+ *  user doesn't actually own isn't treated as "already in your Drive" and silently skipped). It only applies
+ *  to the user corpus — a driveId scope already restricts to that Shared Drive. */
+export async function scanFiles(accessToken: string, opts: { orderBy?: string; pageCap?: number; driveId?: string; excludeShared?: boolean } = {}): Promise<{ files: DriveScanFile[]; truncated: boolean }> {
+  let q = `trashed = false and mimeType != '${FOLDER_MIME}'`;
+  if (opts.excludeShared && !opts.driveId) q += " and sharedWithMe = false";
   const cap = Math.min(opts.pageCap ?? 10, 20); // 20 pages × 1000 = 20k files hard ceiling
   const out: DriveScanFile[] = [];
   let pageToken: string | undefined;
@@ -433,14 +437,17 @@ export async function scanDescendants(
   const folderCap = Math.min(Math.max(opts.folderCap ?? 2000, 1), 5000);
   const folders: TreeScanFolder[] = [];
   const files: DriveNode[] = [];
-  const visited = new Set<string>(); // folder ids already queued — cycle + multi-parent guard
+  // One shared "seen" set across folders AND files (Drive ids are globally unique): guards folder cycles,
+  // and stops a file reachable from two roots — or pasted both as a file link and inside a pasted folder —
+  // from being emitted twice (which would collide in the id-keyed dedupe and silently drop or double-copy it).
+  const visited = new Set<string>();
   const queue: string[] = [];
   let truncated = false;
 
   for (const r of roots) {
+    if (visited.has(r.id)) continue;
+    visited.add(r.id);
     if (r.isFolder) {
-      if (visited.has(r.id)) continue;
-      visited.add(r.id);
       folders.push({ id: r.id, name: r.name }); // root folder: no parentId
       queue.push(r.id);
     } else {
@@ -462,9 +469,9 @@ export async function scanDescendants(
           stop = true;
           break;
         }
+        if (visited.has(child.id)) continue; // already emitted via another path (multi-parent / cycle / dup root)
+        visited.add(child.id);
         if (child.isFolder) {
-          if (visited.has(child.id)) continue; // already seen via another path
-          visited.add(child.id);
           folders.push({ id: child.id, name: child.name, parentId });
           queue.push(child.id);
         } else {
