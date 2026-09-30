@@ -59,6 +59,7 @@ import { ChangeFolderColorModal, CreateFolderModal, DeleteConfirmModal, EmptyTra
 import { ShareModal } from "@/components/drive-v2/ShareModal";
 import { BulkRenameModal } from "@/components/drive-v2/BulkRenameModal";
 import { InsightsPanel } from "@/components/drive-v2/InsightsPanel";
+import { ImportPanel } from "@/components/drive-v2/ImportPanel";
 import { ActivityPanel, ACTION_META } from "@/components/drive-v2/ActivityPanel";
 import { RevisionsModal } from "@/components/drive-v2/RevisionsModal";
 import { CleanupModal } from "@/components/drive-v2/CleanupModal";
@@ -166,13 +167,14 @@ function Shell() {
   const hasUploads = useDriveV2((s) => s.uploads.length > 0);
   const insightsOpen = useDriveV2((s) => s.insightsOpen);
   const activityOpen = useDriveV2((s) => s.activityOpen);
+  const importOpen = useDriveV2((s) => s.importOpen);
 
   const store = useDriveV2;
   const currentFolderId = useDriveV2((s) => s.path.at(-1)?.id ?? s.spaceId ?? "root");
 
   // Deep-linkable routing: mirror view/folder/overlay state to the URL and apply it back on Back/refresh.
   useDriveV2UrlSync();
-  const paneKey = drivePaneKey({ view, insightsOpen, activityOpen });
+  const paneKey = drivePaneKey({ view, insightsOpen, activityOpen, importOpen });
 
   // Live two-way sync: poll changes.list while the module is open; resume promptly on refocus.
   useEffect(() => {
@@ -433,6 +435,8 @@ function Shell() {
             <ActivityPanel onClose={() => store.getState().setActivity(false)} />
           ) : insightsOpen ? (
             <InsightsPanel onClose={() => store.getState().setInsights(false)} />
+          ) : importOpen ? (
+            <ImportPanel onClose={() => store.getState().setImport(false)} />
           ) : (
           <div className="flex min-w-0 flex-col lg:h-full lg:min-h-0">
             <PageHeader

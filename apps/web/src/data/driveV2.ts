@@ -142,6 +142,8 @@ interface DriveV2State {
   uploads: UploadTask[];
   insightsOpen: boolean;
   setInsights: (v: boolean) => void;
+  importOpen: boolean; // "Import from Drive links" full-pane
+  setImport: (v: boolean) => void;
 
   // Shared Drives (spaces): null spaceId = My Drive.
   spaces: SharedDrive[];
@@ -1007,8 +1009,16 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     insightsOpen: false,
     setInsights: (v) => {
       const closing = !v && get().insightsOpen;
-      set(v ? { insightsOpen: true, activityOpen: false } : { insightsOpen: false });
+      set(v ? { insightsOpen: true, activityOpen: false, importOpen: false } : { insightsOpen: false });
       // Trashing/moving happens inside the panel, so refetch the underlying view on close to stay live.
+      if (closing) void load(true);
+    },
+    importOpen: false,
+    setImport: (v) => {
+      const closing = !v && get().importOpen;
+      // Mutually exclusive with the other full-pane overlays.
+      set(v ? { importOpen: true, insightsOpen: false, activityOpen: false } : { importOpen: false });
+      // Imports create files/folders in the current view — refetch it on close so the new items show.
       if (closing) void load(true);
     },
 
@@ -1020,7 +1030,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     activityOpen: false,
     setActivity: (v) => {
       const closing = !v && get().activityOpen;
-      set(v ? { activityOpen: true, insightsOpen: false } : { activityOpen: false });
+      set(v ? { activityOpen: true, insightsOpen: false, importOpen: false } : { activityOpen: false });
       if (closing) void load(true);
     },
     clearActivity: () => set({ activity: [] }),

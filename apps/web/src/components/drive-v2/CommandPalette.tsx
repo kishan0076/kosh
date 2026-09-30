@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Clock, CornerDownLeft, CornerUpRight, Download, FolderPlus, HardDrive, Info, LayoutGrid, List as ListIcon, RotateCcw, Search, Share2, Sparkles, Star, Trash2, Upload, Wand2 } from "lucide-react";
+import { Clock, CornerDownLeft, CornerUpRight, Download, FolderInput, FolderPlus, HardDrive, Info, LayoutGrid, List as ListIcon, RotateCcw, Search, Share2, Sparkles, Star, Trash2, Upload, Wand2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { Spinner } from "@/components/ui";
 import { driveV2Api, type DriveNode } from "@/data/driveV2Api";
@@ -88,6 +88,7 @@ export function CommandPalette({ open, onClose, onUpload }: { open: boolean; onC
       { id: "v-starred", label: "Go to Starred", icon: Star, run: () => s().setView("starred") },
       { id: "v-trash", label: "Go to Trash", icon: Trash2, run: () => s().setView("trash") },
       { id: "v-insights", label: "Open Insights", icon: Sparkles, keywords: "duplicates largest stale storage", run: () => s().setInsights(true) },
+      { id: "v-import", label: "Import from Drive links", icon: FolderInput, keywords: "copy scan duplicate folder link paste transfer migrate", run: () => s().setImport(true) },
       ...(aiEnabled ? [{ id: "ai-cleanup", label: "AI Cleanup", icon: Wand2, keywords: "clean duplicates stale large reclaim space trash", run: () => s().openDialog({ kind: "cleanup" }) } as Command] : []),
       { id: "a-newfolder", label: "New folder", icon: FolderPlus, keywords: "create", run: () => s().openDialog({ kind: "newFolder", parentId: s().path.at(-1)?.id ?? s().spaceId ?? "root" }) },
       { id: "a-upload", label: "Upload files", icon: Upload, run: onUpload },

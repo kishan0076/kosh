@@ -1,6 +1,6 @@
 import { Router, type Request } from "express";
 import { z } from "zod";
-import { canGrantExpiry, driveHasTextSource, EXPIRY_ROLES } from "@kosh/shared";
+import { canGrantExpiry, detectDuplicates, driveHasTextSource, EXPIRY_ROLES, fileSignature, parseDriveLinks, summarizeImportTree } from "@kosh/shared";
 import { getStore, type DriveAccountDoc } from "../db/index.js";
 import { aiAvailable, AiBudgetError, AiNotConfiguredError } from "../integrations/claude.js";
 import { nlToDriveQuery, prioritizeCleanup, summarizeDriveFile } from "../integrations/driveAi.js";
@@ -38,6 +38,7 @@ import {
   listTrash,
   moveNode,
   renameNode,
+  scanDescendants,
   scanFiles,
   searchFiles,
   setStarred,
@@ -45,6 +46,7 @@ import {
   updateMeta,
   updatePermission,
   updateRevision,
+  type DriveNode,
   type ViewOpts,
 } from "../integrations/googleDriveV2.js";
 import { addSubscriber, ensureWatch, handleNotification, pushEnabled, removeSubscriber } from "../integrations/driveV2Push.js";
@@ -435,6 +437,83 @@ driveV2Router.delete(
     const acc = await ownedAccount(uid, String(req.params.id));
     await driveCall(acc, (token) => deleteNode(token, fileId(String(req.params.fileId))));
     res.json({ ok: true });
+  }),
+);
+
+/* ── Import from Drive links: recursively scan pasted links + flag duplicates against the user's Drive ──
+ *
+ * The client pastes one or more Drive links (folders and/or files). We resolve each to a node (which also
+ * confirms the account can actually see it), recursively walk folder roots, then — for the duplicate check
+ * — scan the destination corpus and classify every source file (new / already-in-Drive / repeated-in-source)
+ * with the shared, unit-tested engine. The COPY itself is orchestrated client-side against the existing
+ * copy/createFolder endpoints (Drive's files.copy works on a read-only source into the user's own Drive),
+ * so no file bytes ever flow through here — this endpoint only reads metadata. */
+driveV2Router.post(
+  "/drive-v2/accounts/:id/import/scan",
+  ah(async (req, res) => {
+    const uid = requireWrite(req);
+    const acc = await ownedAccount(uid, String(req.params.id));
+    const { links, dedupeScope } = z
+      .object({
+        links: z.array(z.string().min(1).max(2048)).min(1).max(50),
+        dedupeScope: z.enum(["drive", "none"]).default("drive"),
+      })
+      .parse(req.body);
+    const driveId = driveIdOf(req);
+
+    const refs = parseDriveLinks(links.join("\n"));
+    if (!refs.length) throw badRequest("NO_LINKS", "No valid Google Drive links or ids were found in what you pasted.");
+
+    // Resolve each ref to a node. A ref we can't open (deleted, not shared with this account, bad id) is
+    // reported per-link rather than failing the whole scan — but an account-wide auth failure aborts.
+    const resolvedRefs: { id: string; kind: string; raw: string; name?: string; ok: boolean; error?: string }[] = [];
+    const roots: DriveNode[] = [];
+    for (const ref of refs) {
+      try {
+        const node = await driveCall(acc, (token) => getFile(token, ref.id));
+        roots.push(node);
+        resolvedRefs.push({ id: ref.id, kind: node.isFolder ? "folder" : "file", raw: ref.raw, name: node.name, ok: true });
+      } catch (err) {
+        if (err instanceof AppError && err.code === "NEEDS_RECONNECT") throw err; // reconnect is account-wide
+        resolvedRefs.push({ id: ref.id, kind: ref.kind, raw: ref.raw, ok: false, error: err instanceof AppError ? err.message : "Couldn't open this link." });
+      }
+    }
+
+    const scan = roots.length ? await driveCall(acc, (token) => scanDescendants(token, roots, { driveId })) : { folders: [], files: [], truncated: false };
+
+    // Slim, client-facing tree (the fields the UI + the shared copy-plan builder need).
+    const treeFiles = scan.files.map((f) => ({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      size: f.size,
+      md5Checksum: f.md5Checksum,
+      parentId: f.parents?.[0],
+      iconLink: f.iconLink,
+      thumbnailLink: f.thumbnailLink,
+      webViewLink: f.webViewLink,
+      capabilities: f.capabilities,
+    }));
+    const tree = { folders: scan.folders, files: treeFiles };
+
+    // Destination signatures for the duplicate check (whole My-Drive corpus, or the active Shared Drive).
+    let destTruncated = false;
+    const destSignatures = new Set<string>();
+    if (dedupeScope === "drive" && treeFiles.length) {
+      const dest = await driveCall(acc, (token) => scanFiles(token, { pageCap: 20, driveId }));
+      destTruncated = dest.truncated;
+      for (const f of dest.files) destSignatures.add(fileSignature(f));
+    }
+
+    const dedup = detectDuplicates(treeFiles, destSignatures);
+    res.json({
+      refs: resolvedRefs,
+      tree,
+      dedup,
+      summary: summarizeImportTree(tree),
+      sourceTruncated: scan.truncated,
+      destTruncated,
+    });
   }),
 );
 

@@ -1,4 +1,5 @@
 import { driveKindOf } from "@kosh/shared";
+import type { DedupResult, ImportTreeSummary, ScanFileNode, ScanFolderLite } from "@kosh/shared";
 import { API_BASE, ApiError } from "./api";
 
 /* ── typed client for /drive-v2/* (management CRUD is server-proxied) ── */
@@ -7,13 +8,14 @@ const REQ_TIMEOUT_MS = 30_000; // abort a stalled request so a hung socket never
 const RETRY_STATUSES = new Set([429, 502, 503, 504]); // Drive throttling / transient upstream — safe to retry a read
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function v2req<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function v2req<T>(path: string, init: RequestInit = {}, cfg: { timeoutMs?: number } = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const idempotent = method === "GET" || method === "HEAD"; // never auto-retry a write (avoid duplicates)
   const maxAttempts = idempotent ? 3 : 1;
+  const timeoutMs = cfg.timeoutMs ?? REQ_TIMEOUT_MS;
   for (let attempt = 1; ; attempt++) {
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
     try {
       const res = await fetch(`${API_BASE}${path}`, {
         credentials: "include",
@@ -247,6 +249,37 @@ export interface DriveComment {
   replies?: DriveReply[];
 }
 
+/* ── Import from Drive links ── */
+
+/** A source file discovered by the recursive scan (the shared copy-plan fields + display extras). */
+export interface ImportFile extends ScanFileNode {
+  iconLink?: string;
+  thumbnailLink?: string;
+  webViewLink?: string;
+  capabilities?: Record<string, boolean>;
+}
+export interface ImportScanTree {
+  folders: ScanFolderLite[];
+  files: ImportFile[];
+}
+/** Per-link resolution status (a pasted link we couldn't open is reported, not fatal). */
+export interface ImportLinkRef {
+  id: string;
+  kind: string; // "file" | "folder" | "unknown"
+  raw: string;
+  name?: string;
+  ok: boolean;
+  error?: string;
+}
+export interface ImportScanResult {
+  refs: ImportLinkRef[];
+  tree: ImportScanTree;
+  dedup: DedupResult;
+  summary: ImportTreeSummary;
+  sourceTruncated: boolean; // the source scan hit its node cap
+  destTruncated: boolean; // the destination duplicate scan hit its page cap (some dups may be missed)
+}
+
 const base = (accountId: string) => `/drive-v2/accounts/${accountId}`;
 
 interface ViewQuery {
@@ -289,6 +322,14 @@ export const driveV2Api = {
     if (opts.driveId) q.set("driveId", opts.driveId);
     return v2req<{ files: DriveScanFile[]; truncated: boolean }>(`${base(accountId)}/scan?${q}`);
   },
+  /** Recursively scan pasted Drive links + classify duplicates against the destination Drive. A big scan
+   *  can take a while (whole-drive dedupe pass), so give it a generous timeout. */
+  importScan: (accountId: string, links: string[], opts: { dedupeScope?: "drive" | "none"; driveId?: string } = {}) =>
+    v2req<ImportScanResult>(
+      `${base(accountId)}/import/scan${opts.driveId ? `?driveId=${encodeURIComponent(opts.driveId)}` : ""}`,
+      { method: "POST", body: JSON.stringify({ links, dedupeScope: opts.dedupeScope ?? "drive" }) },
+      { timeoutMs: 120_000 },
+    ),
   recent: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/recent${viewQuery(opts)}`),
   starred: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/starred${viewQuery(opts)}`),
   trash: (accountId: string, opts: ViewQuery = {}) => v2req<ListResult>(`${base(accountId)}/trash${viewQuery(opts)}`),

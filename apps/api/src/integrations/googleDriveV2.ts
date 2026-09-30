@@ -392,6 +392,82 @@ export async function scanFiles(accessToken: string, opts: { orderBy?: string; p
   }
 }
 
+/* ── recursive subtree scan (Import from Drive links) ── */
+
+export interface TreeScanFolder {
+  id: string;
+  name: string;
+  /** The folder this was found under. Absent for a root folder (it attaches to the import destination). */
+  parentId?: string;
+}
+export interface TreeScanResult {
+  folders: TreeScanFolder[];
+  files: DriveNode[]; // full nodes; `parents[0]` is the folder each was found under (absent ⇒ a root file)
+  truncated: boolean;
+}
+
+/**
+ * Recursively scan the subtree(s) under the given already-resolved root nodes — the engine behind the
+ * "Import from Drive links" feature. Folder roots have their descendants walked breadth-first (paginated);
+ * file roots are included directly. A node's recorded parent is the folder it was FOUND under (never its
+ * raw multi-parent array), so the tree reconstructs cleanly even for files that live in several folders.
+ *
+ * Hard-bounded by `fileCap`/`folderCap` and cycle-guarded by a visited-folder set, so a shared folder graph
+ * (which can contain cycles and shortcuts) can never loop, and a giant Drive can never exhaust memory here.
+ * `truncated` tells the caller the scan stopped early so the UI can say "showing the first N".
+ */
+export async function scanDescendants(
+  accessToken: string,
+  roots: DriveNode[],
+  opts: { fileCap?: number; folderCap?: number; driveId?: string } = {},
+): Promise<TreeScanResult> {
+  const fileCap = Math.min(Math.max(opts.fileCap ?? 5000, 1), 20000);
+  const folderCap = Math.min(Math.max(opts.folderCap ?? 2000, 1), 5000);
+  const folders: TreeScanFolder[] = [];
+  const files: DriveNode[] = [];
+  const visited = new Set<string>(); // folder ids already queued — cycle + multi-parent guard
+  const queue: string[] = [];
+  let truncated = false;
+
+  for (const r of roots) {
+    if (r.isFolder) {
+      if (visited.has(r.id)) continue;
+      visited.add(r.id);
+      folders.push({ id: r.id, name: r.name }); // root folder: no parentId
+      queue.push(r.id);
+    } else {
+      files.push({ ...r, parents: undefined }); // root file: attaches directly to the destination
+    }
+  }
+
+  let stop = false;
+  while (queue.length && !stop) {
+    const parentId = queue.shift()!;
+    let pageToken: string | undefined;
+    do {
+      const page = await listChildren(accessToken, parentId, { pageToken, driveId: opts.driveId, orderBy: null, pageSize: 1000 });
+      for (const child of page.files) {
+        if (files.length >= fileCap || folders.length >= folderCap) {
+          truncated = true;
+          stop = true;
+          break;
+        }
+        if (child.isFolder) {
+          if (visited.has(child.id)) continue; // already seen via another path
+          visited.add(child.id);
+          folders.push({ id: child.id, name: child.name, parentId });
+          queue.push(child.id);
+        } else {
+          files.push({ ...child, parents: [parentId] });
+        }
+      }
+      pageToken = stop ? undefined : page.nextPageToken;
+    } while (pageToken);
+  }
+
+  return { folders, files, truncated };
+}
+
 export function listRecent(accessToken: string, opts: ViewOpts = {}): Promise<ListResult> {
   return listByQuery(accessToken, "trashed = false and mimeType != '" + FOLDER_MIME + "'", { ...opts, orderBy: "modifiedTime desc", pageSize: 50 });
 }

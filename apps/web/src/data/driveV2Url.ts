@@ -36,22 +36,24 @@ function slugToView(slug: string): DriveView | null {
   return null;
 }
 
-/** The "pane" a location addresses — a view, or one of the two full-pane overlays. */
-export type DrivePane = DriveView | "insights" | "activity";
+/** The "pane" a location addresses — a view, or one of the full-pane overlays. */
+export type DrivePane = DriveView | "insights" | "activity" | "import";
 
 export interface DriveUrlState {
   view: DriveView;
   insightsOpen: boolean;
   activityOpen: boolean;
+  importOpen: boolean;
   searchQuery: string;
   spaceId: string | null;
   folderId: string | null;
 }
 
 /** Stable key for the active pane — drives the page-transition crossfade. */
-export function drivePaneKey(s: Pick<DriveUrlState, "view" | "insightsOpen" | "activityOpen">): DrivePane {
+export function drivePaneKey(s: Pick<DriveUrlState, "view" | "insightsOpen" | "activityOpen" | "importOpen">): DrivePane {
   if (s.activityOpen) return "activity";
   if (s.insightsOpen) return "insights";
+  if (s.importOpen) return "import";
   return s.view;
 }
 
@@ -59,6 +61,7 @@ export function drivePaneKey(s: Pick<DriveUrlState, "view" | "insightsOpen" | "a
 export function driveUrlFromState(s: DriveUrlState): string {
   if (s.activityOpen) return `${DRIVE_V2_BASE}/activity`;
   if (s.insightsOpen) return `${DRIVE_V2_BASE}/insights`;
+  if (s.importOpen) return `${DRIVE_V2_BASE}/import`;
   const params = new URLSearchParams();
   if (s.view === "search" && s.searchQuery) params.set("q", s.searchQuery);
   // Folders are addressable only for My Drive on the primary corpus; Shared-Drive folder nav stays
@@ -75,6 +78,7 @@ function canonicalUrlFromStore(): string {
     view: s.view,
     insightsOpen: s.insightsOpen,
     activityOpen: s.activityOpen,
+    importOpen: s.importOpen,
     searchQuery: s.searchQuery,
     spaceId: s.spaceId,
     folderId: s.path.at(-1)?.id ?? null,
@@ -95,10 +99,15 @@ async function applyUrlToStore(pathname: string, search: string): Promise<void> 
     if (!s.insightsOpen) s.setInsights(true);
     return;
   }
+  if (seg === "import") {
+    if (!s.importOpen) s.setImport(true);
+    return;
+  }
 
   // A view segment shows content — close any full-pane overlay first.
   if (s.activityOpen) s.setActivity(false);
   if (s.insightsOpen) s.setInsights(false);
+  if (s.importOpen) s.setImport(false);
 
   const view = slugToView(seg) ?? "myDrive";
 
@@ -135,13 +144,14 @@ export function useDriveV2UrlSync(): void {
   const view = useDriveV2((s) => s.view);
   const insightsOpen = useDriveV2((s) => s.insightsOpen);
   const activityOpen = useDriveV2((s) => s.activityOpen);
+  const importOpen = useDriveV2((s) => s.importOpen);
   const searchQuery = useDriveV2((s) => s.searchQuery);
   const spaceId = useDriveV2((s) => s.spaceId);
   const folderId = useDriveV2((s) => s.path.at(-1)?.id ?? null);
 
   const desiredUrl = useMemo(
-    () => driveUrlFromState({ view, insightsOpen, activityOpen, searchQuery, spaceId, folderId }),
-    [view, insightsOpen, activityOpen, searchQuery, spaceId, folderId],
+    () => driveUrlFromState({ view, insightsOpen, activityOpen, importOpen, searchQuery, spaceId, folderId }),
+    [view, insightsOpen, activityOpen, importOpen, searchQuery, spaceId, folderId],
   );
 
   const lastApplied = useRef<string | null>(null);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ChevronRight, Folder, FolderPlus, HardDrive, Lock, LockOpen, MoreHorizontal, ShieldCheck, Trash2, Upload } from "lucide-react";
+import { ChevronRight, Folder, FolderInput, FolderPlus, HardDrive, Lock, LockOpen, MoreHorizontal, ShieldCheck, Trash2, Upload } from "lucide-react";
 import { formatBytes } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui";
@@ -35,6 +35,7 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
   const spaceId = useDriveV2((s) => s.spaceId);
   const spaceName = useDriveV2((s) => s.spaceName);
   const openDialog = useDriveV2((s) => s.openDialog);
+  const setImport = useDriveV2((s) => s.setImport);
   const meta = VIEW_META[view];
   const title = view === "myDrive" && spaceId ? spaceName ?? meta.title : meta.title;
 
@@ -75,6 +76,7 @@ export function PageHeader({ stats, onNewFolder, onUpload }: { stats: HeaderStat
           ) : view === "myDrive" ? (
             <>
               <EncryptionControls />
+              <Button variant="outline" size="sm" onClick={() => setImport(true)} title="Import files & folders from Google Drive links"><FolderInput size={15} /> Import</Button>
               <Button variant="secondary" size="sm" onClick={onNewFolder}><FolderPlus size={15} /> New folder</Button>
               <Button variant="primary" size="sm" onClick={onUpload}><Upload size={15} /> Upload</Button>
             </>

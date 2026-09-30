@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronsLeft,
   Clock,
+  FolderInput,
   FolderPlus,
   FolderUp,
   HardDrive,
@@ -48,7 +49,7 @@ function StorageRing({ pct, size = 44, children }: { pct: number; size?: number;
 }
 
 interface NavDef {
-  v: DriveView | "insights" | "activity" | "cleanup";
+  v: DriveView | "insights" | "activity" | "cleanup" | "import";
   label: string;
   icon: typeof HardDrive;
   gold?: boolean;
@@ -61,6 +62,7 @@ const BROWSE: NavDef[] = [
   { v: "trash", label: "Trash", icon: Trash2 },
 ];
 const MANAGE: NavDef[] = [
+  { v: "import", label: "Import from Drive", icon: FolderInput },
   { v: "insights", label: "Storage", icon: Sparkles },
   { v: "activity", label: "Activity", icon: Activity },
   { v: "cleanup", label: "AI Cleanup", icon: Wand2 }, // opens a modal; shown only when AI is configured
@@ -72,6 +74,7 @@ export function DriveRail({ onNewFolder, onUpload, onUploadFolder, variant = "si
   const view = useDriveV2((s) => s.view);
   const insightsOpen = useDriveV2((s) => s.insightsOpen);
   const activityOpen = useDriveV2((s) => s.activityOpen);
+  const importOpen = useDriveV2((s) => s.importOpen);
   const quota = useDriveV2((s) => s.quota);
   const spaces = useDriveV2((s) => s.spaces);
   const spaceId = useDriveV2((s) => s.spaceId);
@@ -93,11 +96,12 @@ export function DriveRail({ onNewFolder, onUpload, onUploadFolder, variant = "si
   const pctLabel = pctRaw >= 10 ? `${Math.round(pctRaw)}%` : pctRaw >= 0.1 ? `${pctRaw.toFixed(1)}%` : quota && quota.usage > 0 ? "<0.1%" : "0%";
   const barVal = Math.max(pctRaw, quota && quota.usage > 0 ? 1.5 : 0); // keep a visible sliver when anything is used
 
-  const activeKey = activityOpen ? "activity" : insightsOpen ? "insights" : view;
+  const activeKey = activityOpen ? "activity" : insightsOpen ? "insights" : importOpen ? "import" : view;
   const go = (v: NavDef["v"]) => {
     const s = useDriveV2.getState();
     if (v === "insights") s.setInsights(true);
     else if (v === "activity") s.setActivity(true);
+    else if (v === "import") s.setImport(true);
     else if (v === "cleanup") s.openDialog({ kind: "cleanup" }); // a modal launcher, not a persistent view
     else s.setView(v);
     onNavigate?.(); // close the mobile drawer after a nav tap
