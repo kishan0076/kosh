@@ -7,9 +7,11 @@ import {
   Check,
   CheckSquare,
   ChevronRight,
+  Clock,
   Command,
   Copy,
   CornerUpRight,
+  Gauge,
   MinusSquare,
   Square,
   Download,
@@ -45,11 +47,11 @@ import { useData } from "@/data/store";
 import { Button, Progress, Spinner } from "@/components/ui";
 import { PageSkeleton } from "@/components/PageSkeleton";
 import { useBottomStack } from "@/components/Toaster";
-import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, useBodyScrollLock } from "@/components/overlays";
+import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, SelectMenu, useBodyScrollLock } from "@/components/overlays";
 import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { startConnect } from "@/lib/connect";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
-import { useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
+import { MAX_UPLOAD_CONCURRENCY, useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, sortNodes, type ItemHandlers } from "@/components/drive-v2/items";
 import { PageHeader } from "@/components/drive-v2/PageHeader";
@@ -1447,28 +1449,34 @@ function UploadRowBtn({ onClick, label, title, tone = "muted", children }: { onC
 
 function UploadTray() {
   const uploads = useDriveV2((s) => s.uploads);
+  const concurrency = useDriveV2((s) => s.uploadConcurrency);
   const [open, setOpen] = useState(true);
   const active = uploads.filter((u) => u.status === "uploading");
+  const queued = uploads.filter((u) => u.status === "queued").length;
   const paused = uploads.filter((u) => u.status === "paused").length;
   const done = uploads.filter((u) => u.status === "done").length;
   const failed = uploads.filter((u) => u.status === "error").length;
   const canceled = uploads.filter((u) => u.status === "canceled").length;
   const total = uploads.length;
-  // "In progress" = still uploading OR paused (a paused upload isn't finished — it's waiting to resume).
-  const inProgress = active.length > 0 || paused > 0;
+  // "In progress" = uploading, queued OR paused (none of those are finished — they're all still pending).
+  const inProgress = active.length > 0 || queued > 0 || paused > 0;
+  const runningOrQueued = active.length + queued; // can be paused
+  const resumable = paused + failed; // can be resumed/retried
   // Aggregate progress across everything in the tray (uploaded bytes / total bytes).
   const totalBytes = uploads.reduce((a, u) => a + u.size, 0);
   const doneBytes = uploads.reduce((a, u) => a + (u.status === "done" ? u.size : u.uploaded), 0);
   const aggPct = totalBytes ? Math.round((doneBytes / totalBytes) * 100) : 0;
-  // Header: a real count, not a truncated "…". In-flight files while uploading, else a summary of the
-  // final tallies (complete / failed / canceled), noting anything paused.
+  // Header: a real count, not a truncated "…". In-flight files while uploading (noting how many are queued
+  // behind them), else a summary of the final tallies (complete / failed / canceled), noting anything paused.
   const heading =
     active.length > 0
-      ? `Uploading ${active.length} file${active.length === 1 ? "" : "s"}${total > active.length ? ` · ${done}/${total} done` : ""}${paused ? ` · ${paused} paused` : ""}`
-      : paused > 0
-        ? `${paused} paused${done ? ` · ${done} complete` : ""}`
-        : [done && `${done} complete`, failed && `${failed} failed`, canceled && `${canceled} canceled`].filter(Boolean).join(" · ") || "Uploads";
-  const headerIcon = active.length > 0 ? <Spinner size={14} className="text-primary" /> : paused > 0 ? <Pause size={14} className="text-muted" /> : done > 0 ? <Check size={15} className="text-ok" /> : <X size={15} className="text-muted" />;
+      ? `Uploading ${active.length}${queued ? ` · ${queued} queued` : ""}${total > active.length + queued ? ` · ${done}/${total} done` : ""}${paused ? ` · ${paused} paused` : ""}`
+      : queued > 0
+        ? `${queued} queued${done ? ` · ${done} done` : ""}`
+        : paused > 0
+          ? `${paused} paused${done ? ` · ${done} complete` : ""}`
+          : [done && `${done} complete`, failed && `${failed} failed`, canceled && `${canceled} canceled`].filter(Boolean).join(" · ") || "Uploads";
+  const headerIcon = active.length > 0 ? <Spinner size={14} className="text-primary" /> : queued > 0 ? <Clock size={14} className="text-primary" /> : paused > 0 ? <Pause size={14} className="text-muted" /> : done > 0 ? <Check size={15} className="text-ok" /> : <X size={15} className="text-muted" />;
 
   // Lives in the BottomStack (which owns the fixed position, the safe-area padding and the z-index).
   return (
@@ -1489,7 +1497,33 @@ function UploadTray() {
           <X size={16} />
         </button>
       </div>
-      {active.length > 0 && (
+      {/* Parallel-upload manager: how many run at once + pause-all / resume-all. Only while there's pending work. */}
+      {inProgress && (
+        <div className="flex items-center gap-2 border-b border-border px-3.5 py-2">
+          <Gauge size={13} className="shrink-0 text-muted" />
+          <span className="shrink-0 text-[11.5px] text-muted">Parallel</span>
+          <SelectMenu
+            size="sm"
+            ariaLabel="Simultaneous uploads"
+            value={String(concurrency)}
+            options={Array.from({ length: MAX_UPLOAD_CONCURRENCY }, (_, i) => ({ value: String(i + 1), label: `${i + 1} at a time` }))}
+            onChange={(v) => useDriveV2.getState().setUploadConcurrency(Number(v))}
+          />
+          <div className="ml-auto flex items-center gap-1">
+            {runningOrQueued > 0 && (
+              <button onClick={() => useDriveV2.getState().pauseAllUploads()} className="pressable inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] text-muted hover:bg-surface-2 hover:text-foreground" title="Pause all">
+                <Pause size={12} /> Pause all
+              </button>
+            )}
+            {resumable > 0 && (
+              <button onClick={() => useDriveV2.getState().resumeAllUploads()} className="pressable inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11.5px] text-primary hover:bg-primary-soft" title="Resume all">
+                <Play size={12} /> Resume all
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {(active.length > 0 || queued > 0) && (
         <div className="border-b border-border px-3.5 py-2">
           <Progress value={aggPct} />
           <div className="mt-1 flex justify-between text-[11px] text-muted">
@@ -1509,14 +1543,16 @@ function UploadTray() {
                     <Progress value={u.size ? Math.round((u.uploaded / u.size) * 100) : 0} className="mt-1" tone={u.status === "paused" ? "warn" : "primary"} />
                     <div className="mt-0.5 font-mono text-[11.5px] tabular text-faint">{u.status === "paused" ? "Paused · " : ""}{formatBytes(u.uploaded)} / {formatBytes(u.size)}</div>
                   </>
+                ) : u.status === "queued" ? (
+                  <div className="mt-0.5 flex items-center gap-1 text-[11.5px] text-muted"><Clock size={11} className="shrink-0" /> Queued · {formatBytes(u.size)}</div>
                 ) : (
                   <div className={cn("text-[11px]", u.status === "done" ? "text-ok" : u.status === "error" ? "text-danger" : "text-muted")}>{u.status === "done" ? formatBytes(u.size) + " · Done" : u.status === "error" ? u.error ?? "Failed" : "Canceled"}</div>
                 )}
               </div>
-              {/* Controls by state: uploading → pause + cancel · paused → resume + cancel · error → retry +
-                  dismiss · canceled → dismiss · done → a green check (a subtle remove appears on hover). */}
+              {/* Controls by state: uploading → pause + cancel · queued → pause + cancel · paused → resume +
+                  cancel · error → retry + dismiss · canceled → dismiss · done → a green check (remove on hover). */}
               <div className="flex shrink-0 items-center gap-0.5">
-                {u.status === "uploading" && (
+                {(u.status === "uploading" || u.status === "queued") && (
                   <UploadRowBtn onClick={() => useDriveV2.getState().pauseUpload(u.id)} label={`Pause ${u.name}`} title="Pause"><Pause size={14} /></UploadRowBtn>
                 )}
                 {u.status === "paused" && (
@@ -1525,8 +1561,8 @@ function UploadTray() {
                 {u.status === "error" && (
                   <UploadRowBtn onClick={() => useDriveV2.getState().resumeUpload(u.id)} label={`Retry ${u.name}`} title="Retry" tone="primary"><RefreshCw size={14} /></UploadRowBtn>
                 )}
-                {u.status === "uploading" || u.status === "paused" ? (
-                  // In-flight: a real cancel (destructive).
+                {u.status === "uploading" || u.status === "paused" || u.status === "queued" ? (
+                  // Pending (in-flight, queued or paused): a real cancel (destructive).
                   <UploadRowBtn onClick={() => useDriveV2.getState().cancelUpload(u.id)} label={`Cancel upload of ${u.name}`} title="Cancel" tone="danger"><X size={14} /></UploadRowBtn>
                 ) : u.status === "done" ? (
                   // Success: show a check, NOT a cancel-looking X. The X (remove from list) only appears on hover.
@@ -1546,6 +1582,11 @@ function UploadTray() {
               </div>
             </div>
           ))}
+          {uploads.length > 30 && (
+            <div className="px-3.5 py-2 text-center text-[11px] text-muted">
+              +{uploads.length - 30} more{queued > 0 ? ` · ${queued} queued` : ""} — use the controls above to manage the batch
+            </div>
+          )}
         </div>
       </Collapse>
     </motion.div>

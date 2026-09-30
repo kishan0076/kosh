@@ -63,7 +63,8 @@ export interface UploadTask {
   name: string;
   size: number;
   uploaded: number;
-  status: "uploading" | "paused" | "done" | "error" | "canceled";
+  // "queued" = waiting for a concurrency slot; the scheduler starts it (→ "uploading") when one frees.
+  status: "queued" | "uploading" | "paused" | "done" | "error" | "canceled";
   error?: string;
 }
 
@@ -227,14 +228,21 @@ interface DriveV2State {
   /** Upload a dropped/picked folder tree — recreates the folder structure in Drive, then uploads each
    *  file into its correct parent (preserving subfolders and empty folders). */
   uploadDropped: (items: UploadItem[]) => Promise<void>;
-  /** Cancel one in-flight (or paused) upload (aborts the transfer at the next chunk boundary). */
+  /** How many uploads transfer bytes simultaneously (1–6). Persisted; changing it takes effect at once. */
+  uploadConcurrency: number;
+  setUploadConcurrency: (n: number) => void;
+  /** Cancel one in-flight (or paused/queued) upload (aborts the transfer at the next chunk boundary). */
   cancelUpload: (id: string) => void;
-  /** Cancel every in-flight and paused upload. */
+  /** Cancel every in-flight, queued and paused upload. */
   cancelAllUploads: () => void;
   /** Pause one in-flight upload — it stops at the next chunk boundary and can be resumed where it left off. */
   pauseUpload: (id: string) => void;
   /** Resume a paused upload from its saved offset, or restart a failed one from scratch (retry). */
   resumeUpload: (id: string) => void;
+  /** Pause every active + queued upload at once. */
+  pauseAllUploads: () => void;
+  /** Re-queue every paused/failed upload so the scheduler runs them (respecting the concurrency limit). */
+  resumeAllUploads: () => void;
   /** Remove one finished/canceled/failed row from the tray (cancels it first if somehow still running). */
   dismissUpload: (id: string) => void;
   /** Clear every non-active row from the tray (leaves in-flight uploads running). */
@@ -287,13 +295,20 @@ function putFolderCache(key: string, val: { nodes: DriveNode[]; nextPageToken?: 
   }
 }
 let tokenCache: { accountId: string; token: string; exp: number } | null = null;
+// De-dupe concurrent token mints: with parallel uploads, N transfers can hit an expired token at once —
+// without this they'd each fire a mintToken. The first mint's promise is shared by the rest.
+let tokenInflight: { accountId: string; p: Promise<string> } | null = null;
 let loadSeq = 0; // bumped on every navigation/load so slow mutations never clobber newer views
 let nodesKey: string | null = null; // cacheKey the currently-shown `nodes` belong to — gates stale-while-revalidate
 const uploadControls = new Map<string, ResumableControl>();
 // Pause/resume + retry state, keyed by upload-tray row id. `uploadJobs` holds what's needed to (re)start
 // an upload; `uploadResumes` holds where a paused upload left off (Google's session URI + byte offset).
-const uploadJobs = new Map<string, { accountId: string; file: File; folderId: string; enc?: PreparedUpload }>();
+const uploadJobs = new Map<string, { accountId: string; file: File; folderId: string; encrypt?: boolean; enc?: PreparedUpload }>();
 const uploadResumes = new Map<string, { sessionUri: string; uploaded: number }>();
+// Parallel-upload scheduler: `uploadQueue` holds tray-row ids waiting for a slot (FIFO); `activeUploads`
+// counts transfers currently sending bytes. The store's `uploadConcurrency` caps how many run at once.
+const uploadQueue: string[] = [];
+let activeUploads = 0;
 
 /* Live-sync controller (module-level so it survives re-renders; driven by the page's mount effect). */
 const SYNC_INTERVAL = 12_000; // poll cadence when the tab is visible
@@ -392,6 +407,29 @@ function saveNotifyPref(on: boolean) {
   }
 }
 
+/* How many uploads may transfer bytes at once. A browser allows ~6 connections per host and Google
+ * throttles very aggressive parallelism, so keep it in [1, 6] with a sensible default of 4. */
+const UPLOAD_CONCURRENCY_KEY = "kosh.driveV2.uploadConcurrency";
+const MIN_UPLOAD_CONCURRENCY = 1;
+export const MAX_UPLOAD_CONCURRENCY = 6;
+const DEFAULT_UPLOAD_CONCURRENCY = 4;
+const clampConcurrency = (n: number): number => Math.max(MIN_UPLOAD_CONCURRENCY, Math.min(MAX_UPLOAD_CONCURRENCY, Math.round(n) || DEFAULT_UPLOAD_CONCURRENCY));
+function loadUploadConcurrency(): number {
+  try {
+    const raw = Number(localStorage.getItem(UPLOAD_CONCURRENCY_KEY));
+    return Number.isFinite(raw) && raw > 0 ? clampConcurrency(raw) : DEFAULT_UPLOAD_CONCURRENCY;
+  } catch {
+    return DEFAULT_UPLOAD_CONCURRENCY;
+  }
+}
+function saveUploadConcurrency(n: number) {
+  try {
+    localStorage.setItem(UPLOAD_CONCURRENCY_KEY, String(n));
+  } catch {
+    /* private mode — ignore */
+  }
+}
+
 /** The folder currently browsed: the deepest breadcrumb, else the space root (Shared Drive id or "root"). */
 const currentFolderId = (path: { id: string }[], spaceId: string | null = null) => path.at(-1)?.id ?? spaceId ?? "root";
 
@@ -421,9 +459,20 @@ export function parseSearch(query: string, ownerMe?: string): SearchParams {
 export const useDriveV2 = create<DriveV2State>((set, get) => {
   async function ensureToken(accountId: string): Promise<string> {
     if (tokenCache && tokenCache.accountId === accountId && tokenCache.exp > Date.now() + 60_000) return tokenCache.token;
-    const { accessToken, expiresIn } = await driveApi.mintToken(accountId);
-    tokenCache = { accountId, token: accessToken, exp: Date.now() + expiresIn * 1000 };
-    return accessToken;
+    // Share one in-flight mint across concurrent callers (parallel uploads) so an expired token triggers a
+    // single mintToken, not one per transfer.
+    if (tokenInflight && tokenInflight.accountId === accountId) return tokenInflight.p;
+    const p = (async () => {
+      const { accessToken, expiresIn } = await driveApi.mintToken(accountId);
+      tokenCache = { accountId, token: accessToken, exp: Date.now() + expiresIn * 1000 };
+      return accessToken;
+    })();
+    tokenInflight = { accountId, p };
+    try {
+      return await p;
+    } finally {
+      if (tokenInflight?.p === p) tokenInflight = null;
+    }
   }
 
   /** Run (or resume/retry) the transfer for an EXISTING tray row `id`. A fresh control is created each run
@@ -433,11 +482,23 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     const control: ResumableControl = { paused: false, canceled: false };
     uploadControls.set(id, control);
     set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "uploading" } : u)) }));
-    // When the file was sealed for an encrypted folder, upload the (stable) ciphertext blob under its
-    // .kenc name — never the plaintext. The prepared blob is reused verbatim across pause/resume so the
-    // resumable session's earlier chunks always match.
-    const enc = uploadJobs.get(id)?.enc;
     try {
+      // Encrypt LAZILY, when the transfer actually starts — so enqueuing a big batch doesn't block the main
+      // thread sealing every file up front. The prepared ciphertext is cached back on the job so pause/resume
+      // reuses the exact same blob (its earlier chunks must match the resumable session). Uploads the .kenc
+      // ciphertext under its own name — never the plaintext.
+      const job = uploadJobs.get(id);
+      let enc = job?.enc;
+      if (job?.encrypt && !enc) {
+        try {
+          enc = await encryptForUpload(file);
+        } catch {
+          throw new Error("Couldn't encrypt this file for the encrypted folder.");
+        }
+        uploadJobs.set(id, { ...job, enc });
+        // Reflect the ciphertext size so the progress bar measures the bytes actually being sent.
+        set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, size: enc!.blob.size } : u)) }));
+      }
       const result = await resumableUpload({
         accessToken: await ensureToken(accountId),
         file: enc?.blob ?? file,
@@ -479,26 +540,47 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     }
   }
 
-  /** Create a tray row for a new file and upload it into `folderId`. Shared by uploadFiles + uploadDropped.
-   *  When `encrypt` is set (feature flag ON + an encrypted folder + an unlocked key), the file is sealed
-   *  client-side first and only the ciphertext leaves the browser. */
-  async function uploadOneFile(accountId: string, file: File, folderId: string, encrypt = false): Promise<void> {
-    const id = uid("up");
-    let enc: PreparedUpload | undefined;
-    if (encrypt) {
-      try {
-        enc = await encryptForUpload(file);
-      } catch (err) {
-        // A file that can't be sealed must NOT silently fall back to a plaintext upload into an
-        // "encrypted" folder — show a failed row instead.
-        set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "error", error: err instanceof Error ? err.message : "Couldn't encrypt this file." }, ...s.uploads] }));
-        return;
-      }
+  /** Remove a still-queued id from the wait list (used when it's canceled/paused before it ever started). */
+  const dequeueUpload = (id: string) => {
+    const i = uploadQueue.indexOf(id);
+    if (i >= 0) uploadQueue.splice(i, 1);
+  };
+
+  /** Refresh the browsed view + quota once a whole upload batch has drained (nothing active, queue empty),
+   *  so the folder + storage numbers reflect the FINISHED uploads. */
+  function afterUploadsSettled(): void {
+    invalidateFolderViews();
+    void get().loadQuota();
+    if (get().view === "myDrive") void load(true);
+  }
+
+  /** Bounded-concurrency scheduler: start queued uploads until `uploadConcurrency` transfers are in flight.
+   *  Re-invoked whenever a slot frees, a new file is enqueued, or the limit is raised — so slots fill at once.
+   *  The queue only ever holds genuinely-queued ids (cancel/pause remove them), so no per-tick status scan. */
+  function pumpUploads(): void {
+    const limit = clampConcurrency(get().uploadConcurrency);
+    while (activeUploads < limit && uploadQueue.length > 0) {
+      const id = uploadQueue.shift()!;
+      const job = uploadJobs.get(id);
+      if (!job) continue; // canceled/dismissed while waiting — nothing to run
+      activeUploads++;
+      void runUpload(id, job.accountId, job.file, job.folderId, uploadResumes.get(id)).finally(() => {
+        activeUploads = Math.max(0, activeUploads - 1);
+        pumpUploads(); // a slot freed → start the next queued transfer
+        if (activeUploads === 0 && uploadQueue.length === 0) afterUploadsSettled();
+      });
     }
-    uploadJobs.set(id, { accountId, file, folderId, enc });
-    // Track ciphertext size so the progress bar reflects the bytes actually being sent.
-    set((s) => ({ uploads: [{ id, name: file.name, size: enc?.blob.size ?? file.size, uploaded: 0, status: "uploading" }, ...s.uploads] }));
-    await runUpload(id, accountId, file, folderId);
+  }
+
+  /** Create a "queued" tray row + job and hand it to the scheduler. The transfer starts when a concurrency
+   *  slot is free (see pumpUploads); encryption is deferred to runUpload so enqueuing a batch stays instant.
+   *  Shared by uploadFiles + uploadDropped. */
+  function enqueueUpload(accountId: string, file: File, folderId: string, encrypt = false): void {
+    const id = uid("up");
+    uploadJobs.set(id, { accountId, file, folderId, encrypt });
+    set((s) => ({ uploads: [{ id, name: file.name, size: file.size, uploaded: 0, status: "queued" }, ...s.uploads] }));
+    uploadQueue.push(id);
+    pumpUploads();
   }
 
   /** Decide whether an upload batch into the CURRENT folder must be encrypted, gating on the key.
@@ -1002,6 +1084,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     busyIds: new Set(),
     dialog: null,
     uploads: [],
+    uploadConcurrency: loadUploadConcurrency(),
     encEnabled: driveEncryptionEnabled(),
     encUnlocked: isDriveUnlocked(),
     currentFolderEnc: false,
@@ -1646,10 +1729,9 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       }
       const dec = resolveUploadEncryption();
       if (!dec) return;
-      for (const file of files) await uploadOneFile(accountId, file, folderId, dec.encrypt);
-      invalidateFolderViews();
-      void get().loadQuota();
-      if (get().view === "myDrive") void load(true);
+      // Enqueue all files at once — the scheduler transfers up to `uploadConcurrency` in parallel. The
+      // browsed view + quota refresh when the whole batch drains (see afterUploadsSettled).
+      for (const file of files) enqueueUpload(accountId, file, folderId, dec.encrypt);
     },
 
     uploadDropped: async (items) => {
@@ -1701,57 +1783,91 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         const parentId = await ensureDir(item.dirs);
         if (parentId == null) { if (item.file) skipped++; continue; }
         // Honor the encryption decision for dropped folders too — never fall back to a plaintext upload
-        // into an encrypted folder (uploadFiles passes this; uploadDropped must as well).
-        if (item.file) await uploadOneFile(accountId, item.file, parentId, dec.encrypt);
+        // into an encrypted folder (uploadFiles passes this; uploadDropped must as well). Files are
+        // enqueued (parallel); folder creation above stays ordered so a parent always exists first.
+        if (item.file) enqueueUpload(accountId, item.file, parentId, dec.encrypt);
       }
       // Silent partial loss is the worst outcome — if a folder failed, say how many files it took down.
       if (skipped) pushToast({ message: `${skipped} file${skipped === 1 ? "" : "s"} weren't uploaded — a folder couldn't be created.`, tone: "warn" });
+      // Show the new (empty) folder structure right away; files fill in as they finish (quota refreshes then).
       invalidateFolderViews();
-      void get().loadQuota();
       if (get().view === "myDrive") void load(true);
+    },
+
+    setUploadConcurrency: (n) => {
+      const v = clampConcurrency(n);
+      saveUploadConcurrency(v);
+      set({ uploadConcurrency: v });
+      pumpUploads(); // raising the limit should fill the new slots immediately
     },
 
     cancelUpload: (id) => {
       const control = uploadControls.get(id);
       if (control) control.canceled = true; // in-flight: resumableUpload aborts at the next chunk → runUpload marks it canceled
-      else { uploadJobs.delete(id); uploadResumes.delete(id); } // paused/queued: no live control, so mark it here
+      else { dequeueUpload(id); uploadJobs.delete(id); uploadResumes.delete(id); } // queued/paused: no live control, so mark it here
       // Reflect it immediately (the abort + catch may lag a chunk); the catch then sets the same status.
-      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id && (u.status === "uploading" || u.status === "paused") ? { ...u, status: "canceled" } : u)) }));
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id && (u.status === "uploading" || u.status === "paused" || u.status === "queued") ? { ...u, status: "canceled" } : u)) }));
     },
 
     cancelAllUploads: () => {
       for (const c of uploadControls.values()) c.canceled = true;
-      // Paused uploads have no live control — drop their resume state so they can't be resumed after cancel.
-      for (const u of get().uploads) if (u.status === "paused") { uploadJobs.delete(u.id); uploadResumes.delete(u.id); }
-      set((s) => ({ uploads: s.uploads.map((u) => (u.status === "uploading" || u.status === "paused" ? { ...u, status: "canceled" } : u)) }));
+      // Queued + paused rows have no live control — drop their slot + state so they can't start or resume.
+      for (const u of get().uploads) if (u.status === "paused" || u.status === "queued") { dequeueUpload(u.id); uploadJobs.delete(u.id); uploadResumes.delete(u.id); }
+      set((s) => ({ uploads: s.uploads.map((u) => (u.status === "uploading" || u.status === "paused" || u.status === "queued" ? { ...u, status: "canceled" } : u)) }));
     },
 
     pauseUpload: (id) => {
       const control = uploadControls.get(id);
-      if (control) control.paused = true; // resumableUpload throws PausedError → runUpload records the offset + marks it paused
+      if (control) { control.paused = true; return; } // in-flight → stops at the next chunk boundary
+      // Queued (not started yet): pull it from the wait list and mark it paused; keep the job for resume.
+      dequeueUpload(id);
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id && u.status === "queued" ? { ...u, status: "paused" } : u)) }));
     },
 
     resumeUpload: (id) => {
-      if (uploadControls.has(id)) return; // still winding down from a pause/cancel — ignore a double-click
+      if (uploadControls.has(id) || uploadQueue.includes(id)) return; // already running or already waiting
       const job = uploadJobs.get(id);
       if (!job) return;
-      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "uploading" } : u)) }));
-      // resumeFrom present → continue from the saved offset (paused); absent → restart from scratch (retry).
-      void runUpload(id, job.accountId, job.file, job.folderId, uploadResumes.get(id));
+      // Re-queue and let the scheduler start it when a slot is free (respects the concurrency limit). The
+      // saved offset (if any) is applied by pumpUploads; absent → a failed row restarts from scratch (retry).
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "queued" } : u)) }));
+      uploadQueue.push(id);
+      pumpUploads();
+    },
+
+    pauseAllUploads: () => {
+      for (const c of uploadControls.values()) c.paused = true; // in-flight → pause at next chunk
+      // Queued rows never started — pull them from the wait list and mark paused.
+      for (const u of get().uploads) if (u.status === "queued") dequeueUpload(u.id);
+      set((s) => ({ uploads: s.uploads.map((u) => (u.status === "queued" ? { ...u, status: "paused" } : u)) }));
+    },
+
+    resumeAllUploads: () => {
+      const ids: string[] = [];
+      for (const u of get().uploads) {
+        if ((u.status === "paused" || u.status === "error") && uploadJobs.has(u.id) && !uploadControls.has(u.id) && !uploadQueue.includes(u.id)) ids.push(u.id);
+      }
+      if (!ids.length) return;
+      const requeued = new Set(ids);
+      uploadQueue.push(...ids);
+      set((s) => ({ uploads: s.uploads.map((u) => (requeued.has(u.id) ? { ...u, status: "queued" } : u)) }));
+      pumpUploads();
     },
 
     dismissUpload: (id) => {
       const control = uploadControls.get(id);
       if (control) control.canceled = true; // defensive: if the row is somehow still uploading, stop it too
+      dequeueUpload(id); // defensive: if it was still queued, drop its slot so the scheduler skips it
       uploadJobs.delete(id);
       uploadResumes.delete(id);
       set((s) => ({ uploads: s.uploads.filter((u) => u.id !== id) }));
     },
 
     clearFinishedUploads: () => {
-      // Keep in-flight AND paused rows; clear the terminal ones (done/error/canceled) and their job state.
-      for (const u of get().uploads) if (u.status !== "uploading" && u.status !== "paused") { uploadJobs.delete(u.id); uploadResumes.delete(u.id); }
-      set((s) => ({ uploads: s.uploads.filter((u) => u.status === "uploading" || u.status === "paused") }));
+      // Keep in-flight, queued AND paused rows; clear the terminal ones (done/error/canceled) + their job state.
+      const keep = (s: UploadTask["status"]) => s === "uploading" || s === "paused" || s === "queued";
+      for (const u of get().uploads) if (!keep(u.status)) { uploadJobs.delete(u.id); uploadResumes.delete(u.id); }
+      set((s) => ({ uploads: s.uploads.filter((u) => keep(u.status)) }));
     },
 
     downloadRevision: async (fileId, revId, filename) => {
