@@ -135,6 +135,11 @@ describe("parseBulkCommand", () => {
     expect(p?.actions).toContainEqual({ type: "pin" });
     expect(p?.select.query).toBe("rust async");
   });
+  it("treats 'move … to trash' as a delete, not a collection named trash", () => {
+    const p = parseBulkCommand("move all my dropped repos to trash");
+    expect(p?.actions).toContainEqual({ type: "delete" });
+    expect(p?.actions).not.toContainEqual({ type: "addToCollection", value: "trash" });
+  });
   it("returns null when no action is understood", () => {
     expect(parseBulkCommand("what is in my library")).toBeNull();
     expect(parseBulkCommand("")).toBeNull();

@@ -222,7 +222,9 @@ export function parseBulkCommand(command: string): BulkPlan | null {
   }
   if ((m = text.match(/\b(?:move|file|add)\b.*?\bto\s+(?:the\s+)?([a-z0-9 _-]+?)\s*(?:collection)?(?=\s+(?:from|about|matching|and)\b|$)/))) {
     const name = m[1]?.trim();
-    if (name && !KIND_WORDS[name]) actions.push({ type: "addToCollection", value: name });
+    // "move … to trash" is a delete, not a collection named "trash" — don't emit a spurious addToCollection.
+    const DELETE_TARGETS = new Set(["trash", "delete", "remove"]);
+    if (name && !KIND_WORDS[name] && !DELETE_TARGETS.has(name)) actions.push({ type: "addToCollection", value: name });
   }
   if ((m = text.match(/\b(?:mark|set)\b.*?\b(?:as|stage)\s+(to-try|to try|trying|using|dropped)\b/))) {
     const s = m[1] === "to try" ? "to-try" : m[1];

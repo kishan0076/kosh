@@ -16,6 +16,13 @@ describe("normalizeUrl", () => {
   it("strips tracking params and hash", () => {
     expect(normalizeUrl("https://example.com/x?utm_source=t&keep=1#frag")).toBe("https://example.com/x?keep=1");
   });
+  it("does not misread a scheme-less dotted host as a github repo", () => {
+    // The first segment has a dot → it's a hostname, not an owner/repo.
+    expect(normalizeUrl("example.com/blog")).toBe("https://example.com/blog");
+    expect(normalizeUrl("docs.python.org/3/library")).toBe("https://docs.python.org/3/library");
+    // A genuine bare owner/repo (no dot in the owner) still coerces to github.
+    expect(normalizeUrl("my-org/my.repo")).toBe("https://github.com/my-org/my.repo");
+  });
 });
 
 describe("classifyLink", () => {
@@ -78,6 +85,18 @@ describe("scanSkill", () => {
   it("is clean for a benign skill", () => {
     const texts = new Map([["SKILL.md", "# safe\nRead files with the Read tool."]]);
     expect(scanSkill(texts).risky).toBe(false);
+  });
+  it("flags unrestricted Bash in every allowed-tools syntax", () => {
+    const array = scanSkill(new Map([["SKILL.md", "allowed-tools: [Read, Bash]"]]));
+    const scalar = scanSkill(new Map([["SKILL.md", "allowed-tools: Bash"]]));
+    const wildcard = scanSkill(new Map([["SKILL.md", "allowed-tools: Bash(*)"]]));
+    expect(array.findings.some((f) => f.rule === "unrestricted-bash")).toBe(true);
+    expect(scalar.findings.some((f) => f.rule === "unrestricted-bash")).toBe(true);
+    expect(wildcard.findings.some((f) => f.rule === "unrestricted-bash")).toBe(true);
+  });
+  it("does not flag a command-restricted Bash grant", () => {
+    const restricted = scanSkill(new Map([["SKILL.md", "allowed-tools: [Read, Bash(git status)]"]]));
+    expect(restricted.findings.some((f) => f.rule === "unrestricted-bash")).toBe(false);
   });
 });
 

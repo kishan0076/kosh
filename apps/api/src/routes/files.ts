@@ -71,8 +71,13 @@ filesRouter.get(
     const item = await getStore().items.findById(String(req.params.id));
     if (!item || item.userId !== uid || !item.fileObject) throw notFound("File not found.");
     const buf = item.fileObject.objectId ? await getObject(uid, item.fileObject.objectId) : null;
+    // The stored path is user-controlled; strip anything that could break out of the header
+    // (quotes, CR/LF, control chars) for the ASCII fallback and add an RFC 5987 UTF-8 form.
+    const rawName = item.fileObject.path.split("/").pop() || "download";
+    const asciiName = rawName.replace(/[\r\n"\\\u0000-\u001f\u007f]/g, "_").slice(0, 255) || "download";
+    const encodedName = encodeURIComponent(rawName);
     res.setHeader("Content-Type", "application/octet-stream");
-    res.setHeader("Content-Disposition", `attachment; filename="${item.fileObject.path.split("/").pop()}"`);
+    res.setHeader("Content-Disposition", `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`);
     res.send(buf ?? Buffer.alloc(0));
   }),
 );

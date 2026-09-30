@@ -215,11 +215,13 @@ export const useDrive = create<DriveState>((set, get) => {
       patchItem(next.id, { status: "uploading", sessionPending: true });
       void runItem(next, accountId);
     }
-    // Refresh usage + history once the batch drains, and reset the per-batch folder memo.
+    // Refresh usage + history once the active batch drains.
     if (activeCount === 0 && !get().queue.some((it) => it.status === "queued" || it.status === "uploading")) {
-      folderCache = null;
       void get().loadQuota();
       void get().loadHistory();
+      // Keep the per-batch folder memo alive while any item can still be retried, so retrying a failed
+      // or paused upload reuses the folders it already created instead of making duplicate folders.
+      if (!get().queue.some((it) => it.status === "failed" || it.status === "paused")) folderCache = null;
     }
   }
 

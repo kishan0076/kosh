@@ -769,13 +769,20 @@ export const useData = create<DataState>()(
         if (get().backend) {
           api
             .createCollection(name)
-            .then(({ collection }) =>
+            .then(({ collection }) => {
+              // Items that were added to this collection while it only had a temp id — their membership
+              // was deferred (never sent with the temp id) and must now be persisted with the real id.
+              const affected = get().items.filter((i) => i.collections.includes(col.id) && !isOptimistic(i.id));
               // Swap the temp col_ id for the server id everywhere it's referenced.
               set((s) => ({
                 collections: s.collections.map((c) => (c.id === col.id ? collection : c)),
                 items: s.items.map((i) => (i.collections.includes(col.id) ? { ...i, collections: i.collections.map((c) => (c === col.id ? collection.id : c)) } : i)),
-              })),
-            )
+              }));
+              for (const it of affected) {
+                const nextCols = it.collections.map((c) => (c === col.id ? collection.id : c));
+                api.patchItem(it.id, apiItemPatch({ collections: nextCols })).catch(() => {});
+              }
+            })
             .catch((err) => {
               set((s) => ({
                 collections: s.collections.filter((c) => c.id !== col.id),
@@ -791,6 +798,13 @@ export const useData = create<DataState>()(
         if (!cur) return;
         const has = cur.collections.includes(collectionId);
         const next = has ? cur.collections.filter((c) => c !== collectionId) : [...cur.collections, collectionId];
+        if (isOptimistic(collectionId)) {
+          // The collection was just created and hasn't been assigned a real id yet — update locally
+          // only. createCollection's id-swap persists this membership once the real id arrives, so a
+          // client-side temp id is never sent to the server.
+          set((s) => ({ items: s.items.map((i) => (i.id === itemId ? { ...i, collections: next, updatedAt: nowIso() } : i)) }));
+          return;
+        }
         get().patchItem(itemId, { collections: next });
       },
       setCollectionPublic: async (id, isPublic) => {

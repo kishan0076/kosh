@@ -32,7 +32,11 @@ const RULES: Rule[] = [
   },
   {
     id: "unrestricted-bash",
-    re: /allowed-tools:\s*(\[[^\]]*\bBash\b(?!\()[^\]]*\]|.*Bash\(\*\))/i,
+    // Any `allowed-tools` value that grants Bash without a command restriction is unrestricted —
+    // whether written as an array (`[Bash]`), a bare scalar (`Bash`), or an explicit wildcard
+    // (`Bash(*)`). A restricted grant like `Bash(git status)` (Bash immediately followed by `(…)`
+    // that is not just `*`) is deliberately not matched.
+    re: /allowed-tools:[^\n]*(?:\bBash\b(?!\()|\bBash\(\s*\*\s*\))/i,
     message: "requests unrestricted shell access",
   },
   {

@@ -13,8 +13,9 @@ export function normalizeUrl(input: string): string {
   const ssh = s.match(/^git@github\.com:([^/]+)\/(.+?)(\.git)?$/);
   if (ssh) s = `https://github.com/${ssh[1]}/${ssh[2]}`;
 
-  // bare `owner/repo` or `owner/repo.git`
-  const bareRepo = s.match(/^([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+  // bare `owner/repo` or `owner/repo.git`. The owner segment must not contain a dot — GitHub owners
+  // never do, and allowing one would misread a scheme-less URL like `example.com/blog` as a repo.
+  const bareRepo = s.match(/^([\w-]+)\/([\w.-]+?)(?:\.git)?$/);
   if (bareRepo && !s.includes(" ") && !/^https?:/i.test(s)) {
     s = `https://github.com/${bareRepo[1]}/${bareRepo[2]}`;
   }

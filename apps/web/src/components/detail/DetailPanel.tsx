@@ -37,7 +37,6 @@ import {
   parseFrontmatter,
   type Item,
   type Skill,
-  type SkillFile,
 } from "@kosh/shared";
 import { cn } from "@/lib/cn";
 import { DUR, EASE, SPRING } from "@/lib/motion";
@@ -127,7 +126,9 @@ export function DetailPanel() {
 export function ItemDetailContent({ item }: { item: Item }) {
   const skills = useData((s) => s.skills);
   const skill = item.skillId ? skills.find((s) => s.id === item.skillId) : undefined;
-  return skill ? <SkillBody item={item} skill={skill} /> : <ItemBody item={item} />;
+  // Key by skill id so navigating between items (J/K) fully resets the version + selected-file state
+  // instead of carrying the previous skill's selection over.
+  return skill ? <SkillBody key={skill.id} item={item} skill={skill} /> : <ItemBody item={item} />;
 }
 
 function PanelBody({ item, onClose, onExpand }: { item: Item; onClose: () => void; onExpand: () => void }) {
@@ -801,7 +802,10 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
   const [versionN, setVersionN] = useState(skill.latest);
   const version = skill.versions.find((v) => v.n === versionN) ?? skill.versions.at(-1)!;
   const files = version.files;
-  const [selected, setSelected] = useState<SkillFile | undefined>(() => files.find((f) => /SKILL\.md$/i.test(f.path)) ?? files[0]);
+  const [selectedPath, setSelectedPath] = useState<string | undefined>(undefined);
+  // Resolve the shown file from the CURRENT version's files by path every render, so switching versions
+  // never leaves a detached file object on screen. If the chosen path isn't in this version, fall back.
+  const selected = files.find((f) => f.path === selectedPath) ?? files.find((f) => /SKILL\.md$/i.test(f.path)) ?? files[0];
 
   const isMarkdown = selected && /\.mdx?$/i.test(selected.path);
 
@@ -916,7 +920,7 @@ function SkillBody({ item, skill }: { item: Item; skill: Skill }) {
                 return (
                   <button
                     key={f.path}
-                    onClick={() => setSelected(f)}
+                    onClick={() => setSelectedPath(f.path)}
                     className={cn(
                       "pressable inline-flex min-h-8 max-w-full items-center gap-1.5 rounded-md border px-2.5 text-left font-mono text-[12px] transition-colors [@media(pointer:coarse)]:min-h-10",
                       active ? "border-primary bg-primary-soft text-primary" : "border-border text-muted hover:bg-surface-2",

@@ -88,6 +88,20 @@ export const useVault = create<VaultState>((set, get) => {
     set({ manifest: next });
   }
 
+  // Apply an optimistic data change, then persist it. If the encrypted save fails, roll the store
+  // back to the prior state so the UI never shows entries that were never written to the server.
+  async function persistData(next: VaultIndexData) {
+    const prevData = get().data;
+    const prevManifest = get().manifest;
+    set({ data: next });
+    try {
+      await save();
+    } catch (err) {
+      set({ data: prevData, manifest: prevManifest });
+      throw err;
+    }
+  }
+
   function scheduleAutoLock() {
     if (lockTimer) clearTimeout(lockTimer);
     lockTimer = setTimeout(() => get().lock(), AUTO_LOCK_MS);
@@ -166,8 +180,7 @@ export const useVault = create<VaultState>((set, get) => {
       const trimmed = name.trim();
       const data = get().data;
       if (!trimmed || !data || data.categories.includes(trimmed)) return;
-      set({ data: { ...data, categories: [...data.categories, trimmed] } });
-      await save();
+      await persistData({ ...data, categories: [...data.categories, trimmed] });
     },
 
     addEntry: async (input) => {
@@ -176,29 +189,24 @@ export const useVault = create<VaultState>((set, get) => {
       const now = nowIso();
       const entry: VaultEntry = { ...input, id: uid("v"), createdAt: now, updatedAt: now };
       const categories = data.categories.includes(entry.category) ? data.categories : [...data.categories, entry.category];
-      set({ data: { ...data, categories, entries: [entry, ...data.entries] } });
-      await save();
+      await persistData({ ...data, categories, entries: [entry, ...data.entries] });
     },
 
     updateEntry: async (id, patch) => {
       const data = get().data;
       if (!data) return;
-      set({
-        data: {
-          ...data,
-          entries: data.entries.map((e) => (e.id === id ? { ...e, ...patch, updatedAt: nowIso() } : e)),
-        },
+      await persistData({
+        ...data,
+        entries: data.entries.map((e) => (e.id === id ? { ...e, ...patch, updatedAt: nowIso() } : e)),
       });
-      await save();
     },
 
     deleteEntry: async (id) => {
       const data = get().data;
       if (!data) return;
       const entry = data.entries.find((e) => e.id === id);
-      set({ data: { ...data, entries: data.entries.filter((e) => e.id !== id) } });
-      await save();
-      // Best-effort remove the encrypted file blob too.
+      await persistData({ ...data, entries: data.entries.filter((e) => e.id !== id) });
+      // Best-effort remove the encrypted file blob too (only after the manifest save succeeded).
       if (entry?.file) vaultApi.deleteFile(entry.file.id).catch(() => {});
     },
 

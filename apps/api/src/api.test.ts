@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { safeFetch } from "./integrations/safe-fetch.js";
+import { safeFetch, isPublicUnicast } from "./integrations/safe-fetch.js";
 import { parsePackageUrl } from "./integrations/registries.js";
 import { createMemoryStore } from "./db/memory.js";
 import { encryptSecret, decryptSecret, hashPassword, verifyPassword } from "./auth/crypto.js";
@@ -19,6 +19,23 @@ describe("safeFetch SSRF guard", () => {
   });
   it("blocks non-http protocols", async () => {
     await expect(safeFetch("file:///etc/passwd")).rejects.toThrow(/http/i);
+  });
+  it("blocks literal private/loopback IPs", async () => {
+    await expect(safeFetch("http://127.0.0.1/")).rejects.toThrow(/not reachable/i);
+    await expect(safeFetch("http://10.0.0.1/")).rejects.toThrow(/not reachable/i);
+    await expect(safeFetch("http://192.168.1.1/")).rejects.toThrow(/not reachable/i);
+  });
+  it("blocks a hostname that resolves to loopback (rebinding surface)", async () => {
+    // localtest.me resolves publicly to 127.0.0.1; if DNS is unavailable in CI the
+    // lookup fails, which is also blocked — either way this must never connect.
+    await expect(safeFetch("http://localtest.me/")).rejects.toThrow(/not reachable/i);
+  });
+  it("classifies addresses by public-unicast range", () => {
+    expect(isPublicUnicast("1.1.1.1")).toBe(true);
+    expect(isPublicUnicast("127.0.0.1")).toBe(false);
+    expect(isPublicUnicast("169.254.169.254")).toBe(false);
+    expect(isPublicUnicast("10.1.2.3")).toBe(false);
+    expect(isPublicUnicast("::1")).toBe(false);
   });
 });
 

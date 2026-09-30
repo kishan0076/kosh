@@ -29,7 +29,9 @@ function parseGithubSubpath(url: string): Subpath | null {
   const parentUrl = `https://github.com/${owner}/${repo}`;
   if (kind === "tree" || kind === "blob") {
     const path = rest.slice(1); // drop the branch segment
-    const subPath = kind === "blob" ? path.slice(0, -1).join("/") : path.join("/");
+    // Keep the whole path for both tree and blob URLs — a /blob/ URL points AT a file, so its
+    // filename is the last segment and must not be dropped.
+    const subPath = path.join("/");
     return { parentUrl, subPath: subPath || "/", childLinkType: "repo" };
   }
   if (kind === "releases") return { parentUrl, subPath: rest.join("/") || "releases", childLinkType: "release" };

@@ -134,13 +134,21 @@ export async function createSkillVersion(
     }
     version.n = existing.latest + 1;
     const versions = [...existing.versions, version];
-    let trust = existing.trust;
-    if (scan.risky && trust === "reviewed") trust = "unreviewed";
+    // Trust the SAME way the create path does, so a new version copied from a repo / stranger can
+    // never ride under an existing trusted badge just because the names collide (CLAUDE.md: copied
+    // skills default to "unreviewed"; a risky scan keeps them unreviewed).
+    const incomingTrust: Skill["trust"] = opts.trust ?? (opts.origin === "repo" ? "unreviewed" : "mine");
     let origin = existing.origin;
+    let trust = existing.trust;
     if (existing.origin === "repo" && opts.origin !== "repo") {
+      // The user is adopting a previously repo-sourced skill as their own.
       origin = opts.origin;
-      trust = "mine";
+      trust = incomingTrust;
+    } else if (opts.origin === "repo" || incomingTrust === "unreviewed") {
+      // A fresh copy of someone else's skill downgrades the record to unreviewed.
+      trust = "unreviewed";
     }
+    if (scan.risky) trust = "unreviewed"; // a risky scan always keeps it unreviewed, whatever the prior trust
     const updated = await store.skills.updateById(existing.id, {
       versions,
       latest: version.n,
@@ -148,6 +156,7 @@ export async function createSkillVersion(
       searchText,
       trust,
       origin,
+      source: opts.source ?? existing.source,
       indexOnly: false,
       updatedAt: nowIso(),
     });
