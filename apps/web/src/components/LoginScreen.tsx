@@ -116,7 +116,7 @@ export function LoginScreen() {
           />
           <Input
             type="password"
-            autoComplete="current-password"
+            autoComplete={mode === "register" ? "new-password" : "current-password"}
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}

@@ -114,11 +114,11 @@ export function Topbar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           <MenuItem icon={SlidersHorizontal} onClick={() => navigate("/settings")}>
             Preferences
           </MenuItem>
-          {user.isAdmin && (
-            <MenuItem icon={FolderLock} onClick={() => navigate("/vault")}>
-              Secure Vault
-            </MenuItem>
-          )}
+          {/* The Secure Vault is per-user — every signed-in member has their own — so it's reachable by
+              everyone, not just admins. (It's the only entry point; the vault isn't in the sidebar.) */}
+          <MenuItem icon={FolderLock} onClick={() => navigate("/vault")}>
+            Secure Vault
+          </MenuItem>
           <MenuSeparator />
           <MenuItem
             icon={RefreshCw}
