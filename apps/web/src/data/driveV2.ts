@@ -307,8 +307,11 @@ const uploadJobs = new Map<string, { accountId: string; file: File; folderId: st
 const uploadResumes = new Map<string, { sessionUri: string; uploaded: number }>();
 // Parallel-upload scheduler: `uploadQueue` holds tray-row ids waiting for a slot (FIFO); `activeUploads`
 // counts transfers currently sending bytes. The store's `uploadConcurrency` caps how many run at once.
+// `uploadsEnqueuing` is >0 while a batch is still being added (uploadDropped awaits folder creation between
+// files, so the active set can transiently hit 0 mid-batch) — the settle refresh is suppressed until it's 0.
 const uploadQueue: string[] = [];
 let activeUploads = 0;
+let uploadsEnqueuing = 0;
 
 /* Live-sync controller (module-level so it survives re-renders; driven by the page's mount effect). */
 const SYNC_INTERVAL = 12_000; // poll cadence when the tab is visible
@@ -546,12 +549,21 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
     if (i >= 0) uploadQueue.splice(i, 1);
   };
 
-  /** Refresh the browsed view + quota once a whole upload batch has drained (nothing active, queue empty),
-   *  so the folder + storage numbers reflect the FINISHED uploads. */
+  /** Refresh the browsed view + quota once a whole upload batch has drained, so the folder + storage numbers
+   *  reflect the FINISHED uploads. */
   function afterUploadsSettled(): void {
     invalidateFolderViews();
     void get().loadQuota();
     if (get().view === "myDrive") void load(true);
+  }
+
+  /** Settle only when the batch is genuinely done: nothing still transferring or queued, no batch mid-enqueue,
+   *  and at least one upload actually completed (so a pause-all that drains the active set doesn't spuriously
+   *  refetch, and a still-being-walked folder tree doesn't refetch between folder-creation gaps). */
+  function maybeSettleUploads(): void {
+    if (activeUploads === 0 && uploadQueue.length === 0 && uploadsEnqueuing === 0 && get().uploads.some((u) => u.status === "done")) {
+      afterUploadsSettled();
+    }
   }
 
   /** Bounded-concurrency scheduler: start queued uploads until `uploadConcurrency` transfers are in flight.
@@ -567,7 +579,7 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       void runUpload(id, job.accountId, job.file, job.folderId, uploadResumes.get(id)).finally(() => {
         activeUploads = Math.max(0, activeUploads - 1);
         pumpUploads(); // a slot freed → start the next queued transfer
-        if (activeUploads === 0 && uploadQueue.length === 0) afterUploadsSettled();
+        maybeSettleUploads();
       });
     }
   }
@@ -1730,8 +1742,15 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const dec = resolveUploadEncryption();
       if (!dec) return;
       // Enqueue all files at once — the scheduler transfers up to `uploadConcurrency` in parallel. The
-      // browsed view + quota refresh when the whole batch drains (see afterUploadsSettled).
-      for (const file of files) enqueueUpload(accountId, file, folderId, dec.encrypt);
+      // browsed view + quota refresh when the whole batch drains (see maybeSettleUploads). The enqueue guard
+      // keeps a tiny early-finishing file from triggering a settle before the batch is fully queued.
+      uploadsEnqueuing++;
+      try {
+        for (const file of files) enqueueUpload(accountId, file, folderId, dec.encrypt);
+      } finally {
+        uploadsEnqueuing--;
+        maybeSettleUploads();
+      }
     },
 
     uploadDropped: async (items) => {
@@ -1778,20 +1797,28 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
         return parentId;
       };
       // Ordered walk: ensureDir (cached) guarantees a parent exists before its children/files. A file-less
-      // item is an empty folder to preserve — ensureDir already created it, nothing more to do.
-      for (const item of items) {
-        const parentId = await ensureDir(item.dirs);
-        if (parentId == null) { if (item.file) skipped++; continue; }
-        // Honor the encryption decision for dropped folders too — never fall back to a plaintext upload
-        // into an encrypted folder (uploadFiles passes this; uploadDropped must as well). Files are
-        // enqueued (parallel); folder creation above stays ordered so a parent always exists first.
-        if (item.file) enqueueUpload(accountId, item.file, parentId, dec.encrypt);
+      // item is an empty folder to preserve — ensureDir already created it, nothing more to do. The enqueue
+      // guard is held for the WHOLE walk: ensureDir awaits folder-creation round-trips, so without it a tiny
+      // file that finishes during a gap would trigger a full settle refetch mid-walk.
+      uploadsEnqueuing++;
+      try {
+        for (const item of items) {
+          const parentId = await ensureDir(item.dirs);
+          if (parentId == null) { if (item.file) skipped++; continue; }
+          // Honor the encryption decision for dropped folders too — never fall back to a plaintext upload
+          // into an encrypted folder (uploadFiles passes this; uploadDropped must as well). Files are
+          // enqueued (parallel); folder creation above stays ordered so a parent always exists first.
+          if (item.file) enqueueUpload(accountId, item.file, parentId, dec.encrypt);
+        }
+      } finally {
+        uploadsEnqueuing--;
       }
       // Silent partial loss is the worst outcome — if a folder failed, say how many files it took down.
       if (skipped) pushToast({ message: `${skipped} file${skipped === 1 ? "" : "s"} weren't uploaded — a folder couldn't be created.`, tone: "warn" });
       // Show the new (empty) folder structure right away; files fill in as they finish (quota refreshes then).
       invalidateFolderViews();
       if (get().view === "myDrive") void load(true);
+      maybeSettleUploads(); // in case every enqueued file already finished during the walk
     },
 
     setUploadConcurrency: (n) => {
@@ -1829,8 +1856,10 @@ export const useDriveV2 = create<DriveV2State>((set, get) => {
       const job = uploadJobs.get(id);
       if (!job) return;
       // Re-queue and let the scheduler start it when a slot is free (respects the concurrency limit). The
-      // saved offset (if any) is applied by pumpUploads; absent → a failed row restarts from scratch (retry).
-      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "queued" } : u)) }));
+      // saved offset (if any) is applied by pumpUploads; absent → a failed row restarts from scratch (retry),
+      // so zero its progress bar (it kept the failed attempt's byte count) to avoid showing stale progress.
+      const willRestart = !uploadResumes.has(id);
+      set((s) => ({ uploads: s.uploads.map((u) => (u.id === id ? { ...u, status: "queued", uploaded: willRestart ? 0 : u.uploaded } : u)) }));
       uploadQueue.push(id);
       pumpUploads();
     },

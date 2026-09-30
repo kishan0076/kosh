@@ -51,7 +51,7 @@ import { Menu, MenuItem, MenuLabel, MenuSeparator, Modal, SelectMenu, useBodyScr
 import { PHONE_QUERY, useMediaQuery } from "@/lib/useMediaQuery";
 import { startConnect } from "@/lib/connect";
 import { filterBucket, type DriveNode, type FilterKind } from "@/data/driveV2Api";
-import { MAX_UPLOAD_CONCURRENCY, useDriveV2, type DriveView, type SortKey } from "@/data/driveV2";
+import { MAX_UPLOAD_CONCURRENCY, useDriveV2, type DriveView, type SortKey, type UploadTask } from "@/data/driveV2";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { DriveContentSkeleton, DriveEmptyState, DriveErrorState, FileCard, FileRow, ListHeader, sortNodes, type ItemHandlers } from "@/components/drive-v2/items";
 import { PageHeader } from "@/components/drive-v2/PageHeader";
@@ -1447,6 +1447,9 @@ function UploadRowBtn({ onClick, label, title, tone = "muted", children }: { onC
   );
 }
 
+// Display priority for tray rows — the transfers a user manages come first, finished/terminal rows last.
+const UPLOAD_STATUS_ORDER: Record<UploadTask["status"], number> = { uploading: 0, paused: 1, error: 2, queued: 3, done: 4, canceled: 5 };
+
 function UploadTray() {
   const uploads = useDriveV2((s) => s.uploads);
   const concurrency = useDriveV2((s) => s.uploadConcurrency);
@@ -1457,20 +1460,27 @@ function UploadTray() {
   const done = uploads.filter((u) => u.status === "done").length;
   const failed = uploads.filter((u) => u.status === "error").length;
   const canceled = uploads.filter((u) => u.status === "canceled").length;
-  const total = uploads.length;
   // "In progress" = uploading, queued OR paused (none of those are finished — they're all still pending).
   const inProgress = active.length > 0 || queued > 0 || paused > 0;
   const runningOrQueued = active.length + queued; // can be paused
   const resumable = paused + failed; // can be resumed/retried
-  // Aggregate progress across everything in the tray (uploaded bytes / total bytes).
-  const totalBytes = uploads.reduce((a, u) => a + u.size, 0);
-  const doneBytes = uploads.reduce((a, u) => a + (u.status === "done" ? u.size : u.uploaded), 0);
+  // Completable = the denominator that CAN still reach "done" — exclude error/canceled so the header fraction
+  // isn't stuck at e.g. 8/9, and the aggregate bar isn't dragged down by rows that will never finish.
+  const completable = uploads.filter((u) => u.status !== "canceled" && u.status !== "error");
+  const total = completable.length;
+  // Aggregate progress across the completable set (uploaded bytes / total bytes).
+  const totalBytes = completable.reduce((a, u) => a + u.size, 0);
+  const doneBytes = completable.reduce((a, u) => a + (u.status === "done" ? u.size : u.uploaded), 0);
   const aggPct = totalBytes ? Math.round((doneBytes / totalBytes) * 100) : 0;
+  // Rendered order: surface the rows a user manages (uploading → paused → error → queued) ABOVE finished
+  // ones, so the 30-row cap always shows the active transfers, not the newest still-queued tail. Sort is
+  // stable, so within a status rows keep their newest-first array order.
+  const orderedUploads = useMemo(() => [...uploads].sort((a, b) => UPLOAD_STATUS_ORDER[a.status] - UPLOAD_STATUS_ORDER[b.status]), [uploads]);
   // Header: a real count, not a truncated "…". In-flight files while uploading (noting how many are queued
   // behind them), else a summary of the final tallies (complete / failed / canceled), noting anything paused.
   const heading =
     active.length > 0
-      ? `Uploading ${active.length}${queued ? ` · ${queued} queued` : ""}${total > active.length + queued ? ` · ${done}/${total} done` : ""}${paused ? ` · ${paused} paused` : ""}`
+      ? `Uploading ${active.length}${queued ? ` · ${queued} queued` : ""}${done > 0 ? ` · ${done}/${total} done` : ""}${paused ? ` · ${paused} paused` : ""}`
       : queued > 0
         ? `${queued} queued${done ? ` · ${done} done` : ""}`
         : paused > 0
@@ -1497,8 +1507,9 @@ function UploadTray() {
           <X size={16} />
         </button>
       </div>
-      {/* Parallel-upload manager: how many run at once + pause-all / resume-all. Only while there's pending work. */}
-      {inProgress && (
+      {/* Parallel-upload manager: how many run at once + pause-all / resume-all. Shown whenever there's
+          pending OR retryable work (so Resume all stays reachable even if every row has failed). */}
+      {(inProgress || resumable > 0) && (
         <div className="flex items-center gap-2 border-b border-border px-3.5 py-2">
           <Gauge size={13} className="shrink-0 text-muted" />
           <span className="shrink-0 text-[11.5px] text-muted">Parallel</span>
@@ -1534,7 +1545,7 @@ function UploadTray() {
       )}
       <Collapse open={open}>
         <div className="max-h-64 overflow-y-auto">
-          {uploads.slice(0, 30).map((u) => (
+          {orderedUploads.slice(0, 30).map((u) => (
             <div key={u.id} className="group/uprow flex items-center gap-2.5 border-b border-border px-3.5 py-2 last:border-0">
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[12.5px] font-medium">{u.name}</div>
