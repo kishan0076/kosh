@@ -3,6 +3,7 @@ import type { ContextPack, ContextPackSnapshot } from "@kosh/shared";
 import { getStore, type ServerContextPack, type ServerItem, type Store } from "../db/index.js";
 import { badRequest, notFound } from "../errors.js";
 import { getObject } from "../storage/objects.js";
+import { withKeyLock } from "../lib/keylock.js";
 import { logger } from "../logger.js";
 
 export const MAX_PACK_ITEMS = 200; // hard ceiling on how many items one pack can reference
@@ -261,28 +262,35 @@ export interface PackPatch {
 /** Update a pack's fields. Any change to the assembled content (name/description/instructions/item set)
  *  bumps the version and cuts a snapshot. `null` clears an optional field; `undefined` leaves it. */
 export async function updatePackFields(store: Store, userId: string, pack: ServerContextPack, input: PackPatch): Promise<ServerContextPack> {
-  const next: PackComposition = {
-    name: input.name ?? pack.name,
-    description: input.description !== undefined ? (input.description ?? undefined) : pack.description,
-    instructions: input.instructions !== undefined ? (input.instructions ?? undefined) : pack.instructions,
-    itemIds: input.itemIds !== undefined ? await filterOwnedItemIds(store, userId, input.itemIds) : pack.itemIds,
-    version: pack.version,
-  };
-  const contentChanged =
-    next.name !== pack.name ||
-    next.description !== pack.description ||
-    next.instructions !== pack.instructions ||
-    next.itemIds.join(",") !== pack.itemIds.join(",");
+  const itemIds = input.itemIds !== undefined ? await filterOwnedItemIds(store, userId, input.itemIds) : undefined;
+  // Serialize the read-compute-write per pack so two concurrent mutations (REST + MCP, or two tabs) can't
+  // each compute from a stale snapshot and clobber each other / corrupt the version history. Re-read the
+  // pack INSIDE the lock and base the new composition on that fresh copy.
+  return withKeyLock(`pack:${pack.id}`, async () => {
+    const base = (await store.contextPacks.findById(pack.id)) ?? pack;
+    const next: PackComposition = {
+      name: input.name ?? base.name,
+      description: input.description !== undefined ? (input.description ?? undefined) : base.description,
+      instructions: input.instructions !== undefined ? (input.instructions ?? undefined) : base.instructions,
+      itemIds: itemIds ?? base.itemIds,
+      version: base.version,
+    };
+    const contentChanged =
+      next.name !== base.name ||
+      next.description !== base.description ||
+      next.instructions !== base.instructions ||
+      next.itemIds.join(",") !== base.itemIds.join(",");
 
-  const patch: Partial<ServerContextPack> = { updatedAt: nowIso(), name: next.name, description: next.description, instructions: next.instructions, itemIds: next.itemIds };
-  if (contentChanged) {
-    next.version = pack.version + 1;
-    patch.version = next.version;
-    patch.snapshots = nextSnapshots(pack, next, nowIso());
-  }
-  const updated = await store.contextPacks.updateById(pack.id, patch);
-  if (!updated) throw notFound("Context pack not found.");
-  return updated;
+    const patch: Partial<ServerContextPack> = { updatedAt: nowIso(), name: next.name, description: next.description, instructions: next.instructions, itemIds: next.itemIds };
+    if (contentChanged) {
+      next.version = base.version + 1;
+      patch.version = next.version;
+      patch.snapshots = nextSnapshots(base, next, nowIso());
+    }
+    const updated = await store.contextPacks.updateById(base.id, patch);
+    if (!updated) throw notFound("Context pack not found.");
+    return updated;
+  });
 }
 
 /** Persist a new item set at a bumped version (shared by add/remove). */
@@ -299,15 +307,22 @@ async function setPackItemIds(store: Store, pack: ServerContextPack, itemIds: st
 export async function addItemToPack(store: Store, userId: string, pack: ServerContextPack, itemId: string): Promise<{ pack: ServerContextPack; duplicate: boolean }> {
   const item = await store.items.findById(itemId);
   if (!item || item.userId !== userId || item.deletedAt) throw notFound("Item not found.");
-  if (pack.itemIds.includes(itemId)) return { pack, duplicate: true };
-  if (pack.itemIds.length >= MAX_PACK_ITEMS) throw badRequest("PACK_FULL", `A pack can hold at most ${MAX_PACK_ITEMS} items.`);
-  return { pack: await setPackItemIds(store, pack, [...pack.itemIds, itemId]), duplicate: false };
+  // Compute the new item set against the FRESH pack inside the per-pack lock (see updatePackFields).
+  return withKeyLock(`pack:${pack.id}`, async () => {
+    const base = (await store.contextPacks.findById(pack.id)) ?? pack;
+    if (base.itemIds.includes(itemId)) return { pack: base, duplicate: true };
+    if (base.itemIds.length >= MAX_PACK_ITEMS) throw badRequest("PACK_FULL", `A pack can hold at most ${MAX_PACK_ITEMS} items.`);
+    return { pack: await setPackItemIds(store, base, [...base.itemIds, itemId]), duplicate: false };
+  });
 }
 
 /** Remove an item from a pack (idempotent — a no-op if it wasn't there). */
 export async function removeItemFromPack(store: Store, pack: ServerContextPack, itemId: string): Promise<ServerContextPack> {
-  if (!pack.itemIds.includes(itemId)) return pack;
-  return setPackItemIds(store, pack, pack.itemIds.filter((x) => x !== itemId));
+  return withKeyLock(`pack:${pack.id}`, async () => {
+    const base = (await store.contextPacks.findById(pack.id)) ?? pack;
+    if (!base.itemIds.includes(itemId)) return base;
+    return setPackItemIds(store, base, base.itemIds.filter((x) => x !== itemId));
+  });
 }
 
 /* ── Version diff ─────────────────────────────────────────────── */

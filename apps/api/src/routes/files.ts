@@ -5,6 +5,7 @@ import { ah, badRequest, notFound } from "../errors.js";
 import { requireUser, requireWrite } from "../auth/middleware.js";
 import { toClientItem } from "../modules/ingest.js";
 import { enqueueRules } from "../modules/rules.js";
+import { quotaFor, refreshStorageUsed, storageUsage } from "../modules/quota.js";
 import { getObject, putIfMissing, sha256 } from "../storage/objects.js";
 
 export const filesRouter: Router = Router();
@@ -33,8 +34,11 @@ filesRouter.post(
     if (refHash) {
       const stored = await getObject(uid, refHash);
       if (!stored) throw notFound("Uploaded file not found — re-run the upload.");
-      // Re-hash small objects so a file's objectId always matches its bytes (§6.3).
-      if (stored.length <= 2_000_000 && sha256(stored) !== refHash) throw badRequest("HASH_MISMATCH", "Uploaded bytes do not match the declared hash.");
+      // Re-hash so a file's objectId always matches its bytes (§6.3), regardless of size — the presigned-R2
+      // PUT is not server-verified, so trusting the client-declared hash for large objects would let the CAS
+      // be poisoned (an item persisted with objectId H whose bytes don't hash to H). Objects cap at 25 MB, so
+      // re-hashing on finalize is cheap.
+      if (sha256(stored) !== refHash) throw badRequest("HASH_MISMATCH", "Uploaded bytes do not match the declared hash.");
       hash = refHash;
       byteLen = stored.length;
     } else {
@@ -42,6 +46,12 @@ filesRouter.post(
       hash = sha256(buf);
       byteLen = buf.length;
       await putIfMissing(uid, hash, buf, mime);
+    }
+    // Enforce the per-user storage quota (this was never checked, so usage grew unbounded and always read 0).
+    // Deduped objects the user already has don't count again.
+    const { total, has } = await storageUsage(uid);
+    if (!has(hash) && total + byteLen > (await quotaFor(uid))) {
+      throw badRequest("QUOTA_EXCEEDED", "You've reached your storage limit. Delete some files to free up space.");
     }
     const now = nowIso();
     const item = await getStore().items.create({
@@ -59,6 +69,7 @@ filesRouter.post(
       createdAt: now,
       updatedAt: now,
     } as Omit<ServerItem, "id">);
+    void refreshStorageUsed(uid); // keep the UI storage meter accurate (best-effort)
     enqueueRules(uid, item); // run automations for the new file (kind/tag/stage rules)
     res.status(201).json({ item: toClientItem(item) });
   }),

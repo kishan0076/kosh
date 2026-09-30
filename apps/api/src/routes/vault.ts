@@ -4,6 +4,7 @@ import { z } from "zod";
 import { ah, badRequest, notFound } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
 import { config } from "../config.js";
+import { withKeyLock } from "../lib/keylock.js";
 import { deleteVaultBlob, getVaultBlob, putVaultBlob } from "../vault/storage.js";
 
 export const vaultRouter: Router = Router();
@@ -47,17 +48,22 @@ vaultRouter.put(
     const body = manifestSchema.parse(req.body);
     const buf = Buffer.from(JSON.stringify(body), "utf8");
     if (buf.length > config.vault.maxManifestBytes) throw badRequest("TOO_LARGE", "Vault manifest is too large.");
-    // Optimistic concurrency: the version must strictly increase, so a stale tab can't silently
-    // clobber a newer save (and a fresh PUT can't overwrite an existing vault).
-    const existing = await getVaultBlob(uid, "manifest.json");
-    if (existing) {
-      const prev = JSON.parse(existing.toString("utf8")) as { version?: number };
-      if (typeof prev.version === "number" && body.version <= prev.version) {
-        res.status(409).json({ error: { code: "VERSION_CONFLICT", message: "The vault changed elsewhere. Reload and try again.", details: { current: prev.version } } });
-        return;
+    // Optimistic concurrency: the version must strictly increase, so a stale tab can't silently clobber a
+    // newer save (and a fresh PUT can't overwrite an existing vault). The read-check-write is serialized
+    // per user so two concurrent PUTs (two tabs / web + mobile) can't both pass the check and lose an update.
+    const conflict = await withKeyLock(`vault:manifest:${uid}`, async () => {
+      const existing = await getVaultBlob(uid, "manifest.json");
+      if (existing) {
+        const prev = JSON.parse(existing.toString("utf8")) as { version?: number };
+        if (typeof prev.version === "number" && body.version <= prev.version) return prev.version;
       }
+      await putVaultBlob(uid, "manifest.json", buf, "application/json");
+      return null;
+    });
+    if (conflict !== null) {
+      res.status(409).json({ error: { code: "VERSION_CONFLICT", message: "The vault changed elsewhere. Reload and try again.", details: { current: conflict } } });
+      return;
     }
-    await putVaultBlob(uid, "manifest.json", buf, "application/json");
     res.json({ ok: true });
   }),
 );

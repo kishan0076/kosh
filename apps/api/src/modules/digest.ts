@@ -80,13 +80,18 @@ export async function markWatchedSeen(userId: string): Promise<number> {
   const store = getStore();
   const items = await store.items.find({ userId, deletedAt: null });
   let cleared = 0;
-  for (const i of items) {
-    const w = i.github?.watch;
-    if (i.github && w?.enabled && (w.newSince ?? 0) > 0) {
-      const updated = await store.items.updateById(i.id, { github: { ...i.github, watch: { ...w, newSince: 0 } } });
-      if (updated) publish(userId, { kind: "item.updated", item: toClientItem(updated) }); // clears the live badge
-      cleared++;
-    }
+  for (const snap of items) {
+    const w0 = snap.github?.watch;
+    if (!(snap.github && w0?.enabled && (w0.newSince ?? 0) > 0)) continue;
+    // Re-read each item fresh right before writing (the store overwrites the whole `github` subdocument on
+    // update). Using the up-front bulk snapshot would clobber any concurrent enrichment that rewrote this
+    // repo's github between the read and the write — the loop can span many serial writes, widening that gap.
+    const fresh = await store.items.findById(snap.id);
+    const w = fresh?.github?.watch;
+    if (!fresh?.github || !w) continue;
+    const updated = await store.items.updateById(fresh.id, { github: { ...fresh.github, watch: { ...w, newSince: 0 } }, updatedAt: new Date().toISOString() });
+    if (updated) publish(userId, { kind: "item.updated", item: toClientItem(updated) }); // clears the live badge
+    cleared++;
   }
   return cleared;
 }

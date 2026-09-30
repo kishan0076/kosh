@@ -10,6 +10,7 @@ import {
 } from "@kosh/shared";
 import { getStore, type ServerSkill } from "../db/index.js";
 import { getObject } from "../storage/objects.js";
+import { withKeyLock } from "../lib/keylock.js";
 import { createSkillVersion, toClientSkill, type IncomingFile } from "./skills.js";
 
 /**
@@ -101,42 +102,47 @@ export async function installFromRegistry(installerId: string, id: string): Prom
   if (src.userId === installerId) {
     return { skill: toClientSkill(src), duplicate: true, risky: risk.risky, findingCount: risk.findingCount };
   }
-  // Already installed from this exact listing → return the existing copy instead of duplicating it.
-  const already = await store.skills.findOne({ userId: installerId, "source.repo": "registry", "source.path": id, deletedAt: null });
-  if (already) return { skill: toClientSkill(already), duplicate: true, risky: risk.risky, findingCount: risk.findingCount };
+  // Serialize install per (installer, listing): the dedup check and the copy-create below are a check-then-act
+  // with many awaits between them and no unique index on the (userId, source) dedup key, so two concurrent
+  // installs of the same listing would otherwise both miss `already` and create duplicate copies.
+  return withKeyLock(`install:${installerId}:${id}`, async () => {
+    // Already installed from this exact listing → return the existing copy instead of duplicating it.
+    const already = await store.skills.findOne({ userId: installerId, "source.repo": "registry", "source.path": id, deletedAt: null });
+    if (already) return { skill: toClientSkill(already), duplicate: true, risky: risk.risky, findingCount: risk.findingCount };
 
-  const v = src.versions.find((x) => x.n === src.latest) ?? src.versions.at(-1);
-  if (!v) return "not_found";
+    const v = src.versions.find((x) => x.n === src.latest) ?? src.versions.at(-1);
+    if (!v) return "not_found" as const;
 
-  // Build the copy's files: inline text as-is; binary bytes read from the AUTHOR's object store (per-user).
-  const files: IncomingFile[] = [];
-  for (const f of v.files) {
-    if (f.content != null) {
-      files.push({ path: f.path, mime: f.mime, content: f.content });
-    } else if (f.sha256) {
-      const buf = await getObject(src.userId, f.sha256);
-      // Fail loudly rather than silently install a 0-byte file if the author's object is gone.
-      if (!buf) throw new Error("SKILL_FILE_UNAVAILABLE");
-      files.push({ path: f.path, mime: f.mime, bytesBase64: buf.toString("base64") });
-    } else {
-      files.push({ path: f.path, mime: f.mime, content: "" });
+    // Build the copy's files: inline text as-is; binary bytes read from the AUTHOR's object store (per-user).
+    const files: IncomingFile[] = [];
+    for (const f of v.files) {
+      if (f.content != null) {
+        files.push({ path: f.path, mime: f.mime, content: f.content });
+      } else if (f.sha256) {
+        const buf = await getObject(src.userId, f.sha256);
+        // Fail loudly rather than silently install a 0-byte file if the author's object is gone.
+        if (!buf) throw new Error("SKILL_FILE_UNAVAILABLE");
+        files.push({ path: f.path, mime: f.mime, bytesBase64: buf.toString("base64") });
+      } else {
+        files.push({ path: f.path, mime: f.mime, content: "" });
+      }
     }
-  }
 
-  const name = await uniqueName(installerId, src.name);
-  const { skill } = await createSkillVersion(installerId, files, {
-    origin: "repo", // a copy from elsewhere — not authored here
-    itemSource: "web",
-    name,
-    tools: src.tools,
-    trust: "unreviewed", // golden rule: a stranger's skill is never auto-trusted
-    license: src.license,
-    // Attribution + an idempotency marker so re-installs resolve to this same copy.
-    source: { owner: src.source?.owner, repo: "registry", path: id },
+    const name = await uniqueName(installerId, src.name);
+    const { skill } = await createSkillVersion(installerId, files, {
+      origin: "repo", // a copy from elsewhere — not authored here
+      itemSource: "web",
+      name,
+      tools: src.tools,
+      trust: "unreviewed", // golden rule: a stranger's skill is never auto-trusted
+      license: src.license,
+      // Attribution + an idempotency marker so re-installs resolve to this same copy.
+      source: { owner: src.source?.owner, repo: "registry", path: id },
+    });
+
+    await store.skills.updateById(src.id, { installCount: (src.installCount ?? 0) + 1 } as Partial<ServerSkill>).catch(() => undefined);
+
+    const installedRisk = skillRisk(skill);
+    return { skill: toClientSkill(skill), duplicate: false, risky: installedRisk.risky, findingCount: installedRisk.findingCount };
   });
-
-  await store.skills.updateById(src.id, { installCount: (src.installCount ?? 0) + 1 } as Partial<ServerSkill>).catch(() => undefined);
-
-  const installedRisk = skillRisk(skill);
-  return { skill: toClientSkill(skill), duplicate: false, risky: installedRisk.risky, findingCount: installedRisk.findingCount };
 }

@@ -70,7 +70,11 @@ export async function reserveBudget(userId: string, estCost: number, byok = fals
 /** Return a reservation to the user's daily budget when the call produced nothing (e.g. model error).
  *  `reservedDate` is the day the reservation was made; the refund is skipped once the day has rolled
  *  over so it can never subtract from a NEW day's fresh spend. */
-export async function refundBudget(userId: string, estCost: number, reservedDate: string): Promise<void> {
+export async function refundBudget(userId: string, estCost: number, reservedDate: string, byok = false): Promise<void> {
+  // Only refund the user's OWN-key (BYOK) spend. A completed round-trip on the shared SERVER key cost real
+  // money even when the response was unusable, so refunding it would let repeated billable-but-unparseable
+  // responses slip past the AI_DAILY_CAP_USD hard cap (the per-user counter would never accumulate).
+  if (!byok) return;
   await withUserLock(userId, async () => {
     const store = getStore();
     const user = await store.users.findById(userId);
@@ -163,7 +167,7 @@ export async function summarizeForUser(userId: string, input: { title?: string; 
 
   const parsed = extractJson<Partial<AiEnrichment>>(await completeWith(ctx, { system: SYSTEM, prompt, maxTokens: 400 }));
   if (!parsed) {
-    await refundBudget(userId, estCost, reservedDate);
+    await refundBudget(userId, estCost, reservedDate, ctx.byok);
     return null;
   }
   return {

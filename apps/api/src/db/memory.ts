@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Coll, Filter, FindOpts, Store } from "./types.js";
 
@@ -98,10 +98,31 @@ const COLLECTIONS = ["users", "items", "skills", "collections", "contextPacks", 
 export function createMemoryStore(dataDir: string): Store {
   const file = join(dataDir, "db.json");
   let disk: Record<string, unknown[]> = {};
+  let raw: string | null = null;
   try {
-    disk = JSON.parse(readFileSync(file, "utf8"));
-  } catch {
-    disk = {};
+    raw = readFileSync(file, "utf8");
+  } catch (err) {
+    // ENOENT is the normal first-run case (start empty, silently). Any other read error we surface but
+    // still start empty — we can't preserve what we couldn't read.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") console.error(`Kosh: couldn't read ${file}; starting with an empty store.`, err);
+    raw = null;
+  }
+  if (raw !== null) {
+    try {
+      disk = JSON.parse(raw);
+    } catch (err) {
+      // The file exists but is corrupt (e.g. a truncated/interrupted write). NEVER silently continue with
+      // an empty store — the first subsequent flush would overwrite the corrupt file with an empty snapshot
+      // and make the loss permanent. Preserve it aside so it can be recovered, and start empty.
+      const aside = `${file}.corrupt-${Date.now()}`;
+      try {
+        renameSync(file, aside);
+        console.error(`Kosh: ${file} is corrupt and could not be parsed; preserved it as ${aside} and starting with an empty store.`, err);
+      } catch (renameErr) {
+        console.error(`Kosh: ${file} is corrupt and could not be parsed, and it could not be preserved aside; starting with an empty store.`, err, renameErr);
+      }
+      disk = {};
+    }
   }
 
   let saveTimer: NodeJS.Timeout | null = null;
@@ -110,7 +131,11 @@ export function createMemoryStore(dataDir: string): Store {
       mkdirSync(dirname(file), { recursive: true });
       const snapshot: Record<string, unknown[]> = {};
       for (const name of COLLECTIONS) snapshot[name] = (store[name] as unknown as { dump: () => unknown[] }).dump();
-      writeFileSync(file, JSON.stringify(snapshot));
+      // Write atomically: a full write to a temp file then a rename (atomic on the same filesystem), so an
+      // interrupted write can never leave db.json truncated/half-written.
+      const tmp = `${file}.tmp-${process.pid}`;
+      writeFileSync(tmp, JSON.stringify(snapshot));
+      renameSync(tmp, file);
     } catch {
       /* best effort */
     }

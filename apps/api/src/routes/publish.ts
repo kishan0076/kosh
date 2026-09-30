@@ -168,6 +168,11 @@ publishRouter.put(
       githubScopes: info.scopes.join(" "),
       githubTokenSource: "pat",
       githubConnectedAt: nowIso(),
+      // A PAT is non-expiring from our side; clear any leftover OAuth expiry/refresh fields from a prior
+      // "Connect GitHub" so getValidGithubToken() doesn't treat this fresh PAT as expired (or try to refresh it).
+      githubTokenExpiresAt: undefined,
+      githubRefreshToken: undefined,
+      githubRefreshTokenExpiresAt: undefined,
     });
     res.json({ connected: true, login: info.login, scopes: info.scopes });
   }),
@@ -185,6 +190,11 @@ publishRouter.delete(
       githubScopes: "",
       githubTokenSource: undefined,
       githubConnectedAt: "",
+      // Also revoke the stored refresh token + expiries (a live refresh token would otherwise linger encrypted
+      // at rest after the user believes they disconnected) — mirroring the OAuth /github/disconnect route.
+      githubRefreshToken: undefined,
+      githubTokenExpiresAt: undefined,
+      githubRefreshTokenExpiresAt: undefined,
     });
     res.json({ connected: false });
   }),

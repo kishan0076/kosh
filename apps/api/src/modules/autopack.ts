@@ -76,7 +76,7 @@ export async function suggestPack(userId: string, goal: string): Promise<PackSug
 
   const parsed = extractJson<{ name?: string; instructions?: string; pick?: number[] }>(await completeWith(ctx, { system: SYSTEM, prompt, maxTokens: 500 }));
   if (!parsed) {
-    await refundBudget(userId, estCost, reservedDate);
+    await refundBudget(userId, estCost, reservedDate, ctx.byok);
     return fallback({ aiAvailable: true });
   }
 

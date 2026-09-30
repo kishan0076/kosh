@@ -12,6 +12,7 @@ import { archiveItem } from "../modules/archive.js";
 import { askTreasury } from "../modules/ask.js";
 import { checkAllLinks, checkLink } from "../modules/linkcheck.js";
 import { buildDigest, markWatchedSeen } from "../modules/digest.js";
+import { refreshStorageUsed } from "../modules/quota.js";
 import { runCompletion } from "../modules/complete.js";
 import { getObject } from "../storage/objects.js";
 import { enrichGithub } from "../integrations/github.js";
@@ -304,6 +305,7 @@ itemsRouter.delete(
     const item = await ownedItem(uid, String(req.params.id));
     if (item.skillId) await getStore().skills.deleteById(item.skillId);
     await getStore().items.deleteById(item.id);
+    if (item.kind === "file") void refreshStorageUsed(uid); // keep the storage meter accurate after a purge
     res.json({ ok: true });
   }),
 );
@@ -405,6 +407,9 @@ itemsRouter.post(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const item = await ownedItem(uid, String(req.params.id));
+    // Only link items get enriched; enrichItem early-returns for anything else. Guard here so a non-link
+    // item isn't flipped to "enriching" and left stuck there forever (nothing would ever clear it).
+    if (item.kind !== "link" || !item.url) throw notFound("Only saved links can be refreshed.");
     await getStore().items.updateById(item.id, { status: "enriching" });
     enqueue(`refresh:${item.id}`, () => enrichItem(uid, item.id), 1);
     res.status(202).json({ ok: true });

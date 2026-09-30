@@ -76,9 +76,9 @@ export async function planBulk(userId: string, command: string): Promise<BulkPla
     if (raw) {
       plan = sanitizeBulkPlan(extractJson(raw));
       if (plan) planner = "ai";
-      else await refundBudget(userId, estCost, reservedDate);
+      else await refundBudget(userId, estCost, reservedDate, ctx.byok);
     } else {
-      await refundBudget(userId, estCost, reservedDate);
+      await refundBudget(userId, estCost, reservedDate, ctx.byok);
     }
   } catch (e) {
     if (e instanceof AiNotConfiguredError) available = false;

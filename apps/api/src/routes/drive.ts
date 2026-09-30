@@ -22,6 +22,7 @@ import {
   revokeToken,
 } from "../integrations/googleDrive.js";
 import { invalidateAccessToken } from "../integrations/driveTokenCache.js";
+import { teardownAccount } from "../integrations/driveV2Push.js";
 import { aiAvailable } from "../integrations/claude.js";
 
 export const driveRouter: Router = Router();
@@ -186,6 +187,10 @@ driveRouter.delete(
   ah(async (req, res) => {
     const uid = requireWrite(req);
     const acc = await ownedAccount(uid, String(req.params.id));
+    // Tear down any live Drive V2 push-sync channel BEFORE deleting the row, so a stop token can still be
+    // minted (stops the Google-side channel, clears the in-memory registry + its renewal timer). Without
+    // this the renewal timer keeps firing against a now-missing account until the channel lapses (~6h).
+    await teardownAccount(acc.id).catch(() => {});
     const refresh = decryptSecret(acc.refreshToken);
     if (refresh) await revokeToken(refresh); // best-effort; never throws
     await getStore().driveAccounts.deleteById(acc.id);

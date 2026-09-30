@@ -124,7 +124,8 @@ export async function completeWith(ctx: AiProviderCtx, input: { system: string; 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       if (ctx.transport === "anthropic") {
-        const c = new Anthropic({ apiKey: ctx.apiKey, baseURL: ctx.baseURL });
+        // Bound the call so a stalled provider can't tie up the request handler; our own loop does the retrying.
+        const c = new Anthropic({ apiKey: ctx.apiKey, baseURL: ctx.baseURL, timeout: 30_000, maxRetries: 0 });
         const res = await c.messages.create({ model: ctx.model, max_tokens: maxTokens, system: input.system, messages: [{ role: "user", content: input.prompt }] });
         const text = res.content.find((b) => b.type === "text");
         if (text && "text" in text) return text.text;
@@ -139,10 +140,14 @@ export async function completeWith(ctx: AiProviderCtx, input: { system: string; 
           headers["HTTP-Referer"] = config.appUrl;
           headers["X-Title"] = "Kosh";
         }
+        // Bound the request: without an AbortSignal a provider that accepts the connection then stalls
+        // (blackholed network, hung endpoint, a misconfigured OLLAMA_BASE_URL) would block the handler for
+        // undici's ~300s default per attempt (~10 min across the retry loop), exhausting server concurrency.
         const res = await fetch(`${ctx.baseURL}/chat/completions`, {
           method: "POST",
           headers,
           body: JSON.stringify({ model: ctx.model, max_tokens: maxTokens, messages: [{ role: "system", content: input.system }, { role: "user", content: input.prompt }] }),
+          signal: AbortSignal.timeout(30_000),
         });
         if (!res.ok) {
           logger.warn({ status: res.status, provider: ctx.id }, "ai completion failed");

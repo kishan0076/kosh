@@ -9,14 +9,25 @@ import { aiAvailableForUser, providerCatalog } from "../integrations/aiProviders
  *  fail-CLOSED rule: admin only in non-production local dev. */
 export function isAdmin(user: ServerUser | null | undefined): boolean {
   if (!user) return false;
-  if (sameLogin(user.login, config.vault.adminLogin)) return true;
+  if (isConfigAdmin(user)) return true;
   if (user.role) return user.role === "admin";
   return !config.isProd && config.devLogin;
 }
 
-/** True when this account is the operator-configured admin (can't be demoted or removed from the UI). */
+/** True when this account is the operator-configured admin (can't be demoted or removed from the UI). This
+ *  is EITHER the vault admin login (KOSH_ADMIN_LOGIN, or its fallbacks) OR the active env password admin
+ *  (ADMIN_EMAIL + a secret) — the two can differ (e.g. KOSH_ADMIN_LOGIN is a GitHub handle for vault access
+ *  while ADMIN_EMAIL is the break-glass email login), and BOTH must be treated as the operator admin. */
 export function isConfigAdmin(user: ServerUser | null | undefined): boolean {
-  return !!user && sameLogin(user.login, config.vault.adminLogin);
+  return !!user && (sameLogin(user.login, config.vault.adminLogin) || isEnvAdminLogin(user.login));
+}
+
+/** The env password admin (ADMIN_EMAIL + ADMIN_PASSWORD/_HASH) is only a real identity when both are set. */
+function envAdminActive(): boolean {
+  return !!config.admin.email && !!(config.admin.passwordHash || config.admin.password);
+}
+function isEnvAdminLogin(login: string | null | undefined): boolean {
+  return envAdminActive() && sameLogin(login, config.admin.email);
 }
 
 /** Case-insensitive login match — GitHub returns logins in canonical case and KOSH_ADMIN_LOGIN may be

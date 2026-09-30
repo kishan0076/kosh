@@ -6,6 +6,8 @@ import { logger } from "../logger.js";
 import { getStore, type ServerItem } from "../db/index.js";
 import { ingest } from "../modules/ingest.js";
 import { createSkillVersion } from "../modules/skills.js";
+import { putIfMissing, sha256 } from "../storage/objects.js";
+import { quotaFor, storageUsage } from "../modules/quota.js";
 
 const nowIso = () => new Date().toISOString();
 
@@ -24,13 +26,16 @@ function build(): Bot {
   const bot = new Bot(config.telegram.token!);
 
   bot.command("start", async (ctx) => {
-    const login = ctx.match?.trim();
-    if (!login) return ctx.reply("Send /start <your-login> to link this chat to your Kosh vault.");
-    if (config.allowedLogins.length && !config.allowedLogins.includes(login)) return ctx.reply("That login isn't allowed.");
-    const user = await getStore().users.findOne({ login });
-    if (!user) return ctx.reply("No such user. Sign in on the web first.");
+    // Link by the user's unguessable per-user token (their emailToken), NOT a public login. Kosh logins are
+    // GitHub usernames or the admin email — both public — so accepting a bare login let anyone link their
+    // chat to any account and read/write that vault. The token is proof the sender controls the account.
+    const token = ctx.match?.trim();
+    if (!token) return ctx.reply("Send /start <your-link-code> to link this chat to your Kosh vault. Find your link code in the web app.");
+    const user = await getStore().users.findOne({ emailToken: token });
+    if (!user) return ctx.reply("That link code isn't valid. Copy it from the web app and try again.");
+    if (user.disabled) return ctx.reply("That account is disabled.");
     await getStore().users.updateById(user.id, { telegramChatId: ctx.chat.id });
-    return ctx.reply(`Linked ✓ Send links, a .md/.zip document, or text and I'll save them for @${login}.`);
+    return ctx.reply(`Linked ✓ Send links, a .md/.zip document, or text and I'll save them for ${user.name ?? user.login}.`);
   });
 
   async function requireLinked(ctx: { chat?: { id: number }; reply: (t: string) => Promise<unknown> }) {
@@ -120,6 +125,16 @@ function build(): Bot {
       const { skill } = await createSkillVersion(user.id, [{ path: "SKILL.md", mime: "text/markdown", content: buf.toString("utf8") }], { origin: "bot", itemSource: "bot", trust: "mine", foundVia: forwardOrigin(ctx.message) });
       return ctx.reply(`Saved skill ${skill.name} · v${skill.latest}\nInstall: npx kosh add ${skill.name}`);
     }
+    // Persist the bytes to object storage and record the objectId, exactly like the web upload path —
+    // otherwise the file item points at nothing and any later download returns an empty file.
+    const mime = doc.mime_type ?? "application/octet-stream";
+    const objectId = sha256(buf);
+    // Enforce the per-user storage quota, same as the web path.
+    const usage = await storageUsage(user.id);
+    if (!usage.has(objectId) && usage.total + buf.length > (await quotaFor(user.id))) {
+      return ctx.reply("You've reached your storage limit — free up space in the web app first.");
+    }
+    await putIfMissing(user.id, objectId, buf, mime);
     const item = await getStore().items.create({
       userId: user.id,
       kind: "file",
@@ -129,7 +144,7 @@ function build(): Bot {
       stage: "to-try",
       source: "bot",
       status: "ready",
-      fileObject: { path: name, size: buf.length, mime: doc.mime_type ?? "application/octet-stream" },
+      fileObject: { path: name, size: buf.length, mime, objectId },
       createdAt: nowIso(),
       updatedAt: nowIso(),
     } as Omit<ServerItem, "id">);

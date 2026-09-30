@@ -28,7 +28,7 @@ export async function runCompletion(userId: string, prompt: string, system?: str
   }
   const output = await completeWith(ctx, { system: sys, prompt, maxTokens });
   if (!output) {
-    await refundBudget(userId, estCost, reservedDate);
+    await refundBudget(userId, estCost, reservedDate, ctx.byok);
     return { output: null, aiAvailable: true };
   }
   return { output, aiAvailable: true };

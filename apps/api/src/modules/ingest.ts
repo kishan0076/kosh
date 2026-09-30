@@ -54,8 +54,18 @@ export async function ingest(userId: string, rawUrl: string, opts: IngestOpts = 
   const url = normalizeUrl(rawUrl);
   const urlHash = sha1(url);
 
-  const existing = await store.items.findOne({ userId, urlHash, deletedAt: null });
-  if (existing) return { item: existing, duplicate: true };
+  // Dedup against ALL of the user's items with this urlHash, including trashed ones: soft delete keeps the
+  // urlHash, which still occupies the unique (userId, urlHash) index slot on Mongo — so a plain create for a
+  // previously-trashed URL would throw E11000 (and would silently duplicate on the memory adapter). Re-adding
+  // a trashed link resurrects it instead.
+  const existing = await store.items.findOne({ userId, urlHash });
+  if (existing) {
+    if (existing.deletedAt) {
+      const restored = await store.items.updateById(existing.id, { deletedAt: undefined, updatedAt: nowIso() });
+      return { item: restored ?? existing, duplicate: true };
+    }
+    return { item: existing, duplicate: true };
+  }
 
   // GitHub sub-path → save the repo card (parent) + a child card. (§5.5)
   const sub = parseGithubSubpath(url);

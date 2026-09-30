@@ -26,7 +26,9 @@ export async function attachUser(req: Request, _res: Response, next: NextFunctio
         uid = record.userId;
         scopes = record.scopes;
         kind = "apikey";
-        void getStore().apiKeys.updateById(record.id, { lastUsedAt: new Date().toISOString() });
+        // Best-effort last-used stamp: never awaited, but a transient DB reject here must not become an
+        // unhandled rejection (which crashes the process on Node's default), so swallow it explicitly.
+        void getStore().apiKeys.updateById(record.id, { lastUsedAt: new Date().toISOString() }).catch(() => {});
       } else {
         // Not an API key — maybe a session JWT (mobile). verifySession refuses purpose-scoped tokens.
         const sid = key.startsWith("ksh_") ? null : await verifySession(key);

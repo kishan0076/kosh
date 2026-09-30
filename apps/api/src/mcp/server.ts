@@ -318,13 +318,21 @@ function buildServer(userId: string): McpServer {
 
 export const mcpRouter: Router = Router();
 
-// Streamable HTTP with per-session transports (the pattern real MCP clients use).
-const transports = new Map<string, StreamableHTTPServerTransport>();
+// Streamable HTTP with per-session transports (the pattern real MCP clients use). Each transport is bound
+// to the user who created it — its tool handlers close over that user's id — so the owning userId is stored
+// alongside it and every reuse is rejected unless the authenticated caller matches. Without this, any
+// authenticated user could supply another user's mcp-session-id and run tools against that user's vault.
+const transports = new Map<string, { transport: StreamableHTTPServerTransport; userId: string }>();
 
 mcpRouter.post("/mcp", async (req, res) => {
   const userId = requireUser(req);
   const sid = req.header("mcp-session-id");
-  let transport = sid ? transports.get(sid) : undefined;
+  const entry = sid ? transports.get(sid) : undefined;
+  if (entry && entry.userId !== userId) {
+    res.status(403).json({ jsonrpc: "2.0", error: { code: -32000, message: "That session belongs to a different user." }, id: null });
+    return;
+  }
+  let transport = entry?.transport;
 
   if (!transport) {
     if (!isInitializeRequest(req.body)) {
@@ -334,7 +342,7 @@ mcpRouter.post("/mcp", async (req, res) => {
     transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
       onsessioninitialized: (id) => {
-        transports.set(id, transport!);
+        transports.set(id, { transport: transport!, userId });
       },
     });
     transport.onclose = () => {
@@ -345,16 +353,21 @@ mcpRouter.post("/mcp", async (req, res) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-// Server→client SSE stream and session teardown.
+// Server→client SSE stream and session teardown. Same ownership check: only the session's creator may
+// stream from or tear down that session.
 const bySession = async (req: Parameters<typeof requireUser>[0], res: import("express").Response) => {
-  requireUser(req);
+  const userId = requireUser(req);
   const sid = (req as { header(n: string): string | undefined }).header("mcp-session-id");
-  const transport = sid ? transports.get(sid) : undefined;
-  if (!transport) {
+  const entry = sid ? transports.get(sid) : undefined;
+  if (!entry) {
     res.status(400).send("Invalid or missing session id");
     return;
   }
-  await transport.handleRequest(req as never, res);
+  if (entry.userId !== userId) {
+    res.status(403).send("That session belongs to a different user.");
+    return;
+  }
+  await entry.transport.handleRequest(req as never, res);
 };
 mcpRouter.get("/mcp", (req, res) => void bySession(req, res));
 mcpRouter.delete("/mcp", (req, res) => void bySession(req, res));

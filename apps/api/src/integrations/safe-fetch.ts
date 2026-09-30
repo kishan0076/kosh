@@ -36,10 +36,14 @@ function isBlockedName(hostname: string): boolean {
  * multi-record TOCTOU) is closed. Every returned record is checked, not just the first.
  */
 async function resolvePublic(hostname: string): Promise<{ address: string; family: number }[]> {
-  if (isBlockedName(hostname)) throw BLOCKED();
+  // The WHATWG URL parser keeps IPv6 literals bracketed (new URL("http://[::1]/").hostname === "[::1]"),
+  // but node:dns lookup and ipaddr.js only accept the bare form — so strip the brackets first, otherwise
+  // every IPv6-literal URL (public ones included) is wrongly treated as unreachable.
+  const host = hostname.replace(/^\[/, "").replace(/\]$/, "");
+  if (isBlockedName(host)) throw BLOCKED();
   let records: { address: string; family: number }[];
   try {
-    records = await dnsLookup(hostname, { all: true });
+    records = await dnsLookup(host, { all: true });
   } catch {
     throw BLOCKED();
   }

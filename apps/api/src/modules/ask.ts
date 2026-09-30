@@ -96,7 +96,7 @@ export async function askTreasury(userId: string, question: string): Promise<Ask
 
   const answer = await completeWith(ctx, { system: SYSTEM, prompt, maxTokens: 600 });
   if (!answer) {
-    await refundBudget(userId, estCost, reservedDate);
+    await refundBudget(userId, estCost, reservedDate, ctx.byok);
     return { answer: null, aiAvailable: true, citations: [], results };
   }
 

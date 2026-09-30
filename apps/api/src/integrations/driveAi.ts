@@ -28,7 +28,7 @@ export async function summarizeDriveFile(userId: string, input: { name: string; 
     summary: typeof parsed?.summary === "string" ? parsed.summary.trim() : "",
     suggestedTags: Array.isArray(parsed?.suggestedTags) ? parsed.suggestedTags.map((t) => String(t)).filter(Boolean).slice(0, 6) : [],
   };
-  if (!result.summary && result.suggestedTags.length === 0) await refundBudget(userId, estCost, reservedDate);
+  if (!result.summary && result.suggestedTags.length === 0) await refundBudget(userId, estCost, reservedDate, ctx.byok);
   return result;
 }
 
@@ -52,7 +52,7 @@ export async function nlToDriveQuery(userId: string, nl: string, today?: string)
   const parsed = extractJson<{ query?: unknown; explanation?: unknown }>(await completeWith(ctx, { system: SEARCH_SYSTEM, prompt, maxTokens: 200 }));
   const query = typeof parsed?.query === "string" ? parsed.query.trim().slice(0, 300) : "";
   const explanation = typeof parsed?.explanation === "string" ? parsed.explanation.trim().slice(0, 200) : "";
-  if (!query && !explanation) await refundBudget(userId, estCost, reservedDate);
+  if (!query && !explanation) await refundBudget(userId, estCost, reservedDate, ctx.byok);
   return { query, explanation };
 }
 
@@ -102,6 +102,6 @@ export async function prioritizeCleanup(userId: string, buckets: CleanupBucketDi
       };
     })
     .filter((r, i, all) => validKeys.has(r.key) && all.findIndex((x) => x.key === r.key) === i); // valid + de-duped by key
-  if (!recommendations.length) await refundBudget(userId, estCost, reservedDate);
+  if (!recommendations.length) await refundBudget(userId, estCost, reservedDate, ctx.byok);
   return { recommendations };
 }

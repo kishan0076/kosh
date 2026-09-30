@@ -4,6 +4,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { ah, badRequest } from "../errors.js";
 import { requireWrite } from "../auth/middleware.js";
+import { quotaFor, storageUsage } from "../modules/quota.js";
 import { objectExists, presignPut, putVerified } from "../storage/objects.js";
 
 export const uploadsRouter: Router = Router();
@@ -48,6 +49,12 @@ uploadsRouter.post(
     const skipped = files.filter((f) => !ALLOWED.has(extOf(f.path))).map((f) => f.path);
     const total = accepted.reduce((a, f) => a + f.size, 0);
     if (total > config.limits.maxTotalBytes) throw badRequest("TOO_LARGE", `Upload exceeds the ${Math.round(config.limits.maxTotalBytes / 1e6)} MB per-batch limit.`);
+
+    // Pre-gate against the per-user storage quota (the authoritative check is at POST /files finalize).
+    // Only bytes the user doesn't already have stored count toward the new total.
+    const usage = await storageUsage(uid);
+    const newBytes = accepted.filter((f) => !usage.has(f.sha256)).reduce((a, f) => a + f.size, 0);
+    if (usage.total + newBytes > (await quotaFor(uid))) throw badRequest("QUOTA_EXCEEDED", "This upload would exceed your storage limit. Delete some files to free up space.");
 
     const uploads = await Promise.all(
       accepted.map(async (f) => {
