@@ -102,7 +102,15 @@ export async function createMongoStore(uri: string): Promise<Store> {
   await mongoose.connect(uri);
 
   const models = {
-    users: mongoose.model("User", flexSchema((s) => s.index({ githubId: 1 }, { unique: true, sparse: true }))),
+    users: mongoose.model(
+      "User",
+      flexSchema((s) => {
+        s.index({ githubId: 1 }, { unique: true, sparse: true });
+        // Emails are stored normalized (lowercased); one account per email. Sparse so GitHub/dev accounts
+        // (no email) aren't indexed. This is the DB-level backstop for the app's own uniqueness check.
+        s.index({ email: 1 }, { unique: true, sparse: true });
+      }),
+    ),
     items: mongoose.model(
       "Item",
       flexSchema((s) => {

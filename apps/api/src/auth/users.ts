@@ -9,14 +9,38 @@ import { aiAvailableForUser, providerCatalog } from "../integrations/aiProviders
  *  fail-CLOSED rule: admin only in non-production local dev. */
 export function isAdmin(user: ServerUser | null | undefined): boolean {
   if (!user) return false;
-  if (config.vault.adminLogin && user.login === config.vault.adminLogin) return true;
+  if (sameLogin(user.login, config.vault.adminLogin)) return true;
   if (user.role) return user.role === "admin";
   return !config.isProd && config.devLogin;
 }
 
 /** True when this account is the operator-configured admin (can't be demoted or removed from the UI). */
 export function isConfigAdmin(user: ServerUser | null | undefined): boolean {
-  return !!user && !!config.vault.adminLogin && user.login === config.vault.adminLogin;
+  return !!user && sameLogin(user.login, config.vault.adminLogin);
+}
+
+/** Case-insensitive login match — GitHub returns logins in canonical case and KOSH_ADMIN_LOGIN may be
+ *  typed in any case, so the break-glass admin must be recognized regardless of casing. */
+function sameLogin(a: string | null | undefined, b: string | null | undefined): boolean {
+  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
+}
+
+/** Derive how an account signs in (single source of truth for the admin list and /me). */
+export function resolveAuthProvider(u: ServerUser): "password" | "github" | "dev" {
+  return u.authProvider ?? (u.githubId ? "github" : u.passwordHash ? "password" : "dev");
+}
+
+/** Serialize account create/mutate operations within this process so check-then-write sequences
+ *  (email uniqueness, the last-admin guard) can't interleave. A best-effort complement to the DB's own
+ *  unique index; it fully closes the race for the single-process in-memory store. */
+let accountOpChain: Promise<unknown> = Promise.resolve();
+export function withAccountLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = accountOpChain.then(fn, fn);
+  accountOpChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
 }
 
 /** Row projection for the admin Users screen — identity and role only, never secrets. */
@@ -28,7 +52,7 @@ export function adminUserRow(u: ServerUser) {
     email: u.email,
     avatarUrl: u.avatarUrl,
     role: isAdmin(u) ? ("admin" as const) : ("user" as const),
-    authProvider: u.authProvider ?? (u.githubId ? "github" : u.passwordHash ? "password" : "dev"),
+    authProvider: resolveAuthProvider(u),
     disabled: !!u.disabled,
     configAdmin: isConfigAdmin(u),
     createdAt: u.createdAt,
@@ -70,8 +94,11 @@ function baseUserFields(now: string) {
  *  manage users; everyone after that defaults to a normal member. */
 async function resolveInitialRole(login: string): Promise<"admin" | "user"> {
   if (config.vault.adminLogin && login.toLowerCase() === config.vault.adminLogin.toLowerCase()) return "admin";
-  const anyAdmin = await getStore().users.findOne({ role: "admin" });
-  return anyAdmin ? "user" : "admin";
+  // Bootstrap only on a truly empty instance: the very first account becomes admin. On an instance that
+  // already has accounts (including ones created before roles existed), a new sign-up is always a plain
+  // member — so upgrading never silently hands admin to the next person who signs in.
+  const anyUser = await getStore().users.findOne({});
+  return anyUser ? "user" : "admin";
 }
 
 /** Find or create a user by GitHub id (or login for dev-login). New accounts get a role. */
@@ -130,7 +157,7 @@ export function publicUser(u: ServerUser) {
     name: u.name,
     email: u.email,
     role: isAdmin(u) ? ("admin" as const) : ("user" as const),
-    authProvider: u.authProvider ?? (u.githubId ? "github" : u.passwordHash ? "password" : "dev"),
+    authProvider: resolveAuthProvider(u),
     disabled: !!u.disabled,
     avatarUrl: u.avatarUrl,
     settings: u.settings,

@@ -5,7 +5,7 @@ import { isValidEmail, passwordProblem } from "@kosh/shared";
 import { config } from "../config.js";
 import { getStore, type ServerUser } from "../db/index.js";
 import { ah, badRequest, forbidden, notFound, unauthorized } from "../errors.js";
-import { adminUserRow, createPasswordUser, findUserByEmail, getOrCreateUser, isAdmin, isConfigAdmin, newEmailToken, normalizeEmail, publicUser } from "./users.js";
+import { adminUserRow, createPasswordUser, findUserByEmail, getOrCreateUser, isAdmin, isConfigAdmin, newEmailToken, normalizeEmail, publicUser, withAccountLock } from "./users.js";
 import { requireAdmin, requireUser, requireWrite } from "./middleware.js";
 import { encryptSecret, hashPassword, verifyPassword } from "./crypto.js";
 import { deleteVaultBlob } from "../vault/storage.js";
@@ -101,9 +101,11 @@ authRouter.post(
     const problem = passwordProblem(password);
     if (problem) throw badRequest("WEAK_PASSWORD", problem);
     const emailNorm = normalizeEmail(email);
-    const taken = (config.admin.email && emailNorm === config.admin.email) || (await findUserByEmail(emailNorm));
-    if (taken) throw badRequest("EMAIL_TAKEN", "An account with that email already exists.");
-    const user = await createPasswordUser({ email: emailNorm, passwordHash: hashPassword(password), name });
+    const user = await withAccountLock(async () => {
+      const taken = (config.admin.email && emailNorm === config.admin.email) || (await findUserByEmail(emailNorm));
+      if (taken) throw badRequest("EMAIL_TAKEN", "An account with that email already exists.");
+      return createPasswordUser({ email: emailNorm, passwordHash: hashPassword(password), name });
+    });
     const token = await signSession(user.id);
     res.cookie(SESSION_COOKIE, token, cookieOpts());
     res.status(201).json(client === "mobile" ? { user: publicUser(user), token } : { user: publicUser(user) });
@@ -262,9 +264,11 @@ authRouter.post(
     const problem = passwordProblem(password);
     if (problem) throw badRequest("WEAK_PASSWORD", problem);
     const emailNorm = normalizeEmail(email);
-    const taken = (config.admin.email && emailNorm === config.admin.email) || (await findUserByEmail(emailNorm));
-    if (taken) throw badRequest("EMAIL_TAKEN", "An account with that email already exists.");
-    const user = await createPasswordUser({ email: emailNorm, passwordHash: hashPassword(password), name, role: role ?? "user", createdBy: adminId });
+    const user = await withAccountLock(async () => {
+      const taken = (config.admin.email && emailNorm === config.admin.email) || (await findUserByEmail(emailNorm));
+      if (taken) throw badRequest("EMAIL_TAKEN", "An account with that email already exists.");
+      return createPasswordUser({ email: emailNorm, passwordHash: hashPassword(password), name, role: role ?? "user", createdBy: adminId });
+    });
     res.status(201).json({ user: adminUserRow(user) });
   }),
 );
@@ -281,13 +285,17 @@ authRouter.patch(
     if (role === undefined && disabled === undefined) throw badRequest("NO_CHANGES", "Nothing to update.");
     if (target.id === adminId && disabled === true) throw badRequest("SELF_DISABLE", "You can't disable your own account.");
     if (target.id === adminId && role === "user") throw badRequest("SELF_DEMOTE", "You can't remove your own admin access.");
-    // Never leave the instance with no active admin.
-    const losingAdmin = (role === "user" || disabled === true) && isAdmin(target) && !target.disabled;
-    if (losingAdmin && (await activeAdminCount()) <= 1) throw badRequest("LAST_ADMIN", "You can't remove the last admin.");
-    const patch: Partial<ServerUser> = { updatedAt: new Date().toISOString() };
-    if (role !== undefined) patch.role = role;
-    if (disabled !== undefined) patch.disabled = disabled;
-    const updated = await getStore().users.updateById(target.id, patch);
+    // Serialize the last-admin check with the write so two concurrent demotes/disables can't each pass the
+    // count check and together strip the final admin. Re-read the target inside the lock for a fresh state.
+    const updated = await withAccountLock(async () => {
+      const fresh = (await getStore().users.findById(target.id)) ?? target;
+      const losingAdmin = (role === "user" || disabled === true) && isAdmin(fresh) && !fresh.disabled;
+      if (losingAdmin && (await activeAdminCount()) <= 1) throw badRequest("LAST_ADMIN", "You can't remove the last admin.");
+      const patch: Partial<ServerUser> = { updatedAt: new Date().toISOString() };
+      if (role !== undefined) patch.role = role;
+      if (disabled !== undefined) patch.disabled = disabled;
+      return getStore().users.updateById(target.id, patch);
+    });
     res.json({ user: adminUserRow(updated!) });
   }),
 );
@@ -301,9 +309,14 @@ authRouter.delete(
     if (!target) throw notFound("User not found.");
     if (isConfigAdmin(target)) throw forbidden("The configured admin account can't be removed here.");
     if (target.id === adminId) throw badRequest("SELF_DELETE", "You can't delete your own account.");
-    if (isAdmin(target) && !target.disabled && (await activeAdminCount()) <= 1) throw badRequest("LAST_ADMIN", "You can't delete the last admin.");
-    await purgeUserData(target.id);
-    await getStore().users.deleteById(target.id);
+    // Serialize the last-admin check with the delete so a concurrent demote/delete can't drop below one admin.
+    await withAccountLock(async () => {
+      const fresh = await getStore().users.findById(target.id);
+      if (!fresh) return; // already gone
+      if (isAdmin(fresh) && !fresh.disabled && (await activeAdminCount()) <= 1) throw badRequest("LAST_ADMIN", "You can't delete the last admin.");
+      await purgeUserData(fresh.id);
+      await getStore().users.deleteById(fresh.id);
+    });
     res.json({ ok: true });
   }),
 );
