@@ -106,6 +106,15 @@ export class ApiError extends Error {
   }
 }
 
+// A global hook the data store registers so a session that expires or is revoked mid-use (a 401 on an
+// authenticated request — e.g. the account was disabled or deleted by an admin) can drop the app back to
+// the sign-in screen instead of leaving it in a broken half-signed-in state. Auth endpoints are excluded
+// by the caller in req(): a failed login/register legitimately returns 401 and must surface inline.
+let onUnauthorized: ((path: string) => void) | null = null;
+export function setUnauthorizedHandler(fn: ((path: string) => void) | null): void {
+  onUnauthorized = fn;
+}
+
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   // Web: the httpOnly session cookie rides along (credentials: include). Native app: the stored session
   // token goes in the Authorization header instead (the API accepts either).
@@ -117,6 +126,9 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...rest,
   });
   if (!res.ok) {
+    // A 401 on anything but the auth endpoints means our session is gone (expired, or the account was
+    // disabled/deleted): tell the store so it can sign out. Login/register 401s are the caller's to show.
+    if (res.status === 401 && !path.startsWith("/auth/")) onUnauthorized?.(path);
     let message = `Request failed (${res.status})`;
     let code: string | undefined;
     let details: unknown;

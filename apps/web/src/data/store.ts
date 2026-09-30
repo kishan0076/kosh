@@ -20,7 +20,7 @@ import {
   type User,
 } from "@kosh/shared";
 import { uid } from "@/lib/ids";
-import { api, ApiError, backendEnabled, publishRepoWithProgress, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
+import { api, ApiError, backendEnabled, publishRepoWithProgress, setUnauthorizedHandler, uploadObjects, type PublishProgress, type PublishRepoInput, type PublishedRepo } from "./api";
 import { isNative, loadSessionToken, setSessionToken } from "@/lib/native";
 import { useUi } from "./ui";
 import { seedCollections, seedItems, seedSkills, seedUser, SEED_FILE_PREVIEWS, SEED_READMES } from "./seed";
@@ -226,7 +226,9 @@ export const useData = create<DataState>()(
           const [me, items, trash, skills, collections] = await withTimeout(
             Promise.all([api.me(), api.listItems(), api.listTrash(), api.listSkills(), api.listCollections()]),
           );
-          set({ user: me.user, items: [...items.items, ...trash.items], skills: skills.skills, collections: collections.collections, hydrated: true, backend: true, backendError: null });
+          // needsLogin:false is explicit: a successful hydrate always clears the sign-in gate, even if the
+          // global 401 handler flipped it during a prior failed attempt (e.g. retry after a session expiry).
+          set({ user: me.user, items: [...items.items, ...trash.items], skills: skills.skills, collections: collections.collections, hydrated: true, backend: true, backendError: null, needsLogin: false });
           if (!sseUnsub) {
             sseUnsub = api.events((evt) => {
               if ((evt.kind === "item.created" || evt.kind === "item.updated") && evt.item) get().upsertItem(evt.item);
@@ -901,3 +903,22 @@ export const useData = create<DataState>()(
     },
   ),
 );
+
+// Global 401 → sign-out. When an authenticated request comes back 401, the session is no longer valid
+// (it expired, or an admin disabled/deleted the account), so drop straight back to the sign-in screen
+// instead of leaving the app in a broken half-signed-in state. Only acts on an established, hydrated
+// session: during initBackend the store isn't hydrated yet, so its own /me 401 is handled there (the
+// dev-login/needs-login branch), not here. The needsLogin guard also de-dupes the burst of 401s when
+// several requests fail at once (set() is synchronous, so the first call flips needsLogin before the next).
+setUnauthorizedHandler(() => {
+  if (!backendEnabled) return;
+  const s = useData.getState();
+  if (!s.hydrated || s.needsLogin) return;
+  if (sseUnsub) {
+    sseUnsub();
+    sseUnsub = null;
+  }
+  void setSessionToken(null);
+  useData.setState({ needsLogin: true, hydrated: true, backendError: null, user: emptyUser(), items: [], skills: [], collections: [] });
+  useUi.getState().toast({ message: "Your session ended", description: "Please sign in again.", tone: "warn" });
+});
