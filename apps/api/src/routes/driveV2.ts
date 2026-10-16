@@ -503,15 +503,26 @@ driveV2Router.post(
     // when no scanned source file has one (e.g. a folder of only native Google docs). Shared-with-me files
     // are excluded so a file the user doesn't actually own isn't treated as a destination duplicate.
     let destTruncated = false;
+    let dedupUnavailable = false;
     const destSignatures = new Set<string>();
     if (dedupeScope === "drive" && treeFiles.some((f) => f.md5Checksum)) {
-      const dest = await driveCall(acc, (token) => scanFiles(token, { pageCap: 20, driveId, excludeShared: true }));
-      destTruncated = dest.truncated;
-      // Only files with a real content signature (md5) count toward duplicate detection; native docs etc.
-      // have none (fileSignature → null) and are never treated as duplicates.
-      for (const f of dest.files) {
-        const sig = fileSignature(f);
-        if (sig) destSignatures.add(sig);
+      // The duplicate check is a convenience, NOT essential to importing. Scanning the destination corpus can
+      // fail independently of the source scan — most often a stale/invalid active Shared-Drive id (Google 400
+      // "Invalid Value"), or a transient error — and that must never block the whole import (the source links
+      // already scanned fine). So degrade gracefully: skip dedup and let the user proceed. An account-wide
+      // reconnect still propagates, since that's not something we can work around here.
+      try {
+        const dest = await driveCall(acc, (token) => scanFiles(token, { pageCap: 20, driveId, excludeShared: true }));
+        destTruncated = dest.truncated;
+        // Only files with a real content signature (md5) count toward duplicate detection; native docs etc.
+        // have none (fileSignature → null) and are never treated as duplicates.
+        for (const f of dest.files) {
+          const sig = fileSignature(f);
+          if (sig) destSignatures.add(sig);
+        }
+      } catch (err) {
+        if (err instanceof AppError && err.code === "NEEDS_RECONNECT") throw err;
+        dedupUnavailable = true;
       }
     }
 
@@ -523,6 +534,8 @@ driveV2Router.post(
       summary: summarizeImportTree(tree),
       sourceTruncated: scan.truncated,
       destTruncated,
+      // When true, the duplicate check couldn't run — everything is treated as new; the UI can note this.
+      dedupUnavailable,
     });
   }),
 );
